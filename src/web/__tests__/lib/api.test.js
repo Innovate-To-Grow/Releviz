@@ -48,6 +48,8 @@ import {
   fetchInvitations,
   markInvitationOpened,
   openEventStream,
+  previewDeliveryRetry,
+  previewEventLifecycle,
   previewFinalMeeting,
   sendInvitations,
   sendReminders,
@@ -1040,6 +1042,12 @@ describe("business API helpers", () => {
       { page: 2, pageSize: 25 },
       "tok",
     );
+    await fetchRosterImportRows(
+      "ABC 123",
+      "import 1",
+      { page: 1, pageSize: 50, show: "needs_fix" },
+      "tok",
+    );
     await commitRosterImport(
       "ABC 123",
       "import 1",
@@ -1213,6 +1221,10 @@ describe("business API helpers", () => {
     expect(urls).toContain("/events/roster-imports/import%201?code=ABC%20123");
     expect(urls).toContain(
       "/events/roster-imports/import%201/rows?code=ABC+123&page=2&pageSize=25",
+    );
+    // `show` is only sent when set, so the default request is unchanged.
+    expect(urls).toContain(
+      "/events/roster-imports/import%201/rows?code=ABC+123&page=1&pageSize=50&show=needs_fix",
     );
     expect(global.fetch).toHaveBeenCalledWith(
       "/events/roster-imports/import%201/commit?code=ABC%20123",
@@ -1707,6 +1719,169 @@ describe("business API helpers", () => {
       code: null,
       event: null,
     });
+  });
+
+  test("roster invitation and reminder requests send only the keys they are given", async () => {
+    global.fetch.mockResolvedValue(
+      jsonResponse({ preview: true, willSend: 2, skipped: {} }),
+    );
+
+    await sendRosterInvitations(
+      "ABC",
+      {
+        filter: { invitationStatus: "not_sent" },
+        preview: true,
+        resend: false,
+      },
+      "tok",
+    );
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/roster/invitations?code=ABC",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          filter: { invitationStatus: "not_sent" },
+          resend: false,
+          preview: true,
+        }),
+      }),
+    );
+
+    // An omitted selection sends an empty body rather than `undefined` keys.
+    await sendRosterInvitations("ABC", undefined, "tok");
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/roster/invitations?code=ABC",
+      expect.objectContaining({ body: "{}" }),
+    );
+
+    await sendReminders("ABC", { preview: true }, "tok");
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/reminders?code=ABC",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ preview: true }),
+      }),
+    );
+    await sendReminders("ABC", undefined, "tok");
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/reminders?code=ABC",
+      expect.objectContaining({ body: "{}" }),
+    );
+  });
+
+  test("email previews ask the server to render without sending anything", async () => {
+    const email = {
+      from: "Releviz <noreply@releviz.com>",
+      replyTo: "",
+      to: "Ada Lovelace <ada@example.com>",
+      subject: "Planning was canceled",
+      html: "<!doctype html><p>Canceled</p>",
+      text: "Canceled",
+      attachments: [],
+    };
+    global.fetch
+      .mockResolvedValueOnce(
+        jsonResponse({
+          cancellation: {
+            recipientCount: 2,
+            email,
+            sample: { name: "Ada Lovelace", email: "ada@example.com" },
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ cancellation: { recipientCount: 0 } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ preview: true, retryable: 3, obsolete: 1, email }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ id: "delivery 1" }));
+
+    await expect(
+      previewEventLifecycle("ABC 123", { status: "active" }, "tok"),
+    ).resolves.toEqual({
+      cancellation: {
+        recipientCount: 2,
+        email,
+        sample: { name: "Ada Lovelace", email: "ada@example.com" },
+      },
+    });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/lifecycle/preview?code=ABC%20123",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer tok",
+        },
+        body: JSON.stringify({ status: "active" }),
+      }),
+    );
+
+    // Reopening past the old deadline asks with the deadline cleared, the
+    // same way the lifecycle change itself does.
+    await previewEventLifecycle(
+      "ABC",
+      { status: "active", responseDeadline: null },
+      "tok",
+    );
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/lifecycle/preview?code=ABC",
+      expect.objectContaining({
+        body: JSON.stringify({ status: "active", responseDeadline: null }),
+      }),
+    );
+
+    await expect(previewDeliveryRetry("delivery 1", "tok")).resolves.toEqual({
+      preview: true,
+      retryable: 3,
+      obsolete: 1,
+      email,
+    });
+    // A read of its own URL, never a POST to the retry: a server without the
+    // preview answers 404 instead of sending the failed emails again.
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/delivery-requests/delivery%201/retry-preview",
+      { headers: { Authorization: "Bearer tok" }, credentials: "include" },
+    );
+
+    // The real retry is unchanged: an empty body, no preview flag.
+    await retryDeliveryRequest("delivery 1", "tok");
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/delivery-requests/delivery%201",
+      expect.objectContaining({ method: "POST", body: "{}" }),
+    );
+  });
+
+  test("email preview refusals keep the server wording and status", async () => {
+    global.fetch
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: "Only a finalized or closed event can be reopened.",
+            event: { code: "ABC", status: "active" },
+          },
+          { status: 409 },
+        ),
+      )
+      .mockResolvedValueOnce(textResponse("gateway", { status: 502 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ error: "Delivery request not found." }, { status: 404 }),
+      );
+
+    await expect(
+      previewEventLifecycle("ABC", { status: "active" }, "tok"),
+    ).rejects.toMatchObject({
+      message: "Only a finalized or closed event can be reopened.",
+      status: 409,
+      event: { code: "ABC", status: "active" },
+    });
+    await expect(
+      previewEventLifecycle("ABC", { status: "active" }, "tok"),
+    ).rejects.toMatchObject({ message: "HTTP 502", status: 502 });
+    await expect(previewDeliveryRetry("missing", "tok")).rejects.toThrow(
+      "Delivery request not found.",
+    );
   });
 
   test("invitation and participant errors normalize every payload shape", async () => {

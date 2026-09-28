@@ -6,6 +6,7 @@ import logging
 from django.conf import settings
 from django.db import transaction
 
+from apps.authn.models import ContactEmail
 from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
 from apps.mail.services import enqueue_email_job
 from apps.scheduling.models import Event, EventInvitation, Participant
@@ -16,7 +17,13 @@ from .addresses import normalize_phone, resolve_invited_member
 from .errors import EventEmailRequestError
 from .managed import create_or_reuse_managed_participant
 from .messages import event_email_parts
-from .reminders import enqueue_reminder_job, reminder_cycle
+from .previews import invitation_email_preview, no_email_preview
+from .reminders import (
+    cycle_reminder_job_ids,
+    enqueue_reminder_job,
+    reminder_candidates,
+    reminder_cycle,
+)
 
 security_logger = logging.getLogger("releviz.security")
 
@@ -330,25 +337,139 @@ def create_or_reuse_managed_participant_and_send(
     return result
 
 
+def _primary_addresses(member_ids) -> dict:
+    """Each member's primary contact address, keyed by member id, in one query.
+
+    The same address ``Member.get_primary_email`` returns: the oldest primary
+    contact email. Members without one are left out.
+    """
+
+    addresses = {}
+    contacts = (
+        ContactEmail.objects.filter(member_id__in=member_ids, email_type="primary")
+        .order_by("created_at")
+        .values_list("member_id", "email_address")
+    )
+    for member_id, address in contacts:
+        addresses.setdefault(member_id, address)
+    return addresses
+
+
+def _roster_recipients(
+    event: Event,
+    participants: list[Participant],
+    *,
+    resend: bool,
+    queued_invitation_ids=frozenset(),
+) -> tuple[list[tuple[Participant, str]], dict]:
+    """Split ``participants`` into who a send emails, at which address, and why the rest wait.
+
+    The preview and the send both go through here, so the counts an
+    organizer confirms are the ones the send acts on. Skips, in the order
+    they are decided: the organizer's own row, people with no address of
+    their own, an invitation email still in flight, and (unless ``resend``)
+    an invitation already sent. Failed deliveries never reached the person,
+    so a plain send tries them again. ``queued_invitation_ids`` are the
+    invitations a replayed request queued itself; they count as its sends.
+
+    ``participants`` are roster rows (``roster_queryset``): each person's
+    latest invitation and where its newest email stands are read from the
+    row's annotations, so the send skips exactly the rows the listing shows
+    as sending. Someone with no invitation is emailed at their primary
+    address, looked up for the whole selection at once rather than one
+    person at a time under the event lock.
+    """
+
+    # Imported lazily: the roster views import this package.
+    from apps.scheduling.views.roster.queries import DELIVERY_QUEUED
+
+    primary_addresses = _primary_addresses(
+        [
+            participant.member_id
+            for participant in participants
+            if participant.roster_invitation_id is None
+        ]
+    )
+
+    recipients = []
+    skipped = {"alreadyInvited": 0, "noEmail": 0, "organizer": 0, "inFlight": 0}
+    for participant in participants:
+        # The organizer's own row answers for itself and is never invited.
+        if participant.member_id == event.organizer_id:
+            skipped["organizer"] += 1
+            continue
+        # Someone the organizer manages is filed under the organizer's own
+        # address and has none to resolve.
+        if participant.organizer_managed:
+            skipped["noEmail"] += 1
+            continue
+        invitation_id = participant.roster_invitation_id
+        if invitation_id is not None:
+            email = participant.roster_invitation_email
+        else:
+            email = primary_addresses.get(participant.member_id, "").strip().lower()
+        if not email:
+            skipped["noEmail"] += 1
+            continue
+        if invitation_id is not None and invitation_id not in queued_invitation_ids:
+            if participant.roster_invitation_delivery == DELIVERY_QUEUED:
+                skipped["inFlight"] += 1
+                continue
+            if participant.roster_invitation_first_sent is not None and not resend:
+                skipped["alreadyInvited"] += 1
+                continue
+        recipients.append((participant, email))
+    return recipients, skipped
+
+
+def _roster_invitation_preview(event: Event, participant: Participant, email: str) -> dict:
+    """The invitation a send would queue for ``participant`` at ``email``.
+
+    The send reuses the event's invitation to ``email``, keeping its message,
+    or creates one without a message. ``email`` is the row's own address (its
+    latest invitation's, else its account's primary one), so the account the
+    send resolves it to is the row's, and that account's access level picks
+    the link and wording. The preview renders an unsaved invitation like
+    that: nothing is written, and the link carries no real token.
+    """
+
+    custom_message = (
+        event.invitations.filter(email=email).values_list("custom_message", flat=True).first()
+    )
+    invitation = EventInvitation(
+        event=event,
+        member=participant.member,
+        email=email,
+        custom_message=custom_message or "",
+    )
+    return invitation_email_preview(invitation, name=participant.participant_name, reminder=False)
+
+
 @transaction.atomic
 def send_roster_invitations(
     *,
     event: Event,
     organizer,
-    participant_ids,
+    participant_ids=None,
+    roster_filter=None,
     resend: bool,
-    idempotency_key,
+    idempotency_key=None,
+    preview: bool = False,
+    charge_recipients=None,
 ) -> dict:
-    """Queue invitations for the checked roster people.
+    """Queue invitations for the selected roster people.
 
-    People whose invitation was already sent (or is still in flight) are
-    skipped unless ``resend`` is set. Failed deliveries that never reached the
-    recipient do not count as sent, so a plain send re-queues them.
+    The selection is either ``participant_ids`` or ``roster_filter`` (the
+    listing's filter grammar). People whose invitation was already sent are
+    skipped unless ``resend`` is set; one still in flight is always skipped.
+    With ``preview`` nothing is written: the result only says what a send
+    would do. ``charge_recipients`` is called with the number of people about
+    to be queued, before anything is, so a quota can be spent on exactly them.
     """
 
     # Imported lazily: the roster views import this package.
     from apps.scheduling.views.roster.helpers import participant_identity_query
-    from apps.scheduling.views.roster.queries import roster_queryset
+    from apps.scheduling.views.roster.queries import apply_roster_filters, roster_queryset
 
     event = Event.objects.select_for_update().get(pk=event.pk)
     if event.organizer_id != organizer.pk:
@@ -359,18 +480,42 @@ def send_roster_invitations(
     write_error = response_write_error(event)
     if write_error:
         raise EventEmailRequestError(write_error, status_code=409)
+    if (participant_ids is None) == (roster_filter is None):
+        raise EventEmailRequestError("Provide participantIds or filter.")
     maximum = settings.ROSTER_IMPORT_MAX_ROWS
-    if len(participant_ids) > maximum:
-        raise EventEmailRequestError(f"participantIds may contain at most {maximum} entries.")
+    too_many = f"participantIds may contain at most {maximum} entries."
+    roster = roster_queryset(event)
+    if participant_ids is not None:
+        if len(participant_ids) > maximum:
+            raise EventEmailRequestError(too_many)
+        matched = roster.filter(participant_identity_query(participant_ids))
+        selection = {"participantIds": sorted(str(value) for value in participant_ids)}
+    else:
+        matched = apply_roster_filters(roster, roster_filter)
+        if matched.count() > maximum:
+            raise EventEmailRequestError(too_many)
+        selection = {"filter": roster_filter}
+    participants = list(matched.order_by("pk"))
+    requested_count = len(participants)
+
+    if preview:
+        recipients, skipped = _roster_recipients(event, participants, resend=resend)
+        return {
+            "preview": True,
+            "requestedCount": requested_count,
+            "willSend": len(recipients),
+            "skipped": skipped,
+            # The first email the send would queue, in the order it queues them.
+            **(
+                _roster_invitation_preview(event, *recipients[0])
+                if recipients
+                else no_email_preview()
+            ),
+        }
 
     fingerprint = payload_fingerprint(
-        {
-            "operation": "roster_invitations",
-            "participantIds": sorted(str(value) for value in participant_ids),
-            "resend": bool(resend),
-        }
+        {"operation": "roster_invitations", **selection, "resend": bool(resend)}
     )
-    matched = roster_queryset(event).filter(participant_identity_query(participant_ids))
     previous = EmailDeliveryRequest.objects.filter(
         event=event,
         operation=EmailDeliveryRequest.Operation.INVITATION,
@@ -390,51 +535,28 @@ def send_roster_invitations(
                 "This idempotency key was already used with different invitation details.",
                 status_code=409,
             )
-        requested_count = matched.count()
         queued_count = previous.recipient_count
+        # The people this request queued are its sends, however far their
+        # email has got since; everyone else is classified as of now.
+        _recipients, skipped = _roster_recipients(
+            event,
+            participants,
+            resend=resend,
+            queued_invitation_ids=set(previous.jobs.values_list("invitation_id", flat=True)),
+        )
         return {
             "deliveryResult": _request_result(previous, event=event, idempotent=True),
             "requestedCount": requested_count,
             "queuedCount": queued_count,
             "skippedCount": max(requested_count - queued_count, 0),
+            "willSend": queued_count,
+            "skipped": skipped,
         }
 
-    participants = list(matched.order_by("pk"))
-    latest_invitations = {}
-    for invitation in EventInvitation.objects.filter(
-        event=event,
-        member_id__in=[participant.member_id for participant in participants],
-    ).order_by("-created_at"):
-        latest_invitations.setdefault(invitation.member_id, invitation)
-    in_flight_invitation_ids = set(
-        EmailDeliveryJob.objects.filter(
-            invitation_id__in=[invitation.pk for invitation in latest_invitations.values()],
-            message_type=EmailMessageLog.MessageType.INVITATION,
-            status__in=[
-                EmailDeliveryJob.Status.PENDING,
-                EmailDeliveryJob.Status.PROCESSING,
-                EmailDeliveryJob.Status.RETRY,
-            ],
-        ).values_list("invitation_id", flat=True)
-    )
-
-    emails = []
-    for participant in participants:
-        # The organizer's own row answers for itself and is never invited.
-        if participant.member_id == event.organizer_id:
-            continue
-        invitation = latest_invitations.get(participant.member_id)
-        if invitation is not None:
-            email = invitation.email
-            already_sent = (
-                invitation.first_sent_at is not None or invitation.pk in in_flight_invitation_ids
-            )
-        else:
-            email = participant.member.get_primary_email().strip().lower()
-            already_sent = False
-        if not email or (already_sent and not resend):
-            continue
-        emails.append(email)
+    recipients, skipped = _roster_recipients(event, participants, resend=resend)
+    emails = [email for _participant, email in recipients]
+    if emails and charge_recipients is not None:
+        charge_recipients(len(emails))
 
     if emails:
         delivery_result = upsert_and_send_invitations(
@@ -461,13 +583,14 @@ def send_roster_invitations(
             idempotent=False,
             hydrate=True,
         )
-    requested_count = len(participants)
     queued_count = delivery_result["request"].recipient_count
     return {
         "deliveryResult": delivery_result,
         "requestedCount": requested_count,
         "queuedCount": queued_count,
         "skippedCount": requested_count - queued_count,
+        "willSend": queued_count,
+        "skipped": skipped,
     }
 
 
@@ -519,12 +642,7 @@ def enqueue_manual_reminders(
             )
         return _request_result(previous, event=event, idempotent=True)
 
-    invitations = list(
-        event.invitations.filter(first_sent_at__isnull=False)
-        .exclude(status=EventInvitation.Status.SUBMITTED)
-        .select_related("event")
-        .order_by("email")
-    )
+    invitations = list(reminder_candidates(event).select_related("event").order_by("email"))
     if not event.reminders_enabled:
         invitations = []
     maximum = settings.REMINDER_MAX_RECIPIENTS
@@ -533,11 +651,18 @@ def enqueue_manual_reminders(
             f"A reminder request can include at most {maximum} recipients.",
         )
 
-    jobs = []
+    # Nobody this cycle already reminded is emailed again, even when the
+    # reminder reads differently now: the rule the preview counts with. Their
+    # newest reminder stands for them in this request.
+    reminded = cycle_reminder_job_ids(event, [invitation.pk for invitation in invitations])
+    job_ids = []
     created_job_count = 0
     for invitation in invitations:
+        if invitation.pk in reminded:
+            job_ids.append(reminded[invitation.pk])
+            continue
         job, created = enqueue_reminder_job(invitation)
-        jobs.append(job)
+        job_ids.append(job.pk)
         created_job_count += int(created)
 
     request_record = EmailDeliveryRequest.objects.create(
@@ -546,17 +671,17 @@ def enqueue_manual_reminders(
         operation=EmailDeliveryRequest.Operation.REMINDER,
         idempotency_key=idempotency_key,
         request_fingerprint=fingerprint,
-        recipient_count=len(jobs),
+        recipient_count=len(job_ids),
         created_job_count=created_job_count,
     )
-    request_record.jobs.add(*jobs)
+    request_record.jobs.add(*job_ids)
     security_logger.info(
         "event_email_request_created",
         extra={
             "event_id": str(event.pk),
             "operation": EmailDeliveryRequest.Operation.REMINDER,
             "requested_by": str(requested_by.pk),
-            "recipient_count": len(jobs),
+            "recipient_count": len(job_ids),
             "created_job_count": created_job_count,
         },
     )

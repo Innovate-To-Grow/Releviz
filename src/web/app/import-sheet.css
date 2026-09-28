@@ -1,0 +1,108 @@
+/* Import participants sheet (modal wizard). */
+
+.import-sheet .step-indicator {
+  margin-bottom: 1rem;
+}
+
+.import-sheet__error {
+  margin-bottom: 1rem;
+}
+
+/* Step 1: the parsed paste, so misaligned columns show before uploading. */
+.import-sheet__paste-preview td {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+}
+
+/* Step 2: one row per field. */
+.import-sheet__fields .form-select {
+  min-width: 11rem;
+}
+
+.import-sheet__field {
+  white-space: nowrap;
+}
+
+.import-sheet__sample {
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--bs-secondary-color);
+}
+
+.import-sheet__fallback {
+  min-width: 14rem;
+  color: var(--bs-secondary-color);
+}
+
+.import-sheet__default-group {
+  min-width: 14rem;
+}
+
+.import-sheet__default-weight {
+  width: 6rem;
+}
+
+.import-sheet__sheet-line {
+  color: var(--bs-secondary-color);
+  font-size: 0.9rem;
+}
+
+.import-sheet__sheet-settings {
+  padding: 0.75rem;
+  border: 1px solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius);
+  background: var(--bs-tertiary-bg);
+}
+
+/* Step 3: the summary line and Show filter share one row. */
+.import-sheet__review-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.import-sheet__summary {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Review inputs stay readable; the table scrolls horizontally instead. */
+.import-sheet__rows input.form-control:not([type="number"]) {
+  min-width: 9rem;
+}
+
+.import-sheet__rows input[type="number"].form-control {
+  min-width: 4.5rem;
+  width: 6rem;
+}
+
+/* Status badges carry a whole sentence for rows that need fixing. */
+.import-sheet__rows .import-sheet__status {
+  max-width: 18rem;
+  white-space: normal;
+  text-align: left;
+}
+
+.import-sheet__apply {
+  padding: 1rem;
+  border: 1px solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius);
+}
+
+.import-sheet__confirmation-field {
+  max-width: 20rem;
+}
+
+/* The reason a commit is blocked sits left of the footer buttons. */
+.import-sheet__footer-note {
+  margin-right: auto;
+  align-self: center;
+  color: var(--bs-secondary-color);
+  font-size: 0.875rem;
+}

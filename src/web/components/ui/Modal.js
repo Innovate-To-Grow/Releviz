@@ -1,9 +1,22 @@
 "use client";
 
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const subscribeToNothing = () => () => {};
+
+// True when rendering in the browser; false on the server and while server
+// markup is hydrated, which has the dialog in place.
+function useInBrowser() {
+  return useSyncExternalStore(
+    subscribeToNothing,
+    () => true,
+    () => false,
+  );
+}
 
 /**
  * Accessible modal dialog rendered by React (no Bootstrap JS).
@@ -11,6 +24,9 @@ const FOCUSABLE =
  * - Traps Tab focus inside, closes on Escape and backdrop click (unless
  *   `dismissible={false}` or `busy`), restores focus to the opener on close,
  *   and locks body scrolling while open.
+ * - Drawn on `document.body` through a portal, so a sticky or transformed
+ *   ancestor (its own stacking context) can't put it under the page's sticky
+ *   navigation. React events still reach the components it is written in.
  * - Render it conditionally (`open && <Modal …>`) or pass `open`.
  * - `as="form"` turns the dialog into a form so the footer can hold a submit
  *   button; `onSubmit` is forwarded.
@@ -36,6 +52,7 @@ export default function Modal({
   const onCloseRef = useRef(onClose);
   const busyRef = useRef(busy);
   const generatedId = useId();
+  const inBrowser = useInBrowser();
   const titleId = labelledBy || `${generatedId}-title`;
   const descriptionId = description ? `${generatedId}-description` : undefined;
 
@@ -92,11 +109,13 @@ export default function Modal({
       document.body.style.overflow = previousOverflow;
       restoreFocusRef.current?.focus?.();
     };
-  }, [open, dismissible]);
+    // A dialog hydrated in place moves to the body once hydrated, and is set
+    // up again there.
+  }, [open, dismissible, inBrowser]);
 
   if (!open) return null;
 
-  return (
+  const backdrop = (
     <div
       className="app-modal-backdrop"
       onMouseDown={(event) => {
@@ -139,4 +158,6 @@ export default function Modal({
       </Component>
     </div>
   );
+
+  return inBrowser ? createPortal(backdrop, document.body) : backdrop;
 }

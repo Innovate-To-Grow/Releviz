@@ -330,7 +330,7 @@ class RosterInvitationApiTests(TestCase):
         )
         key = str(uuid.uuid4())
         for payload, message in [
-            ({"idempotencyKey": key}, "participantIds must be a non-empty array."),
+            ({"idempotencyKey": key}, "Provide participantIds or filter."),
             (
                 {"participantIds": [], "idempotencyKey": key},
                 "participantIds must be a non-empty array.",
@@ -358,7 +358,7 @@ class RosterInvitationApiTests(TestCase):
                 self.assertEqual(response.status_code, 400, response.data)
                 self.assertEqual(response.data["error"], message)
 
-        with patch("apps.scheduling.views.roster.invitations.MAX_ROSTER_ROWS", 1):
+        with patch("apps.scheduling.views.roster.selectors.MAX_ROSTER_ROWS", 1):
             too_many = self.send([ada.pk, str(ada.member_id)])
         self.assertEqual(too_many.status_code, 400)
         self.assertEqual(too_many.data["error"], "participantIds may contain at most 1 entries.")
@@ -485,20 +485,19 @@ class RosterInvitationApiTests(TestCase):
         self.assertEqual(EmailDeliveryJob.objects.count(), 2)
         self.assertEqual(EmailDeliveryRequest.objects.count(), 1)
 
-        with (
-            patch(
-                "apps.scheduling.views.roster.invitations.consume_request_rate_limit",
-                return_value=denied,
-            ) as consume,
-            patch("apps.scheduling.views.roster.invitations.send_roster_invitations") as service,
-        ):
-            throttled = self.send([ada.pk, grace.pk])
+        hal = self.add_person("Hal", "hal@example.com")
+        with patch(
+            "apps.scheduling.views.roster.invitations.consume_request_rate_limit",
+            return_value=denied,
+        ) as consume:
+            throttled = self.send([ada.pk, grace.pk, hal.pk], resend=True)
         self.assertEqual(throttled.status_code, 429)
         self.assertEqual(throttled["Retry-After"], "9")
         consume.assert_called_once()
-        self.assertEqual(consume.call_args.kwargs, {"cost": 2})
-        service.assert_not_called()
+        # Ada's and Grace's emails are still in flight; only Hal would be queued.
+        self.assertEqual(consume.call_args.kwargs, {"cost": 1})
         self.assertEqual(EmailDeliveryRequest.objects.count(), 1)
+        self.assertEqual(EmailDeliveryJob.objects.count(), 2)
 
         Participant.objects.filter(pk=grace.pk).delete()
         shrunk = self.send([ada.pk, grace.pk], key=key)

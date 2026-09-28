@@ -22,7 +22,9 @@ from .managed import create_or_reuse_managed_participant
 from .messages import event_email_parts, invitation_body, invitation_html_body
 from .reminders import (
     enqueue_reminder_job,
+    reminder_candidates,
     reminder_cycle,
+    reminder_preview,
     send_due_event_reminders,
     send_event_reminders,
 )
@@ -52,7 +54,9 @@ __all__ = [
     "normalize_phone",
     "organizer_addresses",
     "phone_issue",
+    "reminder_candidates",
     "reminder_cycle",
+    "reminder_preview",
     "resolve_invited_member",
     "send_due_event_reminders",
     "send_event_reminders",

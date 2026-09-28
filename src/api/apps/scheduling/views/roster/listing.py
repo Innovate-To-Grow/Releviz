@@ -17,6 +17,7 @@ from .queries import (
     apply_roster_filters,
     latest_delivery_request,
     participant_summary,
+    roster_overall,
     roster_queryset,
     roster_stats,
 )
@@ -52,6 +53,9 @@ class RosterView(PrivateAPIView):
                     total=stats["total"],
                 ),
                 "stats": stats,
+                # Whole-roster counts, whatever the filters, for the header
+                # summary and the email menu.
+                "overall": roster_overall(event, roster),
                 "activity": activity,
                 "latestDeliveryRequest": latest_delivery_request(event),
                 # Whether the organizer answers as a participant themselves.

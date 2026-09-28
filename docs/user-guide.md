@@ -42,114 +42,213 @@ reactivate the event first.
 
 ## Participants
 
-Adding people and sending invitations are separate steps. Only three actions send invitations:
-**Add and send invitation**, an import committed with **Send invitations to newly added people**
-ticked, and **Send invitation**. Closed, finalized, and archived events must be reactivated before
-their participants can change.
+The **Participants** section of the organizer workspace is one list: each person on one row with
+their name, a contact line, their groups, a **Response** badge (**Submitted** or **Not
+submitted**), and an **Invitation** badge. The line under the heading counts people, submitted
+and not submitted responses, and groups. Adding people and sending invitations are separate
+steps, and nobody is emailed until you have seen the email and confirmed it: **Add and send
+invitation**, **Review and send invitations** at the end of an import, **Send invitation…** (in
+the selection bar or a row's **⋯** menu), and the **Email** menu all open the email review (see
+[Review before sending](#review-before-sending)). Closed, finalized, and archived events show the
+list read-only until they are reactivated.
+
+Above the list, the search box matches names, emails, phones, and groups; **Group:** narrows the
+list to one group (or **No group**); and **Filter** narrows it by response, invitation state, or
+whether the person counts in the results. Active filters show as chips with **Clear all**, and
+the counts line then reads **Showing n of N people**.
+
+Once an active event's response deadline has passed, a banner says so: people can't be added,
+invited, or changed, and your own schedule is locked, but you can still enter schedules for the
+people you answer for. **Change deadline** opens the event settings.
 
 ### Add people
 
-**Add person** opens a form with two actions:
+**+ Add person** opens a side panel with **Full name**, **Email**, and an optional **Phone**
+(never used to contact anyone). Two actions save it:
 
-- **Add only** puts the person on the participant list without sending email (pressing Enter does
-  the same).
-- **Add and send invitation** also emails their secure link right away.
+- **Add** (or pressing Enter) puts the person on the list without sending email. The panel stays
+  open with a result line and an **Open** link, so several people can be entered one after
+  another; **Done** closes it.
+- **Add and send invitation** adds the person the same way, then opens the review of their
+  invitation above the panel. The invitation goes out only once you confirm it, and the result
+  line then says it is queued. Closing the review leaves the person on the list without an
+  invitation, and the result line offers **Send invitation** for later.
 
-If the email already belongs to a Releviz account, that account is added. Until the person responds
-themselves, you can still enter their schedule with **Edit schedule**.
+If the email already belongs to a Releviz account, that account is added. Until the person
+responds themselves, you can still enter their schedule with **Edit schedule**. An email that is
+already on the list adds nothing, and the result says so.
 
-**Add myself** puts you, the organizer, on your own participant list under your account's name and
-address, and opens your schedule. Your row reads **You (organizer)**, and **Edit my schedule**
-enters or changes your answers, which count in the results like everyone else's. You are never sent
-an invitation, reminder, or final notification for your own row.
+**Add myself** (in the empty list, or at the bottom of the add panel) puts you, the organizer, on
+your own participant list under your account's name and address, and opens your schedule. Your
+row reads **your name (you)** with **From your account**, and **Edit my schedule** enters or
+changes your answers, which count in the results like everyone else's. You are never sent an
+invitation, reminder, or final notification for your own row.
 
 ### People without an email
 
-To add someone who has no email of their own, open **Add person**, enter their name and an optional
-phone number, tick **No email of their own — use one of mine and I'll enter their schedule**, and
-click **Add person**. Leave the email blank to file them under your account's primary verified
-address, or type another of your verified addresses.
+To add someone who has no email of their own, open **+ Add person**, enter their name and an
+optional phone number, and tick **They have no email. I'll enter their schedule.** The email
+field goes away and **Add** files them under your account's primary verified address (an import
+can use another of your verified addresses).
 
-These people are **Organizer-managed**: they never sign in or receive links, no invitation,
-reminder, or final notification is sent for them, and you enter their availability with **Edit
-schedule**. Several people can share your address and are told apart by name, so give different
-people distinct names (for example "John Smith (Team B)"). Entering an identical name again returns
-the existing row.
+These people never sign in or receive links, no invitation, reminder, or final notification is
+sent for them, and you enter their availability with **Edit schedule** (the add panel offers
+**Enter their schedule** straight away). Their row reads **No email · you enter their schedule**,
+their invitation badge reads **No email**, and the filing address is never shown. Several people
+can share your address and are told apart by name, so give different people distinct names (for
+example "John Smith (Team B)"). Entering an identical name again returns the existing row.
 
-Typing one of your own addresses into **Add person** without ticking the box is refused, with a
+Typing one of your own addresses into the add panel without ticking the box is refused, with a
 hint pointing to the checkbox or to **Add myself**.
 
 ### Edit or remove people
 
-**Edit details** fixes a name or email entered by mistake:
+Clicking a person's name (or **Details** in the row's **⋯** menu) opens their panel, with **‹ ›**
+arrows to move to the previous or next person on the page. It says how the row is answered
+(invited by email, has a Releviz account, answers with their own account, no email of their own,
+or your own row), offers **Edit schedule**, and groups everything about the person:
 
-- A name can be changed for anyone whose schedule you still enter. A person who answers under their
-  own account keeps their account's name.
-- An email can be changed only until the person has signed in with their link, joined, or answered.
-  The row moves to the account behind the new address (or a new temporary identity) and keeps its
-  name, groups, weight, and any schedule you entered. It gets a fresh invitation marked **Not
-  sent**; the old link stops working and any queued email to the old address is canceled.
-- Adding an email to an organizer-managed person makes them an ordinary person you can invite.
+- **Contact**: **Full name**, **Email**, and **Phone**. A name can be changed for anyone whose
+  schedule you still enter; a person who answers under their own account keeps their account's
+  name. An email can be changed only until the person has signed in with their link, joined, or
+  answered. The row then moves to the account behind the new address (or a new temporary
+  identity) and keeps its name, groups, weight, and any schedule you entered; it gets a fresh
+  invitation marked **Not sent**, the old link stops working, and any queued email to the old
+  address is canceled. Adding an email to a person without one makes them an ordinary person you
+  can invite. After saving a new address, the notice offers **Send invitation** for it.
+- **Groups**: the person's group chips and **+ Add to group**, which opens the group picker.
+- **In the results**: whether their answers are counted (**Count Ada's answers**, for someone
+  called Ada) and their **Weight** (0 to 1).
+- **Invitation**: the current state with **Send invitation** or **Resend**, which open the email
+  review.
 
-**Remove** asks for confirmation, then deletes the person along with their schedule, group
-memberships, and invitation (a link already sent stops working). It waits if an email to them is
-being handed to the provider at that moment. To keep someone's answers but leave them out of the
-results, untick **Included** instead.
+**Save** sends only what changed, and closing with unsaved edits asks first. If someone else
+changed the row in the meantime, the row shows the latest values with **Apply again** and
+**Dismiss**.
+
+**Remove from event…** (in the row's **⋯** menu or at the bottom of the person panel) asks for
+confirmation, then deletes the person along with their schedule, group memberships, and
+invitation (a link already sent stops working). It waits if an email to them is being handed to
+the provider at that moment. To keep someone's answers but leave them out of the results, use
+**Leave out of results** instead.
 
 ### Import participants
 
-**Import participants** accepts `.xlsx`, `.csv`, or pasted CSV/TSV.
+**Import** opens a sheet that accepts `.xlsx`, `.csv`, or cells pasted from a spreadsheet, in four
+steps:
 
-1. Map the required `name` and `email` columns and the optional `group`, `weight`, `included`, and
-   `phone` columns. Columns are matched by header, singular or plural (`Group`, `Groups`, `Team`,
-   `Teams`, `Emails`, ...), so check the mapping. A field with no column uses the **Defaults**
-   shown below the mapping, for example **No column (weight 1)**.
-2. Preview and correct the rows.
-3. Commit as **Merge** or **Rebuild**:
-   - **Merge** adds or updates people and keeps existing schedules and delivery history. A row's
-     groups are added to the person's existing groups; an import never removes anyone from a group.
-   - **Rebuild** destructively replaces the participant list, schedules, invitations, temporary
-     sessions, and pending deliveries. You must type the event code to confirm.
+1. **Source**: **Upload a file** or **Paste from a spreadsheet**, then **Continue**.
+2. **Columns**: check which column fills each field. The required **Name** and **Email** columns
+   and the optional **Group**, **Phone**, **Weight**, and **Included** columns are matched by
+   header, singular or plural (`Group`, `Groups`, `Team`, `Organization`, `Mail`, `Tel`, ...), and
+   the sheet shows what the first data row gives each field. A field with no column takes the
+   default shown beside it (a default group, weight, and whether people are counted); **change**
+   picks another worksheet or header row. **Preview rows** validates the sheet.
+3. **Review**: every row with its status (**Ready**, **Needs fixing**, **Merged into row n**, or
+   **Skipped**). Fix cells in place, untick rows to skip them, and use **Show** to see only the
+   rows that need fixing. Then choose **Add and update people** (merge) or **Replace the whole
+   list** (rebuild) and click **Import N people** (or **Replace the list with N people**).
+   - Merging adds or updates people and keeps existing schedules and delivery history. A row's
+     groups are added to the person's existing groups; an import never removes anyone from a
+     group.
+   - Rebuilding destructively replaces the participant list, schedules, invitations, temporary
+     sessions, and pending deliveries, and everyone starts as **Not sent**. You must type the
+     event code to confirm.
+4. **Done**: what was imported, ending with **No invitations were sent.** When the import put
+   people on the list who can be invited (those a merge added, or everyone a rebuild imported),
+   **Review and send invitations (N)…** closes the sheet and opens the invitation review for
+   exactly those people. **Back to participants** returns to the list without inviting anyone,
+   and **Import another list** starts over.
 
-Tick **Send invitations to newly added people** before committing to email everyone the import adds
-(on a rebuild, everyone). Leave it unticked to add them as **Not sent** and invite them later.
-People already on the participant list are never emailed again by an import.
+An import never emails anyone itself. People already on the participant list are not offered an
+invitation after a merge, and people without an email of their own and your own row are never
+emailed at all.
 
 Column rules:
 
 - **group**: blank means unassigned, and `ALL` means every group, including groups created later.
   Separate several groups with `;` or `,` (for example `Faculty; Team 3`), so group names cannot
   contain either character.
-- **email**: a blank email, or one of your own addresses, adds an organizer-managed person (see
-  above), matched by name so re-importing the sheet updates them instead of adding duplicates. The
-  preview marks these rows. A blank email needs a verified address on your account to file it under.
-- **phone** (also `phone number`, `mobile`, `cell`, or `telephone`): digits, spaces, and
+- **email**: a blank email, or one of your own addresses, adds a person without an email of their
+  own (see above), matched by name so re-importing the sheet updates them instead of adding
+  duplicates. The review step marks these rows. A blank email needs a verified address on your
+  account to file it under.
+- **phone** (also `phone number`, `mobile`, `cell`, `telephone`, or `tel`): digits, spaces, and
   `+ - ( ) .`, with at least 7 digits and at most 32 characters. Phones are shown and editable in
-  the participant table; Releviz never uses them to send anything.
+  the person panel; Releviz never uses them to send anything.
 
 Two rows for the same person (the same email, or the same name without an email) are combined when
 they are identical or differ only in their groups; the combined row gets all of those groups.
 Otherwise they are flagged as a conflicting duplicate.
 
+### Review before sending
+
+Every email you send to participants opens the same two-step dialog first: invitations,
+reminders, the confirmation sent when you finalize a meeting, the cancellation sent when you
+reopen a finalized event, and failed emails sent again. Nothing is sent until you have passed
+both steps, and closing the dialog at either step (**Cancel**, **×**, or Escape) sends nothing.
+Sign-in codes and other account emails are sent without it.
+
+1. **Review** says who gets the email and shows it exactly as the first of them receives it: the
+   **From**, **To**, **Subject**, and **Attachments** (such as the calendar file) lines, then the
+   email itself on the **Email** tab and its plain-text version on the **Plain text** tab. A note
+   under the envelope names the person it is shown for, for example **Shown for Ada Lovelace.
+   Each person gets their own private link.** In the preview that private link is a stand-in
+   ending in `invitation=preview`, so it never shows anyone's real link. **Continue** is
+   unavailable while the preview loads or when nobody would be emailed.
+2. **Confirm** asks once more, for example **Send 3 invitations now?**, with the subject and the
+   number of recipients. **Back** returns to the review, and the send button (**Send 3
+   invitations**) sends. Emails go out right away and can't be recalled. If sending fails, the
+   dialog stays on this step with the error, so you can try again or go back.
+
 ### Send invitations
 
-Check people in the participant table and click **Send invitation** (above or below the table). It
-skips anyone already sent or still queued, unless **Resend to people already invited** is ticked; a
-resend keeps any custom message.
+Invitations go to a selection or to everyone still uninvited:
 
-The **Invitation** badge on each row, which **Filter by invitation** also uses, shows:
+- Tick people in the list (the header checkbox selects the page, and **Select all N matching**
+  extends that to everyone matching the filter), then click **Send invitation…** in the selection
+  bar. One person's **⋯** menu has **Send invitation** or **Resend invitation** too.
+- The **Email** menu offers **Invite everyone not invited yet (N)…**.
+- **Add and send invitation** in the add panel, and **Review and send invitations (N)…** at the
+  end of an import, invite the people just added.
+
+Each of these opens the [review](#review-before-sending). It says who gets an invitation now, who
+was already invited (tick **Email them again too** to include them; a resend keeps any custom
+message), who has no email of their own, and who is being emailed right now, above the invitation
+the first of them gets. **Send N invitations** on the confirmation step sends them. Sending
+returns as soon as the invitation jobs are queued: a notice counts what was queued and skipped,
+with **View progress**, and the delivery card at the top of the workspace follows the run.
+
+The **Invitation** badge on each row, which **Filter** also uses, shows:
 
 - **Not sent**: no email yet. These people get no reminders until they are invited.
+- **Sending…**: the email is queued or being handed to the provider.
+- **Failed**: the provider refused the email for good. The delivery card's **Show failed** filters
+  the list to these people. **Retry failed recipients** opens the review with how many failed
+  emails will be sent again and the first of them exactly as it was written; failed emails the
+  event has moved past (to someone since removed, for a meeting time since changed, or for an
+  event no longer active) are canceled instead. **Send N again** on the confirmation step queues
+  them.
 - **Sent**: emailed, including opened.
 - **Accepted**: the person verified their link, joined, or saved or submitted their own response
   after the email. A response you enter for them does not count.
+- **No email**: a person without an email of their own; **—** marks your own row.
 
-Reminders skip anyone whose response is submitted, including a response you submitted for them.
+The delivery card counts recipients that are sent, queued, or failed. It keeps itself current
+while recipients are queued (only while the tab is visible), stops once everyone is sent or
+failed, and can then be dismissed.
 
-Sending returns as soon as the invitation jobs are queued. A delivery progress card at the top of
-the organizer workspace counts recipients that are sent, queued, or failed, and offers **Retry
-failed recipients**. The card keeps itself current while recipients are queued (only while the tab
-is visible) and stops once everyone is sent or failed.
+### Reminders
+
+**Send reminders (N)…** in the **Email** menu emails everyone who was invited and has not
+submitted. It opens the [review](#review-before-sending) with how many get a reminder, how many
+were already reminded for this deadline and are skipped, and the reminder the first of them gets;
+**Send N reminders** on the confirmation step sends them. People never invited, people without an
+email, and you are skipped, as is anyone already reminded since the deadline was set. A response
+you submitted for someone counts as submitted. The menu also says when the next automatic
+reminder goes out (**Next automatic reminder: date**) or that **Reminders are off**. While
+reminders are turned off in the event settings, **Send reminders** is unavailable too. Automatic
+reminders go out on their schedule without a review.
 
 ### Who can open an event
 
@@ -191,34 +290,47 @@ Table.
 ### Participants and schedules
 
 - Search and filter the participant list (50 rows per page by default, up to 100).
-- Enter, save, or submit anyone's schedule with **Edit schedule** while the event is active. For
-  organizer-managed and temporary people this is always possible. For someone with a full account,
-  it is possible until they respond themselves (join, save or submit their own response, or upgrade
-  a temporary identity to a full account); after that the row shows **Self-managed** and only they
-  can change their answers. Conflicting edits are never silently overwritten.
+- Enter, save, or submit anyone's schedule with **Edit schedule** (on the row or in the person
+  panel) while the event is active. For people without an email and temporary people this is
+  always possible. For someone with a full account, it is possible until they respond themselves
+  (join, save or submit their own response, or upgrade a temporary identity to a full account);
+  after that the row shows **Answers themselves** and only they can change their answers.
+  Conflicting edits are never silently overwritten: the editor asks you to reload the latest
+  response. Saving a submitted response as a draft asks first, since it leaves the results until
+  it is submitted again, and someone who is left out of the results has a read-only schedule
+  until you **Count them again**.
 
 ### Groups
 
-Create groups from the Groups panel, even before anyone is on the participant list. The participant
-table has an **All** column and one checkbox column per group:
+Groups are labels for filtering and for changing many people at once; results use each person's
+weight and whether they count. Create one from the **Group:** menu (**+ New group**), inside the
+group picker, or in the **Groups** panel (**Manage groups…**), even before anyone is on the list.
 
-- Tick a person's box in a group column to add them to that group; one person can be in several
-  groups.
-- Tick **All** to put them in every group, including groups created later.
-- Ticks are a draft until you click **Save group changes** (or **Discard**). A bar at the bottom of
-  the screen counts unsaved changes, and leaving the page with unsaved changes asks first.
-
-The Groups panel can also add or remove everyone checked in the list at once. **Delete group** asks
-for confirmation; the group's people stay on the participant list.
+- To change one person's groups, open their panel and use **+ Add to group**.
+- To change many at once, select them and click **Groups…** in the selection bar. The picker
+  shows each group with how many of the selected people are in it: tick a group to add everyone,
+  untick it to remove everyone, and leave a mixed box alone to keep things as they are. **Every
+  group, including groups added later** puts people in every group, present and future.
+- The **Groups** panel lists every group with its head count, shared **Weight** (blank when
+  mixed), and how many of its people are **Counted**, plus the people in **No group**. A group's
+  menu offers **Select these N people**, **Rename**, **Count only this group…**, and **Delete
+  group…** (the group's people stay on the participant list).
 
 ### Weights and inclusion
 
-- Change weights and the **Included** flag for a group, the current filter, or a selection, then
-  override individuals as needed.
-- A group's **Included** box includes or leaves out everyone in it (it shows a mixed state when only
-  some are included).
-- **Only this group** includes that group and leaves everyone else out, without touching weights, to
-  show that group's best times. **Include everyone** brings everyone back.
+Each person has a weight between 0 and 1 and either counts in the results or is left out. Rows
+show **Weight w** when the weight is not 1 and **Left out of results** when the person is not
+counted, and a banner above the list counts everyone left out, with **Show them** and **Count
+everyone again**.
+
+- One person: **Leave out of results** or **Count in results** in the **⋯** menu, or the **In the
+  results** section of their panel.
+- A selection: **More** in the selection bar offers **Set weight…**, **Count in results**, and
+  **Leave out of results**. A change to more than a page of people, or to everyone matching the
+  filter, is confirmed first.
+- A group: the **Groups** panel's **Weight** field and **Counted** box apply to everyone in the
+  group. **Count only this group…** leaves everyone else out without touching weights, to show
+  that group's best times; **Count everyone again** brings everyone back.
 - People in several groups follow the most recent change.
 
 ### Time Table and finalizing
@@ -256,10 +368,20 @@ An open slot whose meeting window would run into a blocked time shows its percen
 start a meeting.
 
 **Finalize** fixes one continuous meeting time, emails an iCalendar invitation to participants, and
-offers the calendar file for download. Once a meeting is finalized, picking is locked until the
-event is reactivated: Finalize shows the confirmed meeting without the two lists, and the calendar
-draws the confirmed meeting alone and ignores clicks. Reactivating a finalized event emails a
-matching cancellation.
+offers the calendar file for download. Pick a window, click **Review attendance**, then **Finalize
+meeting**: the [review](#review-before-sending) counts the invited people who will receive the
+confirmation and shows the one the first of them gets, for the picked time and with its calendar
+file attached. Nothing is finalized until **Finalize and send N emails** on the confirmation step.
+Only people who were sent an invitation get the confirmation; when nobody was, the review says no
+confirmation emails will be sent, and **Finalize meeting** on the confirmation step finalizes
+without emailing anyone. Once a meeting is finalized, picking is locked until the event is
+reactivated: Finalize shows the confirmed meeting without the two lists, and the calendar draws the
+confirmed meeting alone and ignores clicks.
+
+Reactivating a finalized event (**Reactivate event**) cancels the meeting and emails a matching
+cancellation to everyone the confirmation reached. That email is reviewed first in the same way,
+and the event reopens only with **Reopen and send N emails**. When nobody received the
+confirmation, it reopens at once.
 
 While new responses are being processed, the Time Table says it is updating and keeps showing the
 last completed results; once current, it shows when they were generated.
@@ -270,9 +392,9 @@ The workspace updates itself; there is no Refresh button. While the tab is visib
 event stream open (`GET /events/stream`, Server-Sent Events), and the server announces every change
 to the event: a participant saving, an email being sent, results being recomputed, or an edit made
 in another session. Each announcement arrives well under a second after the change and reloads just
-the parts of the workspace that changed, without disturbing a selected time, an unsaved row, or an
-open drawer. A check once a minute remains as a safety net, and a check that fails is retried within
-seconds.
+the parts of the workspace that changed, without disturbing a selected time, a selection, unsaved
+edits in a panel, or an open drawer. A check once a minute remains as a safety net, and a check
+that fails is retried within seconds.
 
 When the stream is unavailable (local development on SQLite, a proxy that buffers responses, or the
 `LIVE_STREAM_ENABLED=0` switch) the workspace falls back to checking on its own. While the event is

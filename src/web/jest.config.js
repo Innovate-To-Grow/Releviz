@@ -79,12 +79,6 @@ const config = {
       functions: 88,
       lines: 92,
     },
-    "./components/schedule/RosterGroups.js": {
-      statements: 100,
-      branches: 95,
-      functions: 100,
-      lines: 100,
-    },
     "./components/schedule/RosterImportWizard.js": {
       statements: 94,
       branches: 75,

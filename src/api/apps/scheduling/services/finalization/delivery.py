@@ -4,7 +4,7 @@ import hashlib
 import json
 
 from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
-from apps.mail.services import enqueue_email_job
+from apps.mail.services import EmailAttachment, enqueue_email_job
 from apps.scheduling.models import Event, FinalMeeting
 from apps.scheduling.services.ics import final_meeting_ics
 
@@ -45,6 +45,38 @@ def _message_id(prefix: str, event: Event, sequence: int, recipient: str) -> str
     return f"<{prefix}-{event.event_id}-{sequence}-{recipient_hash}@releviz.local>"
 
 
+def final_confirmation_parts(
+    event: Event,
+    meeting: FinalMeeting,
+    recipient: str,
+) -> tuple[str, str, str, list[EmailAttachment]]:
+    """Subject, text, HTML, and calendar invitation confirming ``meeting`` to ``recipient``."""
+
+    attachment = final_meeting_ics(event, meeting, attendee=recipient)
+    return (
+        f"Confirmed: {event.name}",
+        final_confirmation_body(event, meeting),
+        final_confirmation_html_body(event, meeting),
+        [attachment],
+    )
+
+
+def final_cancellation_parts(
+    event: Event,
+    meeting: FinalMeeting,
+    recipient: str,
+) -> tuple[str, str, str, list[EmailAttachment]]:
+    """Subject, text, HTML, and calendar cancellation telling ``recipient`` it is off."""
+
+    attachment = final_meeting_ics(event, meeting, canceled=True, attendee=recipient)
+    return (
+        f"Scheduling reopened: {event.name}",
+        final_cancellation_body(event, meeting),
+        final_cancellation_html_body(event, meeting),
+        [attachment],
+    )
+
+
 def enqueue_final_confirmation_jobs(
     event: Event,
     meeting: FinalMeeting,
@@ -52,7 +84,7 @@ def enqueue_final_confirmation_jobs(
 ) -> list[EmailDeliveryJob]:
     jobs = []
     for recipient in recipients:
-        attachment = final_meeting_ics(event, meeting, attendee=recipient)
+        subject, body, html_body, attachments = final_confirmation_parts(event, meeting, recipient)
         job, _created = enqueue_email_job(
             idempotency_key=_confirmation_job_key(
                 event,
@@ -61,10 +93,10 @@ def enqueue_final_confirmation_jobs(
             ),
             message_type=EmailMessageLog.MessageType.FINAL_CONFIRMATION,
             recipient=recipient,
-            subject=f"Confirmed: {event.name}",
-            body=final_confirmation_body(event, meeting),
-            html_body=final_confirmation_html_body(event, meeting),
-            attachments=[attachment],
+            subject=subject,
+            body=body,
+            html_body=html_body,
+            attachments=attachments,
             message_id=_message_id(
                 "final",
                 event,
@@ -84,12 +116,7 @@ def enqueue_final_cancellation_jobs(
 ) -> list[EmailDeliveryJob]:
     jobs = []
     for recipient in recipients:
-        attachment = final_meeting_ics(
-            event,
-            meeting,
-            canceled=True,
-            attendee=recipient,
-        )
+        subject, body, html_body, attachments = final_cancellation_parts(event, meeting, recipient)
         job, _created = enqueue_email_job(
             idempotency_key=_cancellation_job_key(
                 event,
@@ -98,10 +125,10 @@ def enqueue_final_cancellation_jobs(
             ),
             message_type=EmailMessageLog.MessageType.FINAL_CANCELLATION,
             recipient=recipient,
-            subject=f"Scheduling reopened: {event.name}",
-            body=final_cancellation_body(event, meeting),
-            html_body=final_cancellation_html_body(event, meeting),
-            attachments=[attachment],
+            subject=subject,
+            body=body,
+            html_body=html_body,
+            attachments=attachments,
             message_id=_message_id(
                 "final-cancel",
                 event,
@@ -148,6 +175,18 @@ def ensure_final_delivery_request(
 def confirmation_jobs(event: Event, sequence: int) -> list[EmailDeliveryJob]:
     prefix = f"final-confirmation:{event.event_id}:{sequence}:"
     return list(event.email_delivery_jobs.filter(idempotency_key__startswith=prefix))
+
+
+def final_cancellation_recipients(confirmation_jobs) -> list[str]:
+    """Who is told a confirmed meeting is off: everyone its confirmation may have reached.
+
+    A confirmation that was sent, or is being handed to the provider right
+    now, may be in someone's calendar. One still waiting is canceled before
+    it goes out instead, and one that failed never arrived.
+    """
+
+    reached = {EmailDeliveryJob.Status.SENT, EmailDeliveryJob.Status.PROCESSING}
+    return sorted({job.recipient for job in confirmation_jobs if job.status in reached})
 
 
 def stabilize_pre_final_delivery_jobs(event: Event, *, now) -> None:

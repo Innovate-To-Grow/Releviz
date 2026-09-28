@@ -34,25 +34,43 @@ def event_configuration_write_error(event) -> str | None:
     return None
 
 
-def transition_event(event, target_status: str, *, response_deadline, now=None) -> set[str]:
+def transition_error(event, target_status: str, *, response_deadline, now=None) -> str | None:
+    """Why ``event`` cannot move to ``target_status`` with ``response_deadline``, if it cannot.
+
+    Pure: nothing on ``event`` changes, so previews can ask too. Staying put
+    with the same deadline is always allowed.
+    """
+
     current_time = now or timezone.now()
     valid_statuses = {choice for choice, _label in Event.Status.choices}
     if target_status not in valid_statuses:
-        raise LifecycleError("Invalid event status.")
+        return "Invalid event status."
     if target_status == Event.Status.FINALIZED:
-        raise LifecycleError("Confirm a final meeting time to finalize the event.")
-
-    deadline_changed = response_deadline != event.response_deadline
-    if target_status == event.status and not deadline_changed:
-        return set()
+        return "Confirm a final meeting time to finalize the event."
+    if target_status == event.status and response_deadline == event.response_deadline:
+        return None
     if target_status != event.status and target_status not in LEGAL_TRANSITIONS[event.status]:
-        raise LifecycleError(f"Cannot transition an event from {event.status} to {target_status}.")
+        return f"Cannot transition an event from {event.status} to {target_status}."
     if (
         target_status == Event.Status.ACTIVE
         and response_deadline is not None
         and current_time >= response_deadline
     ):
-        raise LifecycleError("An active event must have a future response deadline.")
+        return "An active event must have a future response deadline."
+    return None
+
+
+def transition_event(event, target_status: str, *, response_deadline, now=None) -> set[str]:
+    current_time = now or timezone.now()
+    error = transition_error(
+        event, target_status, response_deadline=response_deadline, now=current_time
+    )
+    if error:
+        raise LifecycleError(error)
+
+    deadline_changed = response_deadline != event.response_deadline
+    if target_status == event.status and not deadline_changed:
+        return set()
 
     changed_fields = {"version", "updated_at"}
     if deadline_changed:

@@ -1,12 +1,17 @@
 """iCalendar attachments for availability deadlines and final meetings."""
 
 from datetime import UTC, timedelta
-from zoneinfo import ZoneInfo
 
 from django.utils import timezone
 
 from apps.mail.services import EmailAttachment, frontend_url
 from apps.scheduling.models import Event
+from apps.scheduling.services.email_formatting import (
+    format_email_time_range,
+    local_datetime,
+    zone_label,
+    zone_suffix,
+)
 
 
 def _ics_escape(value: str) -> str:
@@ -96,16 +101,13 @@ def final_meeting_ics(
     link = frontend_url("/event", code=event.code)
     method = "CANCEL" if canceled else "REQUEST"
     status = "CANCELLED" if canceled else "CONFIRMED"
-    local_start = meeting.starts_at.astimezone(ZoneInfo(meeting.timezone))
-    local_end = meeting.ends_at.astimezone(ZoneInfo(meeting.timezone))
+    shown_zone = zone_label(local_datetime(meeting.starts_at, meeting.timezone))
+    when = format_email_time_range(meeting.starts_at, meeting.ends_at, meeting.timezone)
+    when += zone_suffix(meeting.timezone, shown_zone)
     description = (
-        f"{event.name} is no longer confirmed for "
-        f"{local_start.isoformat()} to {local_end.isoformat()} ({meeting.timezone})."
+        f"{event.name} is no longer confirmed for {when}."
         if canceled
-        else (
-            f"Confirmed for {local_start.isoformat()} to {local_end.isoformat()} "
-            f"({meeting.timezone}). Event page: {link}"
-        )
+        else f"Confirmed for {when}. Event page: {link}"
     )
     organizer_email = event.organizer.get_primary_email()
     lines = [

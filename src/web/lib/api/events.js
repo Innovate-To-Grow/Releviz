@@ -205,6 +205,10 @@ export function openEventStream(code, { signal } = {}) {
   );
 }
 
+// Checks a proposed final meeting without saving it. The response also
+// carries `recipientCount`, the confirmation `email` (see
+// components/schedule/email/EmailPreview) and a `sample` recipient, with
+// `email: null` when nobody would be emailed.
 export async function previewFinalMeeting(code, payload, token) {
   const res = await apiFetch(
     `${API_BASE}/events/finalization/preview?code=${encodeURIComponent(code)}`,
@@ -261,6 +265,30 @@ export async function updateEventLifecycle(
   return res.json();
 }
 
+// What a lifecycle change would email, without changing anything: moving a
+// finalized event back to `active` returns `{ cancellation: { recipientCount,
+// email, sample } }` for the people told the meeting is canceled. A refused
+// transition rejects with the server's wording and `status` 409.
+// `responseDeadline` is the one the change itself would carry (null clears
+// a deadline that has passed); left out, the event keeps its own.
+export async function previewEventLifecycle(
+  code,
+  { status, responseDeadline },
+  token,
+) {
+  const res = await apiFetch(
+    `${API_BASE}/events/lifecycle/preview?code=${encodeURIComponent(code)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status, responseDeadline }),
+    },
+    token,
+  );
+  if (!res.ok) throw await eventMutationError(res);
+  return res.json();
+}
+
 export async function fetchInvitations(code, token) {
   const res = await apiFetch(
     `${API_BASE}/events/invitations?code=${encodeURIComponent(code)}`,
@@ -304,13 +332,24 @@ export async function sendInvitations(
   return res.json();
 }
 
-export async function sendReminders(code, { idempotencyKey }, token) {
+// `preview: true` only counts who would be reminded (and returns the reminder
+// `email` and a `sample` recipient, or `email: null` when nobody is
+// eligible); a real run carries its `idempotencyKey`. Only the keys given are
+// sent.
+export async function sendReminders(
+  code,
+  { idempotencyKey, preview } = {},
+  token,
+) {
+  const body = {};
+  if (idempotencyKey !== undefined) body.idempotencyKey = idempotencyKey;
+  if (preview !== undefined) body.preview = preview;
   const res = await apiFetch(
     `${API_BASE}/events/reminders?code=${encodeURIComponent(code)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ idempotencyKey }),
+      body: JSON.stringify(body),
     },
     token,
   );
@@ -336,6 +375,21 @@ export async function retryDeliveryRequest(requestId, token) {
       headers: { "Content-Type": "application/json" },
       body: "{}",
     },
+    token,
+  );
+  if (!res.ok) throw new Error(await extractError(res));
+  return res.json();
+}
+
+// What "Retry failed recipients" would send, without sending it:
+// `{ preview: true, retryable, obsolete, email }`, where `email` is the first
+// failed email that would go out again (or null). A read of its own URL, not
+// a flag on the retry: a server without the preview answers 404 here instead
+// of sending the failed emails again.
+export async function previewDeliveryRetry(requestId, token) {
+  const res = await apiFetch(
+    `${API_BASE}/events/delivery-requests/${encodeURIComponent(requestId)}/retry-preview`,
+    {},
     token,
   );
   if (!res.ok) throw new Error(await extractError(res));

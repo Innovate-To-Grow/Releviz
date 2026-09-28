@@ -70,10 +70,10 @@ export async function configureRosterImport(code, importId, payload, token) {
 export async function fetchRosterImportRows(
   code,
   importId,
-  { page = 1, pageSize = 50 } = {},
+  { page = 1, pageSize = 50, show } = {},
   token,
 ) {
-  const query = queryString({ code, page, pageSize });
+  const query = queryString({ code, page, pageSize, show });
   const res = await apiFetch(
     `${API_BASE}/events/roster-imports/${encodeURIComponent(importId)}/rows?${query}`,
     {},
@@ -173,17 +173,30 @@ export async function patchRosterBulk(code, payload, token) {
   return jsonOrError(res);
 }
 
-export async function sendRosterInvitations(
-  code,
-  { participantIds, resend, idempotencyKey },
-  token,
-) {
+const INVITATION_REQUEST_KEYS = [
+  "participantIds",
+  "filter",
+  "resend",
+  "idempotencyKey",
+  "preview",
+];
+
+// Only the keys given are sent: a selection is `participantIds` or a
+// `filter`, `preview: true` counts without sending (and returns the `email`
+// the first recipient would get plus that `sample` recipient, or
+// `email: null` when nobody would be sent one), and a real send carries its
+// `idempotencyKey`.
+export async function sendRosterInvitations(code, options = {}, token) {
+  const body = {};
+  INVITATION_REQUEST_KEYS.forEach((key) => {
+    if (options[key] !== undefined) body[key] = options[key];
+  });
   const res = await apiFetch(
     `${API_BASE}/events/roster/invitations?code=${encodeURIComponent(code)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ participantIds, resend, idempotencyKey }),
+      body: JSON.stringify(body),
     },
     token,
   );

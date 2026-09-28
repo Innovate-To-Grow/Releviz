@@ -312,6 +312,9 @@ def _write_roster(
     new_participants = []
     changed_participants = []
     invitation_emails = []
+    # People with an address of their own that this import put on the roster,
+    # new or back from hidden, in row order.
+    added_participants = []
     # The roster entry behind each row, in row order.
     row_participants = []
     # (participant, (all_groups, names)) for every row whose cell names groups.
@@ -349,6 +352,8 @@ def _write_roster(
                 sort_order=sort_order,
             )
             new_participants.append(participant)
+            if not organizer_managed:
+                added_participants.append(participant)
             if group_names:
                 assignments.append((participant, (all_groups, group_names)))
         else:
@@ -368,6 +373,7 @@ def _write_roster(
                 changed_participants.append(participant)
             if restored and not organizer_managed:
                 invitation_emails.append(row.email)
+                added_participants.append(participant)
             if all_groups or group_names:
                 assignments.append((participant, (all_groups, group_names)))
         row_participants.append(participant)
@@ -470,10 +476,24 @@ def _write_roster(
         Weight.objects.bulk_create(new_weights)
     if changed_weights:
         Weight.objects.bulk_update(changed_weights, ["weight", "included", "updated_at"])
+
+    def emailable_ids(participants):
+        # Roster ids of the people an invitation could reach: not someone the
+        # organizer manages, and not the organizer.
+        return [
+            str(participant.pk)
+            for participant in participants
+            if not participant.organizer_managed and participant.member_id != event.organizer_id
+        ]
+
     return (
         len(new_participants),
         len(rows) - len(new_participants),
         invitation_emails,
+        {
+            "addedParticipantIds": emailable_ids(added_participants),
+            "importedParticipantIds": emailable_ids(row_participants),
+        },
     )
 
 
@@ -595,7 +615,7 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
             members = _resolve_members([row for row in rows if not addresses.manages(row.email)])
             if mode == RosterImportReceipt.Mode.REBUILD:
                 _rebuild_event_roster(event, now)
-            created_count, updated_count, invitation_emails = _write_roster(
+            created_count, updated_count, invitation_emails, participant_ids = _write_roster(
                 event,
                 organizer,
                 rows,
@@ -647,6 +667,8 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
                     "imported": len(rows),
                     "created": created_count,
                     "updated": updated_count,
+                    # Kept with the committed batch so a replay reports them too.
+                    **participant_ids,
                 },
             )
             return receipt, False, delivery_request, len(invitation_emails)

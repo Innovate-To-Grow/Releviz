@@ -14,13 +14,17 @@ def roster_import_payload(batch: RosterImportBatch) -> dict:
         None,
     )
     headers = []
+    sample_row = None
     if batch.selected_worksheet and batch.status == RosterImportBatch.Status.PREVIEW:
-        header = batch.rows.filter(
-            worksheet=batch.selected_worksheet,
-            row_number=batch.header_row,
-        ).first()
+        rows = batch.rows.filter(worksheet=batch.selected_worksheet)
+        header = rows.filter(row_number=batch.header_row).first()
         if header is not None:
             headers = [display_cell(value) for value in header.raw_values]
+        # The first data row, so the organizer can check the mapping against
+        # real cells; stored rows are never empty.
+        sample = rows.filter(row_number__gt=batch.header_row).order_by("row_number").first()
+        if sample is not None:
+            sample_row = [display_cell(value) for value in sample.raw_values]
     return {
         "id": str(batch.pk),
         "status": batch.status,
@@ -30,6 +34,7 @@ def roster_import_payload(batch: RosterImportBatch) -> dict:
         "selectedWorksheet": batch.selected_worksheet or None,
         "headerRow": batch.header_row,
         "headers": headers or (selected_metadata or {}).get("headers", []),
+        "sampleRow": sample_row,
         "columnMapping": batch.column_mapping,
         "defaults": batch.defaults,
         "expiresAt": batch.expires_at.isoformat(),

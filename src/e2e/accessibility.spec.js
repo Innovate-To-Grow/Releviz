@@ -1,6 +1,7 @@
 const { expect, test } = require("@playwright/test");
 const { expectAccessible } = require("./helpers/accessibility");
 const {
+  apiJson,
   createEvent,
   openBlockedTimes,
   readSession,
@@ -8,6 +9,40 @@ const {
 } = require("./helpers/releviz");
 
 test.use({ viewport: { width: 320, height: 720 } });
+
+// Fails when the page scrolls sideways or anything reaches past the viewport
+// edge. Content inside a horizontally scrolling box (the calendar canvas, a
+// responsive table) may extend past the edge; anything else that reaches past
+// it widens the page instead.
+async function expectNoHorizontalScroll(page, label) {
+  const layout = await page.evaluate(() => {
+    const insideScroller = (element) => {
+      for (let node = element.parentElement; node; node = node.parentElement) {
+        const overflowX = window.getComputedStyle(node).overflowX;
+        if (overflowX === "auto" || overflowX === "scroll") return true;
+      }
+      return false;
+    };
+    const limit = window.innerWidth + 1;
+    const offenders = [];
+    for (const element of document.querySelectorAll("body *")) {
+      if (element.getBoundingClientRect().right <= limit) continue;
+      if (insideScroller(element)) continue;
+      const tag = element.tagName.toLowerCase();
+      const className = (element.getAttribute("class") || "").trim();
+      offenders.push(className ? `${tag}.${className.split(/\s+/).join(".")}` : tag);
+    }
+    return {
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+      offenders,
+    };
+  });
+  expect(layout.scrollWidth, `${label} must not scroll horizontally`).toBeLessThanOrEqual(
+    layout.clientWidth
+  );
+  expect(layout.offenders, `elements reaching past the viewport in ${label}`).toEqual([]);
+}
 
 test.describe("automated accessibility baseline", () => {
   test("public entry pages meet WCAG A/AA checks at 320px", async ({ page }) => {
@@ -86,39 +121,7 @@ test.describe("automated accessibility baseline", () => {
       // whole workspace is measured.
       await expect(page.getByRole("heading", { name: "No participants yet" })).toBeVisible();
 
-      const measureLayout = () =>
-        page.evaluate(() => {
-        // Content inside a horizontally scrolling box (the calendar canvas, a
-        // responsive table) may extend past the viewport edge; anything else
-        // that reaches past it widens the page instead.
-        const insideScroller = (element) => {
-          for (let node = element.parentElement; node; node = node.parentElement) {
-            const overflowX = window.getComputedStyle(node).overflowX;
-            if (overflowX === "auto" || overflowX === "scroll") return true;
-          }
-          return false;
-        };
-        const limit = window.innerWidth + 1;
-        const offenders = [];
-        for (const element of document.querySelectorAll("body *")) {
-          if (element.getBoundingClientRect().right <= limit) continue;
-          if (insideScroller(element)) continue;
-          const tag = element.tagName.toLowerCase();
-          const className = (element.getAttribute("class") || "").trim();
-          offenders.push(className ? `${tag}.${className.split(/\s+/).join(".")}` : tag);
-        }
-        return {
-          scrollWidth: document.documentElement.scrollWidth,
-          clientWidth: document.documentElement.clientWidth,
-          offenders,
-        };
-      });
-      const layout = await measureLayout();
-      expect(
-        layout.scrollWidth,
-        "organizer workspace must not overflow a 375px viewport"
-      ).toBeLessThanOrEqual(layout.clientWidth);
-      expect(layout.offenders, "elements reaching past the 375px viewport").toEqual([]);
+      await expectNoHorizontalScroll(page, "organizer workspace at 375px");
       await expectAccessible(page, "organizer workspace at 375px");
 
       // Painting blocked times on the calendar at phone width: the step opens
@@ -127,12 +130,7 @@ test.describe("automated accessibility baseline", () => {
       await expect(
         page.getByRole("grid", { name: /marking blocked times$/ })
       ).toBeVisible();
-      const paintingLayout = await measureLayout();
-      expect(
-        paintingLayout.scrollWidth,
-        "organizer workspace must not overflow a 375px viewport while painting"
-      ).toBeLessThanOrEqual(paintingLayout.clientWidth);
-      expect(paintingLayout.offenders, "elements reaching past the 375px viewport").toEqual([]);
+      await expectNoHorizontalScroll(page, "organizer workspace at 375px while painting");
       // Pin the cell by index: once painted it no longer matches an "open"
       // locator.
       const firstOpenIndex = await page
@@ -145,6 +143,72 @@ test.describe("automated accessibility baseline", () => {
       await page.touchscreen.tap(cellBox.x + cellBox.width / 2, cellBox.y + cellBox.height / 2);
       await expect(tappedCell).toHaveAttribute("data-blocked-paint", "true");
       await expectAccessible(page, "organizer workspace at 375px, marking blocked times");
+    });
+
+    // Every organizer email is reviewed in a two-step dialog before it goes
+    // out. Both steps fit a phone and pass the automated checks, and closing
+    // the dialog sends nothing.
+    // The preview frame holds the email itself, not page UI, and is sandboxed
+    // with scripts off, so axe cannot be injected into it: descending into it
+    // stalls the scan (WebKit times out). Its title is covered by the unit
+    // tests; everything around it is checked here.
+    const EMAIL_FRAME = { exclude: ['iframe[title="Email preview"]'] };
+
+    test("email review and confirmation fit a phone and meet WCAG A/AA checks", async ({
+      page,
+      request,
+    }) => {
+      const runId = `${Date.now()}-${Math.round(Math.random() * 100_000)}`;
+      await registerAccount(page, `email-review-${runId}@example.com`, "Rae", "Reviewer");
+      const token = (await readSession(page)).access;
+      const event = await createEvent(request, token, {
+        name: `Email review ${runId}`,
+      });
+      const inviteeEmail = `invitee-${runId}@example.com`;
+      const added = await apiJson(
+        request,
+        "POST",
+        `/events/participants/managed?code=${event.code}`,
+        token,
+        {
+          name: "Ivy Invitee",
+          email: inviteeEmail,
+          sendInvitation: false,
+          idempotencyKey: crypto.randomUUID(),
+        }
+      );
+      expect(added.response.status()).toBe(201);
+
+      await page.goto(`/event?code=${event.code}`);
+      const row = page.locator("tr.participants-row", { hasText: "Ivy Invitee" });
+      await row.getByRole("button", { name: "Actions for Ivy Invitee" }).click();
+      await page.getByRole("menuitem", { name: "Send invitation", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Send invitations" });
+      await expect(dialog.getByText("Step 1 of 2: Review")).toBeVisible();
+      await expect(dialog.getByText(`Ivy Invitee <${inviteeEmail}>`)).toBeVisible();
+      await expect(dialog.locator('iframe[title="Email preview"]')).toBeVisible();
+      await expectNoHorizontalScroll(page, "email review at 375px");
+      await expectAccessible(page, "email review at 375px", EMAIL_FRAME);
+
+      await dialog.getByRole("tab", { name: "Plain text" }).click();
+      await expect(dialog.getByRole("tab", { name: "Plain text" })).toHaveAttribute(
+        "aria-selected",
+        "true"
+      );
+      await expectAccessible(page, "email plain text at 375px", EMAIL_FRAME);
+
+      await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+      await expect(dialog.getByRole("heading", { name: "Send 1 invitation now?" })).toBeFocused();
+      await expectNoHorizontalScroll(page, "email confirmation at 375px");
+      await expectAccessible(page, "email confirmation at 375px", EMAIL_FRAME);
+
+      await dialog.getByRole("button", { name: "Close dialog" }).click();
+      await expect(dialog).toHaveCount(0);
+      const roster = await apiJson(request, "GET", `/events/roster?code=${event.code}`, token);
+      expect(roster.response.status()).toBe(200);
+      expect(roster.payload.participants).toEqual([
+        expect.objectContaining({ email: inviteeEmail, invitationStatus: "not_sent" }),
+      ]);
     });
   });
 });

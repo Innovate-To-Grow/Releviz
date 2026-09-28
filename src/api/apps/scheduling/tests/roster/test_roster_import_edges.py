@@ -949,7 +949,17 @@ class RosterImportDatabaseEdgeTests(TestCase):
         batch.refresh_from_db()
         self.assertEqual(
             batch.summary,
-            {"total": 7, "selected": 6, "valid": 4, "invalid": 2, "conflicts": 0},
+            {
+                "total": 7,
+                "selected": 6,
+                "valid": 4,
+                "invalid": 2,
+                "conflicts": 0,
+                "ready": 4,
+                "needsFix": 2,
+                "mergedDuplicates": 0,
+                "skipped": 1,
+            },
         )
 
     def test_account_rules_flag_rows_sharing_one_account_until_one_is_deselected(self):
@@ -982,7 +992,17 @@ class RosterImportDatabaseEdgeTests(TestCase):
         )
         self.assertEqual(
             batch.summary,
-            {"total": 2, "selected": 2, "valid": 0, "invalid": 2, "conflicts": 0},
+            {
+                "total": 2,
+                "selected": 2,
+                "valid": 0,
+                "invalid": 2,
+                "conflicts": 0,
+                "ready": 0,
+                "needsFix": 2,
+                "mergedDuplicates": 0,
+                "skipped": 0,
+            },
         )
 
         alias = batch.rows.get(email="shared-alias-rule-edge@example.com")
@@ -1000,7 +1020,17 @@ class RosterImportDatabaseEdgeTests(TestCase):
         batch.refresh_from_db()
         self.assertEqual(
             batch.summary,
-            {"total": 2, "selected": 1, "valid": 1, "invalid": 0, "conflicts": 0},
+            {
+                "total": 2,
+                "selected": 1,
+                "valid": 1,
+                "invalid": 0,
+                "conflicts": 0,
+                "ready": 1,
+                "needsFix": 0,
+                "mergedDuplicates": 0,
+                "skipped": 1,
+            },
         )
         committed = self.commit(batch)
         self.assertEqual(committed.status_code, 201, committed.data)
@@ -1804,7 +1834,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertIn("invalid", invalid_uuid.data["error"])
 
         with patch(
-            "apps.scheduling.views.roster.bulk._bulk_selector",
+            "apps.scheduling.views.roster.bulk.bulk_selector",
             side_effect=ValueError("invalid participant identifier"),
         ):
             invalid_value = self.client.patch(
@@ -1819,7 +1849,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertEqual(invalid_value.status_code, 400)
         self.assertEqual(invalid_value.data["error"], "A participant id is invalid.")
 
-        with patch("apps.scheduling.views.roster.bulk.MAX_ROSTER_ROWS", 1):
+        with patch("apps.scheduling.views.roster.selectors.MAX_ROSTER_ROWS", 1):
             too_many = self.client.patch(
                 f"/events/roster/bulk?code={self.event.code}",
                 {

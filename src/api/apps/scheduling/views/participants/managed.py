@@ -32,6 +32,14 @@ class ManagedParticipantView(APIView):
     def get_auth_rate_identity(self, request):
         return str(request.user.pk)
 
+    def get_throttles(self):
+        # Adding someone without inviting them emails nobody, like any other
+        # roster change, so only an add that sends spends the request budget.
+        data = self.request.data
+        if isinstance(data, dict) and data.get("sendInvitation", True) is False:
+            return []
+        return super().get_throttles()
+
     @transaction.atomic
     def post(self, request):
         code = str(request.query_params.get("code") or "").strip()

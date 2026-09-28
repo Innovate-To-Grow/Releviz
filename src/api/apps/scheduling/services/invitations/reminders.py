@@ -13,11 +13,130 @@ from apps.scheduling.services.events.lifecycle import response_write_error
 from apps.scheduling.services.fingerprints import email_content_fingerprint
 
 from .messages import event_email_parts
+from .previews import invitation_email_preview, no_email_preview, recipient_name
 
 
 def reminder_cycle(event: Event) -> str:
     deadline = event.response_deadline.isoformat() if event.response_deadline else "no-deadline"
     return hashlib.sha256(deadline.encode()).hexdigest()[:24]
+
+
+def reminder_candidates(event: Event):
+    """The invitations a reminder run considers: sent at least once, not submitted.
+
+    Whether reminders are enabled is decided by the caller.
+    """
+
+    return event.invitations.filter(first_sent_at__isnull=False).exclude(
+        status=EventInvitation.Status.SUBMITTED
+    )
+
+
+def reminder_job_key_prefix(event: Event, invitation_pk, cycle: str) -> str:
+    """The start every reminder job key for ``invitation_pk`` in ``cycle`` shares.
+
+    The full key adds the content fingerprint, so one cycle can hold several
+    jobs for an invitation when the wording changed between them.
+    """
+
+    return f"reminder:{event.event_id}:{invitation_pk}:{cycle}:"
+
+
+def cycle_reminder_job_ids(event: Event, invitation_ids) -> dict:
+    """The newest reminder job the current cycle holds for each of
+    ``invitation_ids``, by invitation id.
+
+    Any job counts, whatever became of it and whatever it said: a renamed
+    event, or any change to the event that restamps the deadline's calendar
+    file, changes a reminder's wording and so its job key, but the person
+    was reminded all the same.
+    """
+
+    cycle = reminder_cycle(event)
+    prefixes = {pk: reminder_job_key_prefix(event, pk, cycle) for pk in invitation_ids}
+    jobs = (
+        EmailDeliveryJob.objects.filter(
+            invitation_id__in=prefixes,
+            message_type=EmailMessageLog.MessageType.REMINDER,
+        )
+        .order_by("pk")
+        .values_list("invitation_id", "idempotency_key", "pk")
+    )
+    return {
+        invitation_id: job_pk
+        for invitation_id, key, job_pk in jobs
+        if key.startswith(prefixes[invitation_id])
+    }
+
+
+def reminded_invitation_ids(event: Event, invitation_ids) -> set:
+    """Ids among ``invitation_ids`` this cycle already reminded.
+
+    A manual run skips exactly these, so the preview counts with them too.
+    """
+
+    return set(cycle_reminder_job_ids(event, invitation_ids))
+
+
+def automatic_reminder_at(event: Event):
+    """When the scheduled reminder for ``event`` goes out; needs a deadline."""
+
+    return event.response_deadline - timedelta(hours=event.reminder_hours_before)
+
+
+def next_automatic_reminder_at(event: Event, *, now=None):
+    """The scheduled reminder still ahead, or ``None`` when no reminder is due."""
+
+    if (
+        not event.reminders_enabled
+        or event.status != Event.Status.ACTIVE
+        or event.response_deadline is None
+    ):
+        return None
+    reminder_at = automatic_reminder_at(event)
+    return reminder_at if reminder_at > (now or timezone.now()) else None
+
+
+def _reminder_email_preview(event: Event, invitation_id) -> dict:
+    invitation = EventInvitation.objects.select_related("member").get(pk=invitation_id)
+    invitation.event = event
+    return invitation_email_preview(
+        invitation,
+        name=recipient_name(event, invitation.email),
+        reminder=True,
+    )
+
+
+def reminder_preview(event: Event) -> dict:
+    """What a manual reminder run would do now, without doing it.
+
+    ``eligible`` ignores ``reminders_enabled`` so the organizer sees who a
+    run would reach once reminders are on; ``alreadyReminded`` are the
+    eligible people this cycle already queued a reminder for. ``email`` is
+    the first reminder a run would queue (runs go in address order), or the
+    first eligible person's when everyone was already reminded.
+    """
+
+    # The same order a manual run walks its candidates in.
+    invitation_ids = list(reminder_candidates(event).order_by("email").values_list("pk", flat=True))
+    reminded = reminded_invitation_ids(event, invitation_ids)
+    sample_id = next(
+        (pk for pk in invitation_ids if pk not in reminded),
+        invitation_ids[0] if invitation_ids else None,
+    )
+    return {
+        "remindersEnabled": event.reminders_enabled,
+        "eligible": len(invitation_ids),
+        "alreadyReminded": len(reminded),
+        "wouldEnqueue": len(invitation_ids) - len(reminded),
+        "nextAutomaticAt": next_automatic_reminder_at(event),
+        "deadline": event.response_deadline,
+        **(
+            _reminder_email_preview(event, sample_id)
+            if sample_id is not None
+            else no_email_preview()
+        ),
+    }
 
 
 def enqueue_reminder_job(invitation: EventInvitation) -> tuple[EmailDeliveryJob, bool]:
@@ -32,7 +151,7 @@ def enqueue_reminder_job(invitation: EventInvitation) -> tuple[EmailDeliveryJob,
     )
     return enqueue_email_job(
         idempotency_key=(
-            f"reminder:{event.event_id}:{invitation.pk}:{cycle}:{content_fingerprint}"
+            reminder_job_key_prefix(event, invitation.pk, cycle) + content_fingerprint
         ),
         message_type=EmailMessageLog.MessageType.REMINDER,
         recipient=invitation.email,
@@ -54,9 +173,7 @@ def send_event_reminders(event: Event, *, force: bool = False) -> int:
     event = Event.objects.select_for_update().get(pk=event.pk)
     if response_write_error(event) or not event.reminders_enabled:
         return 0
-    invitations = event.invitations.filter(first_sent_at__isnull=False).exclude(
-        status=EventInvitation.Status.SUBMITTED
-    )
+    invitations = reminder_candidates(event)
     if not force:
         invitations = invitations.filter(reminder_sent_at__isnull=True)
     count = 0
@@ -77,7 +194,6 @@ def send_due_event_reminders(*, window_minutes: int) -> int:
         response_deadline__gt=now,
     )
     for event in events:
-        reminder_at = event.response_deadline - timedelta(hours=event.reminder_hours_before)
-        if reminder_at <= window_end:
+        if automatic_reminder_at(event) <= window_end:
             count += send_event_reminders(event, force=False)
     return count

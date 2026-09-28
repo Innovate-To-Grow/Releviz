@@ -83,6 +83,8 @@ const RESOURCE_AUDIT_MANIFEST = [
   "src/web/Dockerfile",
   "src/web/app/apple-icon.png",
   "src/web/app/globals.css",
+  "src/web/app/import-sheet.css",
+  "src/web/app/participants.css",
   "src/web/app/icon.png",
   "src/web/app/opengraph-image.alt.txt",
   "src/web/app/opengraph-image.png",

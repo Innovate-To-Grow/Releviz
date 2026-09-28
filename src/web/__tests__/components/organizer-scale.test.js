@@ -76,6 +76,8 @@ jest.mock("@/lib/api/events", () => ({
   fetchEventActivity: jest.fn(),
   fetchEventResults: jest.fn(),
   openEventStream: jest.fn(),
+  previewDeliveryRetry: jest.fn(),
+  previewEventLifecycle: jest.fn(),
   previewFinalMeeting: jest.fn(),
   retryDeliveryRequest: jest.fn(),
   sendReminders: jest.fn(),
@@ -120,6 +122,7 @@ import {
   fetchEventActivity,
   fetchEventResults,
   openEventStream,
+  previewEventLifecycle,
   previewFinalMeeting,
   sendReminders,
   updateEvent,
@@ -135,6 +138,7 @@ import {
   fetchRosterSchedule,
   patchRosterBulk,
   patchRosterParticipant,
+  sendRosterInvitations,
 } from "@/lib/api/roster";
 
 // The event streams the workspace opened in the current test, oldest
@@ -186,6 +190,56 @@ const rosterActivity = {
   submitted: 0,
   changedAt: "2026-08-20T07:00:00Z",
 };
+// The default listing: one temporary participant in Faculty, nobody invited
+// yet, and the whole-list counts the header and the Email menu read.
+function rosterListing(extra = {}) {
+  return {
+    participants: [
+      {
+        id: "roster-1",
+        memberId: "member-1",
+        name: "Ada Faculty",
+        email: "ada@example.com",
+        group: "Faculty",
+        groups: [{ id: 11, name: "Faculty" }],
+        allGroups: false,
+        weight: 0.8,
+        included: true,
+        submitted: false,
+        accountAccess: "temporary",
+        canOrganizerEditAvailability: true,
+        invitationStatus: "not_sent",
+        version: 1,
+      },
+    ],
+    pagination: { page: 1, pageSize: 50, total: 1, pages: 1 },
+    stats: {
+      total: 1,
+      submitted: 0,
+      notSubmitted: 1,
+      included: 1,
+      excluded: 0,
+      groups: [
+        { id: 11, name: "Faculty", count: 1, weight: 0.8, included: true },
+      ],
+    },
+    overall: {
+      total: 1,
+      submitted: 0,
+      notSubmitted: 1,
+      included: 1,
+      excluded: 0,
+      notInvited: 1,
+      sending: 0,
+      failed: 0,
+      noEmail: 0,
+      remindable: 1,
+    },
+    activity: rosterActivity,
+    ...extra,
+  };
+}
+
 const baseActivity = {
   event: { version: 2, status: "active", resultsRevision: 3 },
   results: {
@@ -220,7 +274,8 @@ const rosterImportRecord = {
   selectedWorksheet: "Pasted data",
   headerRow: 1,
   headers: ["name", "email"],
-  columnMapping: {},
+  // The server suggests the mapping from the headers on create.
+  columnMapping: { name: 0, email: 1 },
   defaults: { weight: 1, included: true },
   summary: { total: 1, selected: 1, valid: 1, invalid: 0, conflicts: 0 },
 };
@@ -250,16 +305,14 @@ function mockRosterImportPreview() {
 }
 
 async function openPastedRosterPreview() {
+  await userEvent.click(screen.getByRole("button", { name: "Import" }));
   await userEvent.click(
-    screen.getByRole("button", { name: "Import participants" }),
+    screen.getByRole("tab", { name: "Paste from a spreadsheet" }),
   );
-  await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
   fireEvent.change(screen.getByLabelText("Pasted participant rows"), {
     target: { value: "name\temail\nAda\tada@example.com" },
   });
-  await userEvent.click(
-    screen.getByRole("button", { name: "Continue to mapping" }),
-  );
+  await userEvent.click(screen.getByRole("button", { name: "Continue" }));
   await userEvent.click(
     await screen.findByRole("button", { name: "Preview rows" }),
   );
@@ -349,6 +402,9 @@ function mockCalendarWindowFlow() {
       unansweredParticipantTotal: 0,
       excludedParticipantTotal: 0,
     },
+    recipientCount: 0,
+    email: null,
+    sample: null,
   });
   confirmFinalMeeting.mockResolvedValue({
     event: {
@@ -386,20 +442,36 @@ function calendarCell(index) {
     .querySelector(`[data-cell-idx="${index}"]`);
 }
 
-async function openInvitePersonForm() {
+// Finalizes through the email review: Finalize meeting opens it, Continue
+// reaches the second confirmation, and `sendLabel` confirms.
+async function finalizeThroughReview(sendLabel = "Finalize meeting") {
+  await userEvent.click(
+    screen.getByRole("button", { name: "Finalize meeting" }),
+  );
+  const review = screen.getByRole("dialog", { name: "Finalize meeting" });
+  await userEvent.click(
+    within(review).getByRole("button", { name: "Continue" }),
+  );
+  await userEvent.click(
+    within(review).getByRole("button", { name: sendLabel }),
+  );
+}
+
+// Opens the Add a person side panel from the Participants header.
+async function openAddPersonPanel() {
   await screen.findByText("Ada Faculty");
   const rosterSection = document.getElementById("organizer-roster");
   await userEvent.click(
-    within(rosterSection).getByRole("button", { name: "Add person" }),
+    within(rosterSection).getByRole("button", { name: "+ Add person" }),
   );
+  const dialog = await screen.findByRole("dialog", { name: "Add a person" });
   return {
     section: rosterSection,
-    name: within(rosterSection).getByRole("textbox", { name: "Full name" }),
-    email: within(rosterSection).getByRole("textbox", {
-      name: "Email address",
-    }),
-    addOnly: within(rosterSection).getByRole("button", { name: "Add only" }),
-    submit: within(rosterSection).getByRole("button", {
+    dialog,
+    name: within(dialog).getByRole("textbox", { name: /^Full name/ }),
+    email: within(dialog).getByRole("textbox", { name: /^Email/ }),
+    submit: within(dialog).getByRole("button", { name: "Add" }),
+    send: within(dialog).getByRole("button", {
       name: "Add and send invitation",
     }),
   };
@@ -441,36 +513,7 @@ describe("scaled organizer workspace", () => {
       configurable: true,
       value: { randomUUID: jest.fn().mockReturnValue("request-key") },
     });
-    fetchRoster.mockResolvedValue({
-      participants: [
-        {
-          id: "roster-1",
-          memberId: "member-1",
-          name: "Ada Faculty",
-          email: "ada@example.com",
-          group: "Faculty",
-          groups: [{ id: 11, name: "Faculty" }],
-          allGroups: false,
-          weight: 0.8,
-          included: true,
-          submitted: false,
-          accountAccess: "temporary",
-          canOrganizerEditAvailability: true,
-          invitationStatus: "not_sent",
-          version: 1,
-        },
-      ],
-      pagination: { page: 1, pageSize: 50, total: 1, pages: 1 },
-      stats: {
-        total: 1,
-        submitted: 0,
-        notSubmitted: 1,
-        included: 1,
-        excluded: 0,
-        groups: [{ id: 11, name: "Faculty", count: 1, weight: 0.8 }],
-      },
-      activity: rosterActivity,
-    });
+    fetchRoster.mockResolvedValue(rosterListing());
     fetchEventActivity.mockResolvedValue(baseActivity);
     patchRosterParticipant.mockResolvedValue({
       participant: { id: "roster-1", included: false, version: 2 },
@@ -481,21 +524,29 @@ describe("scaled organizer workspace", () => {
       matchedCount: 1,
       resultsRevision: 4,
     });
-    fetchRosterSchedule.mockResolvedValue({
-      participant: {
-        id: "roster-1",
-        memberId: "member-1",
-        name: "Ada Faculty",
-        accountAccess: "temporary",
-        version: 1,
-      },
-      schedule: {
-        availabilityInperson: [0, 1],
-        availabilityVirtual: [1, 0],
-        submitted: false,
-        version: 1,
-      },
-    });
+    // Only Ada's schedule is known; asking for anyone else (the add panel
+    // looking up a person the listing does not show) fails.
+    fetchRosterSchedule.mockImplementation((_code, participantId) =>
+      participantId === "roster-1" || participantId === "member-1"
+        ? Promise.resolve({
+            participant: {
+              id: "roster-1",
+              memberId: "member-1",
+              name: "Ada Faculty",
+              accountAccess: "temporary",
+              version: 1,
+            },
+            schedule: {
+              availabilityInperson: [0, 1],
+              availabilityVirtual: [1, 0],
+              submitted: false,
+              version: 1,
+            },
+          })
+        : Promise.reject(
+            Object.assign(new Error("Participant not found"), { status: 404 }),
+          ),
+    );
     createManagedParticipant.mockResolvedValue({
       participant: {
         id: "manual-1",
@@ -509,14 +560,47 @@ describe("scaled organizer workspace", () => {
       },
       created: true,
       memberCreated: true,
-      autoInvitedCount: 1,
-      deliveryRequest: {
-        id: "manual-delivery",
-        operation: "invitation",
-        recipientCount: 1,
-        delivery: { total: 1, pending: 1, sent: 0 },
-      },
+      // Adding never emails: invitations are reviewed and sent afterwards.
+      autoInvitedCount: 0,
+      deliveryRequest: null,
     });
+    // The invitation review for one person, then the send it confirms.
+    sendRosterInvitations.mockImplementation((_code, options) =>
+      Promise.resolve(
+        options.preview
+          ? {
+              preview: true,
+              requestedCount: 1,
+              willSend: 1,
+              skipped: {
+                alreadyInvited: 0,
+                noEmail: 0,
+                organizer: 0,
+                inFlight: 0,
+              },
+              email: {
+                from: "noreply@releviz.local",
+                replyTo: "",
+                to: "Manual Person <manual@example.com>",
+                subject: "You're invited to Big event",
+                html: "<!doctype html><p>Pick your times</p>",
+                text: "Pick your times",
+                attachments: [],
+              },
+              sample: { name: "Manual Person", email: "manual@example.com" },
+            }
+          : {
+              queuedCount: 1,
+              skipped: {},
+              deliveryRequest: {
+                id: "manual-delivery",
+                operation: "invitation",
+                recipientCount: 1,
+                delivery: { total: 1, pending: 1, sent: 0 },
+              },
+            },
+      ),
+    );
     fetchEventResults.mockResolvedValue({
       status: "fresh",
       requestedRevision: 3,
@@ -795,39 +879,33 @@ describe("scaled organizer workspace", () => {
     ).toHaveAttribute("role", "alert");
   });
 
-  test("validates required invite fields and invalid email locally", async () => {
+  test("validates required add-person fields and invalid email locally", async () => {
     renderView();
-    const invite = await openInvitePersonForm();
-    const form = invite.submit.closest("form");
-    expect(invite.addOnly).toHaveAttribute("type", "submit");
-    expect(invite.submit).toHaveAttribute("type", "button");
-
-    fireEvent.submit(form);
+    const add = await openAddPersonPanel();
+    await userEvent.click(add.submit);
     expect(
-      await screen.findByText("Full name is required."),
+      await within(add.dialog).findByText("Full name is required."),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(
-        'Email address is required. If they have none, tick "No email of their own".',
-      ),
+      within(add.dialog).getByText("Email address is required."),
     ).toBeInTheDocument();
     expect(createManagedParticipant).not.toHaveBeenCalled();
 
-    await userEvent.type(invite.name, "Manual Person");
-    await userEvent.type(invite.email, "not-an-email");
-    fireEvent.submit(form);
+    await userEvent.type(add.name, "Manual Person");
+    await userEvent.type(add.email, "not-an-email");
+    await userEvent.click(add.submit);
     expect(
-      await screen.findByText("Enter a valid email address."),
+      await within(add.dialog).findByText("Enter a valid email address."),
     ).toBeInTheDocument();
     expect(createManagedParticipant).not.toHaveBeenCalled();
-    await userEvent.click(invite.submit);
+    await userEvent.click(add.send);
     expect(
-      screen.getByText("Enter a valid email address."),
+      within(add.dialog).getByText("Enter a valid email address."),
     ).toBeInTheDocument();
     expect(createManagedParticipant).not.toHaveBeenCalled();
   });
 
-  test("adds a person without emailing them when the form is submitted", async () => {
+  test("adds a person without emailing them and keeps the panel open for the next one", async () => {
     createManagedParticipant.mockResolvedValueOnce({
       participant: {
         id: "manual-1",
@@ -846,10 +924,10 @@ describe("scaled organizer workspace", () => {
       deliveryRequest: null,
     });
     renderView();
-    const invite = await openInvitePersonForm();
-    await userEvent.type(invite.name, "Manual Person");
-    await userEvent.type(invite.email, "manual@example.com");
-    await userEvent.click(invite.addOnly);
+    const add = await openAddPersonPanel();
+    await userEvent.type(add.name, "Manual Person");
+    await userEvent.type(add.email, "manual@example.com");
+    await userEvent.click(add.submit);
 
     await waitFor(() =>
       expect(createManagedParticipant).toHaveBeenCalledWith(
@@ -865,23 +943,26 @@ describe("scaled organizer workspace", () => {
         "token",
       ),
     );
-    expect(await within(invite.section).findByRole("status")).toHaveTextContent(
-      /^Manual Person was added\. No invitation was sent\.$/,
+    expect(await within(add.dialog).findByRole("status")).toHaveTextContent(
+      "Manual Person was added. No invitation was sent.",
     );
     expect(
       screen.queryByLabelText("Event delivery progress"),
     ).not.toBeInTheDocument();
+    // The fields clear for the next person and the panel stays open.
+    expect(add.name).toHaveValue("");
+    expect(add.email).toHaveValue("");
     expect(
-      within(invite.section).queryByRole("heading", { name: "Add a person" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("dialog", { name: "Add a person" }),
+    ).toBeInTheDocument();
   });
 
-  test("adds an active invitee and queues its invitation atomically", async () => {
+  test("adds an active invitee and invites them only after the email is reviewed", async () => {
     renderView();
-    const invite = await openInvitePersonForm();
-    await userEvent.type(invite.name, "Manual Person");
-    await userEvent.type(invite.email, "manual@example.com");
-    await userEvent.click(invite.submit);
+    const add = await openAddPersonPanel();
+    await userEvent.type(add.name, "Manual Person");
+    await userEvent.type(add.email, "manual@example.com");
+    await userEvent.click(add.send);
 
     await waitFor(() =>
       expect(createManagedParticipant).toHaveBeenCalledWith(
@@ -892,48 +973,33 @@ describe("scaled organizer workspace", () => {
           phone: "",
           organizerManaged: false,
           idempotencyKey: "request-key",
-          sendInvitation: true,
+          sendInvitation: false,
         },
         "token",
       ),
     );
-    expect(await within(invite.section).findByRole("status")).toHaveTextContent(
-      /^Manual Person is ready to respond\. Their invitation was queued\.$/,
-    );
+    const review = await screen.findByRole("dialog", {
+      name: "Send invitations",
+    });
     expect(
-      within(invite.section).queryByRole("heading", { name: "Add a person" }),
-    ).not.toBeInTheDocument();
+      await within(review).findByText("1 will get an invitation now"),
+    ).toBeInTheDocument();
+    expect(review).toHaveTextContent("Manual Person <manual@example.com>");
+    expect(within(add.dialog).getByRole("status")).toHaveTextContent(
+      "Manual Person was added. No invitation was sent.",
+    );
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Continue" }),
+    );
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Send 1 invitation" }),
+    );
+    expect(await within(add.dialog).findByRole("status")).toHaveTextContent(
+      "Manual Person was added and their invitation is queued.",
+    );
     expect(
       await screen.findByLabelText("Event delivery progress"),
     ).toHaveTextContent("1 queued");
-
-    await userEvent.click(
-      within(invite.section).getByRole("button", { name: "Add person" }),
-    );
-    expect(
-      within(invite.section).queryByRole("status"),
-    ).not.toBeInTheDocument();
-
-    // The Add only button is the form's submit action, so pressing Enter
-    // runs the same validation without emailing anyone.
-    const reopenedForm = within(invite.section)
-      .getByRole("button", { name: "Add only" })
-      .closest("form");
-    fireEvent.submit(reopenedForm);
-
-    expect(
-      await within(invite.section).findByText("Full name is required."),
-    ).toBeInTheDocument();
-    expect(
-      within(invite.section).getByText(
-        'Email address is required. If they have none, tick "No email of their own".',
-      ),
-    ).toBeInTheDocument();
-    expect(
-      within(invite.section).queryByText(
-        "Manual Person is ready to respond. Their invitation was queued.",
-      ),
-    ).not.toBeInTheDocument();
   });
 
   test("does not claim a new invitation when the participant already exists", async () => {
@@ -942,26 +1008,32 @@ describe("scaled organizer workspace", () => {
         id: "manual-1",
         name: "Manual Person",
         email: "manual@example.com",
+        invitationStatus: "sent",
       },
       created: false,
       autoInvitedCount: 0,
       deliveryRequest: null,
     });
     renderView();
-    const invite = await openInvitePersonForm();
-    await userEvent.type(invite.name, "Manual Person");
-    await userEvent.type(invite.email, "manual@example.com");
-    await userEvent.click(invite.submit);
+    const add = await openAddPersonPanel();
+    await userEvent.type(add.name, "Manual Person");
+    await userEvent.type(add.email, "manual@example.com");
+    await userEvent.click(add.send);
 
-    expect(await within(invite.section).findByRole("status")).toHaveTextContent(
-      /^Manual Person is already a participant\. No new invitation was sent\.$/,
+    expect(await within(add.dialog).findByRole("status")).toHaveTextContent(
+      "Manual Person is already on the list, so nothing was added.",
     );
+    // They were invited already, so there is nothing to review or send.
     expect(
-      within(invite.section).queryByRole("heading", { name: "Add a person" }),
+      screen.queryByRole("dialog", { name: "Send invitations" }),
+    ).not.toBeInTheDocument();
+    expect(sendRosterInvitations).not.toHaveBeenCalled();
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
     ).not.toBeInTheDocument();
   });
 
-  test("confirms the invitation when an archived participant is restored", async () => {
+  test("reviews the invitation of an archived participant brought back", async () => {
     createManagedParticipant.mockResolvedValueOnce({
       participant: {
         id: "manual-1",
@@ -970,29 +1042,34 @@ describe("scaled organizer workspace", () => {
       },
       created: false,
       restored: true,
-      autoInvitedCount: 1,
-      deliveryRequest: {
-        id: "restored-delivery",
-        operation: "invitation",
-        recipientCount: 1,
-        delivery: { total: 1, pending: 1, sent: 0 },
-      },
+      autoInvitedCount: 0,
+      deliveryRequest: null,
     });
     renderView();
-    const invite = await openInvitePersonForm();
-    await userEvent.type(invite.name, "Returning Person");
-    await userEvent.type(invite.email, "returning@example.com");
-    await userEvent.click(invite.submit);
+    const add = await openAddPersonPanel();
+    await userEvent.type(add.name, "Returning Person");
+    await userEvent.type(add.email, "returning@example.com");
+    await userEvent.click(add.send);
 
-    expect(await within(invite.section).findByRole("status")).toHaveTextContent(
-      "Returning Person is ready to respond. Their invitation was queued.",
+    const review = await screen.findByRole("dialog", {
+      name: "Send invitations",
+    });
+    await within(review).findByText("1 will get an invitation now");
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Continue" }),
+    );
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Send 1 invitation" }),
+    );
+    expect(await within(add.dialog).findByRole("status")).toHaveTextContent(
+      "Returning Person was added and their invitation is queued.",
     );
     expect(
       await screen.findByLabelText("Event delivery progress"),
     ).toHaveTextContent("1 queued");
   });
 
-  test("disables invite submission while the person is being added", async () => {
+  test("disables the add buttons while the person is being added", async () => {
     let resolveCreate;
     createManagedParticipant.mockReturnValue(
       new Promise((resolve) => {
@@ -1000,16 +1077,17 @@ describe("scaled organizer workspace", () => {
       }),
     );
     renderView();
-    const invite = await openInvitePersonForm();
-    await userEvent.type(invite.name, "Manual Person");
-    await userEvent.type(invite.email, "manual@example.com");
+    const add = await openAddPersonPanel();
+    await userEvent.type(add.name, "Manual Person");
+    await userEvent.type(add.email, "manual@example.com");
 
-    fireEvent.click(invite.submit);
+    fireEvent.click(add.send);
     await waitFor(() =>
       expect(createManagedParticipant).toHaveBeenCalledTimes(1),
     );
-    expect(invite.submit).toBeDisabled();
-    fireEvent.click(invite.submit);
+    expect(add.send).toBeDisabled();
+    expect(add.submit).toBeDisabled();
+    fireEvent.click(add.send);
     expect(createManagedParticipant).toHaveBeenCalledTimes(1);
 
     resolveCreate({
@@ -1019,11 +1097,9 @@ describe("scaled organizer workspace", () => {
         email: "manual@example.com",
       },
       created: true,
-      autoInvitedCount: 1,
+      autoInvitedCount: 0,
     });
-    await waitFor(() =>
-      expect(createManagedParticipant).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => expect(add.send).toBeEnabled());
   });
 
   test("adds a person the organizer manages without typing an email", async () => {
@@ -1052,84 +1128,56 @@ describe("scaled organizer workspace", () => {
       },
     });
     renderView();
-    const invite = await openInvitePersonForm();
-    const managed = within(invite.section).getByRole("checkbox", {
-      name: "No email of their own — use one of mine and I'll enter their schedule",
+    const add = await openAddPersonPanel();
+    const managed = within(add.dialog).getByRole("checkbox", {
+      name: "They have no email. I'll enter their schedule.",
     });
-    const phone = within(invite.section).getByLabelText("Phone (optional)");
     expect(managed).not.toBeChecked();
-    expect(invite.submit.querySelector(".app-btn-icon")).not.toBeNull();
-    const managedHelp =
-      "Leave blank to use your account email, or enter another of your verified addresses. No invitation is sent.";
-    expect(
-      within(invite.section).queryByText(managedHelp),
-    ).not.toBeInTheDocument();
+    expect(managed).toHaveAccessibleDescription(
+      "Blank = filed under your account email. They are never emailed.",
+    );
 
-    // A blank email is refused until the person is marked as having none;
-    // ticking the box clears that error and makes the field optional.
-    fireEvent.submit(invite.submit.closest("form"));
-    expect(
-      await within(invite.section).findByText(
-        'Email address is required. If they have none, tick "No email of their own".',
-      ),
-    ).toBeInTheDocument();
     await userEvent.click(managed);
     expect(managed).toBeChecked();
+    // No address is asked for, and nobody is emailed.
     expect(
-      within(invite.section).queryByText(/Email address is required/),
+      within(add.dialog).queryByRole("textbox", { name: /^Email/ }),
     ).not.toBeInTheDocument();
-    expect(invite.email).toHaveAccessibleDescription(managedHelp);
     expect(
-      within(invite.section).getByText("(optional)", {
-        selector: "label[for='roster-invite-email'] span",
-      }),
-    ).toBeInTheDocument();
-    const submit = within(invite.section).getByRole("button", {
-      name: "Add person",
-    });
-    expect(submit.querySelector(".app-btn-icon")).toBeNull();
-    expect(
-      within(invite.section).queryByRole("button", {
+      within(add.dialog).queryByRole("button", {
         name: "Add and send invitation",
       }),
     ).not.toBeInTheDocument();
 
-    await userEvent.type(invite.name, "Managed Person");
-    // A typed address is still checked, even though it is optional here.
-    await userEvent.type(invite.email, "not-an-email");
-    await userEvent.tab();
-    expect(
-      await within(invite.section).findByText("Enter a valid email address."),
-    ).toBeInTheDocument();
-    await userEvent.clear(invite.email);
-    await userEvent.tab();
-    expect(
-      within(invite.section).queryByText("Enter a valid email address."),
-    ).not.toBeInTheDocument();
-    await userEvent.type(phone, "+1 555 010 0199");
-    fetchRoster.mockResolvedValueOnce({
-      participants: [
-        {
-          id: "managed-1",
-          memberId: "managed-1",
-          name: "Managed Person",
-          email: "organizer@example.com",
-          phone: "+1 555 010 0199",
-          group: "",
-          weight: 1,
-          included: true,
-          submitted: false,
-          accountAccess: "temporary",
-          organizerManaged: true,
-          canOrganizerEditAvailability: true,
-          invitationStatus: "not_sent",
-          version: 1,
-        },
-      ],
-      pagination: { page: 1, pageSize: 50, total: 1, pages: 1 },
-      stats: { total: 1, submitted: 0, notSubmitted: 1, groups: [] },
-    });
-    await userEvent.click(submit);
+    await userEvent.type(add.name, "Managed Person");
+    await userEvent.type(
+      within(add.dialog).getByRole("textbox", { name: /^Phone/ }),
+      "+1 555 010 0199",
+    );
+    fetchRoster.mockResolvedValueOnce(
+      rosterListing({
+        participants: [
+          {
+            id: "managed-1",
+            memberId: "managed-1",
+            name: "Managed Person",
+            email: "organizer@example.com",
+            phone: "+1 555 010 0199",
+            group: "",
+            groups: [],
+            weight: 1,
+            included: true,
+            submitted: false,
+            accountAccess: "temporary",
+            organizerManaged: true,
+            canOrganizerEditAvailability: true,
+            invitationStatus: "not_sent",
+            version: 1,
+          },
+        ],
+      }),
+    );
+    await userEvent.click(add.submit);
 
     await waitFor(() =>
       expect(createManagedParticipant).toHaveBeenCalledWith(
@@ -1145,29 +1193,25 @@ describe("scaled organizer workspace", () => {
         "token",
       ),
     );
-    expect(await within(invite.section).findByRole("status")).toHaveTextContent(
-      /^Managed Person was added\. Use Edit schedule to enter their availability\.$/,
+    expect(await within(add.dialog).findByRole("status")).toHaveTextContent(
+      "Managed Person was added.",
     );
     expect(
       screen.queryByLabelText("Event delivery progress"),
     ).not.toBeInTheDocument();
+    await userEvent.click(
+      within(add.dialog).getByRole("button", { name: "Done" }),
+    );
     const row = (
-      await within(invite.section).findByRole("rowheader", {
-        name: /Managed Person/,
-      })
+      await screen.findByRole("rowheader", { name: /Managed Person/ })
     ).closest("tr");
     // The row never shows the organizer's own address as theirs.
     expect(row).not.toHaveTextContent("organizer@example.com");
+    expect(row).toHaveTextContent("No email · you enter their schedule");
     expect(within(row).getByText("No email")).toBeInTheDocument();
-    expect(within(row).getByText("Organizer-managed")).toBeInTheDocument();
-    expect(within(row).getByText("+1 555 010 0199")).toBeInTheDocument();
-    expect(within(row).getByText("Not sent")).toBeInTheDocument();
     expect(
       within(row).getByRole("button", { name: "Edit schedule" }),
     ).toBeEnabled();
-    expect(within(row).getByLabelText("Phone for Managed Person")).toHaveValue(
-      "+1 555 010 0199",
-    );
   });
 
   test("shows the server hint when the organizer's own address is typed without the checkbox", async () => {
@@ -1180,14 +1224,12 @@ describe("scaled organizer workspace", () => {
       ),
     );
     renderView();
-    const invite = await openInvitePersonForm();
-    await userEvent.type(invite.name, "Managed Person");
-    await userEvent.type(invite.email, "organizer@example.com");
-    await userEvent.click(invite.submit);
+    const add = await openAddPersonPanel();
+    await userEvent.type(add.name, "Managed Person");
+    await userEvent.type(add.email, "organizer@example.com");
+    await userEvent.click(add.send);
 
-    const error = await within(invite.section).findByRole("alert");
-    expect(error).toHaveClass("roster-invite-form__error");
-    expect(error).toHaveTextContent(
+    expect(await within(add.dialog).findByRole("alert")).toHaveTextContent(
       'That is one of your own addresses. Check "No email of their own" to add a person you manage.',
     );
     expect(createManagedParticipant).toHaveBeenCalledWith(
@@ -1195,19 +1237,12 @@ describe("scaled organizer workspace", () => {
       expect.objectContaining({ organizerManaged: false, phone: "" }),
       "token",
     );
-    // Ticking the box clears the hint and the spent idempotency key.
-    await userEvent.click(
-      within(invite.section).getByRole("checkbox", {
-        name: "No email of their own — use one of mine and I'll enter their schedule",
-      }),
-    );
-    expect(within(invite.section).queryByRole("alert")).not.toBeInTheDocument();
-    expect(
-      within(invite.section).getByRole("button", { name: "Add person" }),
-    ).toBeEnabled();
+    // The typed values stay for a corrected retry.
+    expect(add.name).toHaveValue("Managed Person");
+    expect(add.email).toHaveValue("organizer@example.com");
   });
 
-  test("keeps invite values and reuses the idempotency key after a failed request", async () => {
+  test("keeps add values and reuses the idempotency key after a failed request", async () => {
     createManagedParticipant
       .mockRejectedValueOnce(new Error("delivery service unavailable"))
       .mockResolvedValueOnce({
@@ -1225,19 +1260,19 @@ describe("scaled organizer workspace", () => {
         },
       });
     renderView();
-    const invite = await openInvitePersonForm();
-    await userEvent.type(invite.name, "Manual Person");
-    await userEvent.type(invite.email, "manual@example.com");
-    await userEvent.click(invite.submit);
+    const add = await openAddPersonPanel();
+    await userEvent.type(add.name, "Manual Person");
+    await userEvent.type(add.email, "manual@example.com");
+    await userEvent.click(add.send);
 
-    expect(await within(invite.section).findByRole("alert")).toHaveTextContent(
+    expect(await within(add.dialog).findByRole("alert")).toHaveTextContent(
       "delivery service unavailable",
     );
-    expect(invite.name).toHaveValue("Manual Person");
-    expect(invite.email).toHaveValue("manual@example.com");
+    expect(add.name).toHaveValue("Manual Person");
+    expect(add.email).toHaveValue("manual@example.com");
     expect(createManagedParticipant).toHaveBeenCalledTimes(1);
 
-    await userEvent.click(invite.submit);
+    await userEvent.click(add.send);
     await waitFor(() =>
       expect(createManagedParticipant).toHaveBeenCalledTimes(2),
     );
@@ -1262,56 +1297,84 @@ describe("scaled organizer workspace", () => {
     ).not.toBeInTheDocument();
   });
 
-  test("clears persisted delivery progress when a request queues no recipients", async () => {
+  test("clears persisted delivery progress when a reminder run queues no recipients", async () => {
     const key = `releviz.delivery-request.${event.code}`;
     window.sessionStorage.setItem(key, JSON.stringify({ id: "old-request" }));
-    sendReminders.mockResolvedValue({ recipientCount: 0 });
-    renderView();
+    // An older preview reply without the reminders flag: the event's own
+    // setting stands in for it.
+    sendReminders
+      .mockResolvedValueOnce({ preview: true, wouldEnqueue: 1 })
+      .mockResolvedValueOnce({ recipientCount: 0 });
+    renderView(jest.fn(), { ...event, remindersEnabled: true });
+    await screen.findByText("Ada Faculty");
+    await userEvent.click(screen.getByRole("button", { name: "Email" }));
     await userEvent.click(
-      screen.getByRole("button", { name: "Queue reminders" }),
+      screen.getByRole("menuitem", { name: "Send reminders (1)…" }),
+    );
+    const review = await screen.findByRole("dialog", {
+      name: "Send reminders",
+    });
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Continue" }),
+    );
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Send 1 reminder" }),
+    );
+    await waitFor(() =>
+      expect(sendReminders).toHaveBeenLastCalledWith(
+        event.code,
+        { idempotencyKey: "request-key" },
+        "token",
+      ),
     );
     await waitFor(() => expect(window.sessionStorage.getItem(key)).toBeNull());
+    expect(await screen.findByText("Queued 0 reminders.")).toBeInTheDocument();
   });
 
   test("keeps a closed roster searchable but blocks every mutation control", async () => {
     renderView(jest.fn(), { ...event, status: "closed" });
     await screen.findByText("Ada Faculty");
 
-    expect(screen.getByRole("note")).toHaveTextContent(
-      "The participant list is read-only while responses are closed",
-    );
     expect(
-      screen.queryByRole("button", { name: "Add person" }),
-    ).not.toBeInTheDocument();
+      screen.getByText(
+        "Responses are closed, so this list is read-only. Reactivate the event to make changes.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "+ Add person" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Import" })).toBeDisabled();
     expect(
-      screen.queryByRole("button", { name: "Import participants" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Send invitation" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByLabelText("Bulk participant actions"),
+      screen.queryByRole("button", { name: "Email" }),
     ).not.toBeInTheDocument();
     expect(screen.getByLabelText("Search participants")).toBeEnabled();
-    expect(screen.getByLabelText("Filter by group")).toBeEnabled();
-    expect(screen.getByLabelText("Select all on page")).toBeDisabled();
-    expect(screen.getByLabelText("Select Ada Faculty")).toBeDisabled();
-    expect(screen.getByLabelText("Ada Faculty in Faculty")).toBeDisabled();
-    expect(screen.getByLabelText("All groups for Ada Faculty")).toBeDisabled();
-    expect(screen.getByLabelText("Phone for Ada Faculty")).toBeDisabled();
-    expect(screen.getByLabelText("Weight for Ada Faculty")).toBeDisabled();
-    expect(screen.getByLabelText("Include Ada Faculty")).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "Edit schedule" }),
+      screen.getByRole("button", { name: /^Group: Everyone/ }),
+    ).toBeEnabled();
+    expect(
+      screen.getByLabelText("Select everyone on this page"),
+    ).toBeDisabled();
+    expect(screen.getByLabelText("Select Ada Faculty")).toBeDisabled();
+    // Schedules can still be looked at; the drawer itself is read-only.
+    expect(screen.getByRole("button", { name: "Edit schedule" })).toBeEnabled();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Actions for Ada Faculty" }),
+    );
+    expect(
+      screen.getByRole("menuitem", { name: "Leave out of results" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("menuitem", { name: "Remove from event…" }),
     ).toBeDisabled();
   });
 
   test("turns a genuinely empty roster into a focused invitation state", async () => {
-    fetchRoster.mockResolvedValueOnce({
-      participants: [],
-      pagination: { page: 1, pageSize: 50, total: 0, pages: 0 },
-      stats: { total: 0, submitted: 0, notSubmitted: 0, groups: [] },
-    });
+    fetchRoster.mockResolvedValueOnce(
+      rosterListing({
+        participants: [],
+        pagination: { page: 1, pageSize: 50, total: 0, pages: 0 },
+        stats: { total: 0, submitted: 0, notSubmitted: 0, groups: [] },
+        overall: { total: 0, submitted: 0, notSubmitted: 0 },
+      }),
+    );
 
     renderView();
 
@@ -1320,23 +1383,21 @@ describe("scaled organizer workspace", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Add someone or import a participant list to start collecting availability.",
+        "Add people one at a time or import a list. Nobody is emailed until you invite them.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Add person" })).toHaveLength(
-      1,
-    );
+    // The header keeps its actions; the empty state repeats them.
     expect(
-      screen.getAllByRole("button", { name: "Import participants" }),
-    ).toHaveLength(1);
+      screen.getAllByRole("button", { name: "+ Add person" }),
+    ).toHaveLength(2);
+    expect(
+      screen.getByRole("button", { name: "Import a spreadsheet" }),
+    ).toBeInTheDocument();
     expect(
       screen.queryByLabelText("Search participants"),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByLabelText("Bulk participant actions"),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Send invitation" }),
+      screen.queryByRole("region", { name: "Selected people" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Rows per page")).not.toBeInTheDocument();
   });
@@ -1360,36 +1421,12 @@ describe("scaled organizer workspace", () => {
   });
 
   test("keeps filters useful when they return no matches and clears them together", async () => {
-    const populatedRoster = {
-      participants: [
-        {
-          id: "roster-1",
-          memberId: "member-1",
-          name: "Ada Faculty",
-          email: "ada@example.com",
-          group: "Faculty",
-          weight: 0.8,
-          included: true,
-          submitted: false,
-          accountAccess: "temporary",
-          canOrganizerEditAvailability: true,
-          invitationStatus: "not_sent",
-          version: 1,
-        },
-      ],
-      pagination: { page: 1, pageSize: 50, total: 1, pages: 1 },
-      stats: {
-        total: 1,
-        submitted: 0,
-        notSubmitted: 1,
-        groups: [{ name: "Faculty", count: 1 }],
-      },
-    };
-    const emptyFilteredRoster = {
+    const populatedRoster = rosterListing();
+    const emptyFilteredRoster = rosterListing({
       participants: [],
       pagination: { page: 1, pageSize: 50, total: 0, pages: 0 },
       stats: { total: 0, submitted: 0, notSubmitted: 0, groups: [] },
-    };
+    });
     fetchRoster
       .mockReset()
       .mockResolvedValueOnce(populatedRoster)
@@ -1403,24 +1440,28 @@ describe("scaled organizer workspace", () => {
       screen.getByLabelText("Search participants"),
       "nobody",
     );
-    expect(
-      await screen.findByRole("heading", { name: "No matching participants" }),
-    ).toBeInTheDocument();
+    const noMatch = await screen.findByRole("heading", {
+      name: "No matching participants.",
+    });
     expect(screen.getByLabelText("Search participants")).toBeEnabled();
-    expect(screen.getByLabelText("Filter by group")).toBeEnabled();
     expect(
-      screen.queryByLabelText("Bulk participant actions"),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: /^Group: Everyone/ }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Remove filter Search: nobody" }),
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText("Rows per page")).not.toBeInTheDocument();
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Clear filters" }),
+      within(noMatch.closest(".empty-state")).getByRole("button", {
+        name: "Clear all",
+      }),
     );
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
     expect(screen.getByLabelText("Search participants")).toHaveValue("");
-    expect(screen.getByLabelText("Filter by group")).toHaveValue("");
-    expect(screen.getByLabelText("Filter by response")).toHaveValue("");
-    expect(screen.getByLabelText("Filter by invitation")).toHaveValue("");
+    expect(
+      screen.queryByRole("list", { name: "Active filters" }),
+    ).not.toBeInTheDocument();
     await waitFor(() =>
       expect(fetchRoster).toHaveBeenLastCalledWith(
         event.code,
@@ -1430,13 +1471,14 @@ describe("scaled organizer workspace", () => {
           group: "",
           submitted: "",
           invitationStatus: "",
+          included: "",
         }),
         "token",
       ),
     );
   });
 
-  test("loads a paginated roster and patches one row without full schedules", async () => {
+  test("loads a paginated roster and changes one row from its menu without full schedules", async () => {
     renderView();
 
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
@@ -1453,20 +1495,23 @@ describe("scaled organizer workspace", () => {
     const table = within(rosterSection).getByRole("table", {
       name: "Participants",
     });
-    expect(
-      within(table).getByRole("columnheader", { name: "Settings" }),
-    ).toBeInTheDocument();
-    expect(
-      within(table).getByRole("columnheader", { name: "Status" }),
-    ).toBeInTheDocument();
-    expect(
-      within(table).getByRole("rowheader", { name: /Ada Faculty/ }),
-    ).toBeInTheDocument();
+    ["Name", "Groups", "Response", "Invitation"].forEach((column) => {
+      expect(
+        within(table).getByRole("columnheader", { name: column }),
+      ).toBeInTheDocument();
+    });
     const row = within(table)
       .getByRole("rowheader", { name: /Ada Faculty/ })
       .closest("tr");
     expect(row).toHaveAttribute("data-roster-participant-id", "roster-1");
-    await userEvent.click(within(row).getByLabelText("Include Ada Faculty"));
+    expect(row).toHaveTextContent("Faculty");
+    expect(row).toHaveTextContent("Weight 0.8");
+    await userEvent.click(
+      within(row).getByRole("button", { name: "Actions for Ada Faculty" }),
+    );
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Leave out of results" }),
+    );
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenCalledWith(
         event.code,
@@ -1475,6 +1520,9 @@ describe("scaled organizer workspace", () => {
         "token",
       ),
     );
+    expect(
+      await screen.findByText("Ada Faculty is left out of the results."),
+    ).toBeInTheDocument();
 
     await userEvent.type(
       screen.getByLabelText("Search participants"),
@@ -1504,38 +1552,41 @@ describe("scaled organizer workspace", () => {
     );
   });
 
-  test("applies group weight and inclusion changes through one bulk patch", async () => {
+  test("applies group weight and counting through one bulk patch from the groups panel", async () => {
     renderView();
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
 
-    const bulk = screen.getByLabelText("Bulk participant actions");
-    fireEvent.click(within(bulk).getByText("Bulk actions"));
-    await userEvent.selectOptions(
-      within(bulk).getByLabelText("Bulk update scope"),
-      "group",
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Group: Everyone/ }),
     );
-    await userEvent.selectOptions(
-      within(bulk).getByLabelText("Bulk update group"),
-      "Faculty",
+    await userEvent.click(
+      screen.getByRole("button", { name: "Manage groups…" }),
     );
-    await userEvent.click(within(bulk).getByLabelText("Apply bulk weight"));
-    fireEvent.change(within(bulk).getByLabelText("Bulk weight"), {
+    const dialog = await screen.findByRole("dialog", { name: "Groups" });
+    fireEvent.change(within(dialog).getByLabelText("Weight for Faculty"), {
       target: { value: "0.4" },
     });
-    await userEvent.click(
-      within(bulk).getByLabelText("Apply bulk included status"),
-    );
-    await userEvent.click(within(bulk).getByLabelText("Bulk included"));
-    await userEvent.click(
-      within(bulk).getByRole("button", { name: "Apply update" }),
-    );
-
+    fireEvent.blur(within(dialog).getByLabelText("Weight for Faculty"));
     await waitFor(() =>
       expect(patchRosterBulk).toHaveBeenCalledWith(
         event.code,
         {
           group: "Faculty",
-          updates: { weight: 0.4, included: false },
+          updates: { weight: 0.4 },
+          idempotencyKey: "request-key",
+        },
+        "token",
+      ),
+    );
+    await userEvent.click(
+      within(dialog).getByLabelText("Count Faculty in the results"),
+    );
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenLastCalledWith(
+        event.code,
+        {
+          group: "Faculty",
+          updates: { included: false },
           idempotencyKey: "request-key",
         },
         "token",
@@ -1543,27 +1594,25 @@ describe("scaled organizer workspace", () => {
     );
   });
 
-  test("bulk updates require an explicit field and omit fields the organizer did not choose", async () => {
+  test("sets a weight for the selected people from the selection bar", async () => {
     renderView();
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
-    const bulk = screen.getByLabelText("Bulk participant actions");
-    fireEvent.click(within(bulk).getByText("Bulk actions"));
     await userEvent.click(screen.getByLabelText("Select Ada Faculty"));
-
+    expect(
+      screen.getByRole("region", { name: "Selected people" }),
+    ).toHaveTextContent("1 selected");
+    await userEvent.click(screen.getByRole("button", { name: "More" }));
     await userEvent.click(
-      within(bulk).getByRole("button", { name: "Apply update" }),
+      screen.getByRole("menuitem", { name: "Set weight…" }),
     );
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Choose a group, weight, included status, or a combination",
-    );
-    expect(patchRosterBulk).not.toHaveBeenCalled();
-
-    await userEvent.click(within(bulk).getByLabelText("Apply bulk weight"));
-    fireEvent.change(within(bulk).getByLabelText("Bulk weight"), {
+    const weightDialog = await screen.findByRole("dialog", {
+      name: "Set weight",
+    });
+    fireEvent.change(within(weightDialog).getByLabelText("Weight"), {
       target: { value: "0.25" },
     });
     await userEvent.click(
-      within(bulk).getByRole("button", { name: "Apply update" }),
+      within(weightDialog).getByRole("button", { name: "Apply" }),
     );
     await waitFor(() =>
       expect(patchRosterBulk).toHaveBeenLastCalledWith(
@@ -1576,23 +1625,33 @@ describe("scaled organizer workspace", () => {
         "token",
       ),
     );
+    expect(
+      await screen.findByText("Set weight 0.25 for 1 person."),
+    ).toBeInTheDocument();
   });
 
-  test("uses an explicit all selector for an unfiltered bulk update", async () => {
+  test("uses an explicit all selector when everyone matching is selected", async () => {
+    fetchRoster.mockResolvedValue(
+      rosterListing({
+        pagination: { page: 1, pageSize: 1, total: 2, pages: 2 },
+      }),
+    );
     renderView();
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
-    const bulk = screen.getByLabelText("Bulk participant actions");
-    fireEvent.click(within(bulk).getByText("Bulk actions"));
-    await userEvent.selectOptions(
-      within(bulk).getByLabelText("Bulk update scope"),
-      "filter",
+    await userEvent.click(
+      screen.getByLabelText("Select everyone on this page"),
     );
     await userEvent.click(
-      within(bulk).getByLabelText("Apply bulk included status"),
+      screen.getByRole("button", { name: "Select all 2 matching" }),
     );
-    await userEvent.click(within(bulk).getByLabelText("Bulk included"));
+    await userEvent.click(screen.getByRole("button", { name: "More" }));
     await userEvent.click(
-      within(bulk).getByRole("button", { name: "Apply update" }),
+      screen.getByRole("menuitem", { name: "Leave out of results" }),
+    );
+    await userEvent.click(
+      within(
+        await screen.findByRole("dialog", { name: "Apply to 2 people?" }),
+      ).getByRole("button", { name: "Apply" }),
     );
 
     await waitFor(() =>
@@ -1609,46 +1668,181 @@ describe("scaled organizer workspace", () => {
   });
 
   test("recovers the latest durable delivery request from the roster response", async () => {
-    fetchRoster.mockResolvedValueOnce({
-      participants: [],
-      pagination: { page: 1, pageSize: 50, total: 0, pages: 0 },
-      stats: { total: 0, submitted: 0, notSubmitted: 0, groups: [] },
-      latestDeliveryRequest: {
-        id: "recovered-delivery",
-        operation: "invitation",
-        delivery: { total: 3, pending: 2, sent: 1 },
-      },
-    });
+    fetchRoster.mockResolvedValueOnce(
+      rosterListing({
+        participants: [],
+        pagination: { page: 1, pageSize: 50, total: 0, pages: 0 },
+        stats: { total: 0, submitted: 0, notSubmitted: 0, groups: [] },
+        overall: { total: 0, submitted: 0, notSubmitted: 0 },
+        latestDeliveryRequest: {
+          id: "recovered-delivery",
+          operation: "invitation",
+          delivery: { total: 3, pending: 2, sent: 1 },
+        },
+      }),
+    );
     renderView();
     expect(
       await screen.findByLabelText("Event delivery progress"),
     ).toHaveTextContent("2 queued");
   });
 
-  test("restores durable delivery progress after a browser refresh", async () => {
+  test("restores durable delivery progress after a browser refresh and lets it be dismissed", async () => {
     window.sessionStorage.setItem(
       `releviz.delivery-request.${event.code}`,
       JSON.stringify({
         id: "stored-delivery",
         operation: "final_confirmation",
-        delivery: { total: 5, pending: 1, sent: 4 },
+        delivery: { total: 5, sent: 5 },
       }),
     );
     renderView();
+    const card = await screen.findByLabelText("Event delivery progress");
+    expect(card).toHaveTextContent("Complete");
+    await userEvent.click(
+      within(card).getByRole("button", { name: "Dismiss" }),
+    );
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
+    expect(
+      window.sessionStorage.getItem(`releviz.delivery-request.${event.code}`),
+    ).toBeNull();
+  });
+
+  test("keeps a dismissed run away when the roster lists it again, until a new run starts", async () => {
+    const requestKey = `releviz.delivery-request.${event.code}`;
+    const dismissedKey = `releviz.delivery-request.${event.code}.dismissed`;
+    const finished = {
+      id: "finished-run",
+      operation: "invitation",
+      delivery: { total: 3, sent: 3 },
+    };
+    // The listing names the most recent run whatever its state, on every
+    // load.
+    fetchRoster.mockResolvedValue(
+      rosterListing({ latestDeliveryRequest: finished }),
+    );
+    const { unmount } = renderView();
+    const card = await screen.findByLabelText("Event delivery progress");
+    expect(card).toHaveTextContent("Complete");
+    await userEvent.click(
+      within(card).getByRole("button", { name: "Dismiss" }),
+    );
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
+    expect(window.sessionStorage.getItem(dismissedKey)).toBe("finished-run");
+
+    // A search reloads the roster, which still carries the finished run.
+    fireEvent.change(screen.getByLabelText("Search participants"), {
+      target: { value: "ada" },
+    });
+    await waitFor(() =>
+      expect(fetchRoster).toHaveBeenLastCalledWith(
+        event.code,
+        expect.objectContaining({ search: "ada" }),
+        "token",
+      ),
+    );
+    await screen.findByText(/^Showing 1 of 1 people/);
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
+    expect(window.sessionStorage.getItem(requestKey)).toBeNull();
+
+    // The dismissal outlives the page.
+    unmount();
+    renderView();
+    await screen.findByText("Ada Faculty");
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
+
+    // A new run has a new id and shows.
+    fetchRoster.mockResolvedValue(
+      rosterListing({
+        latestDeliveryRequest: {
+          id: "new-run",
+          operation: "invitation",
+          delivery: { total: 1, pending: 1, sent: 0 },
+        },
+      }),
+    );
+    fireEvent.change(screen.getByLabelText("Search participants"), {
+      target: { value: "ada" },
+    });
     expect(
       await screen.findByLabelText("Event delivery progress"),
     ).toHaveTextContent("1 queued");
+    expect(window.sessionStorage.getItem(requestKey)).toContain("new-run");
   });
 
-  test("individual weight updates preserve included status", async () => {
+  test("dismisses a run that carries no id without remembering it", async () => {
+    window.sessionStorage.setItem(
+      `releviz.delivery-request.${event.code}`,
+      JSON.stringify({
+        operation: "invitation",
+        delivery: { total: 1, sent: 1 },
+      }),
+    );
+    renderView();
+    const card = await screen.findByLabelText("Event delivery progress");
+    await userEvent.click(
+      within(card).getByRole("button", { name: "Dismiss" }),
+    );
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
+    expect(
+      window.sessionStorage.getItem(
+        `releviz.delivery-request.${event.code}.dismissed`,
+      ),
+    ).toBeNull();
+  });
+
+  test("jumps from the delivery card to the people whose invitation failed", async () => {
+    window.sessionStorage.setItem(
+      `releviz.delivery-request.${event.code}`,
+      JSON.stringify({
+        id: "stored-delivery",
+        operation: "invitation",
+        delivery: { total: 2, sent: 1, permanentFailure: 1 },
+      }),
+    );
+    renderView();
+    await screen.findByText("Ada Faculty");
+    const card = await screen.findByLabelText("Event delivery progress");
+    await userEvent.click(
+      within(card).getByRole("button", { name: "Show failed" }),
+    );
+    await waitFor(() =>
+      expect(fetchRoster).toHaveBeenLastCalledWith(
+        event.code,
+        expect.objectContaining({ invitationStatus: "failed", page: 1 }),
+        "token",
+      ),
+    );
+    expect(
+      screen.getByRole("button", { name: "Remove filter Invitation: Failed" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Participants" })).toHaveFocus();
+  });
+
+  test("saves a person's weight from their panel without touching anything else", async () => {
     patchRosterParticipant.mockResolvedValueOnce({
       participant: { id: "roster-1", weight: 0.35, included: true, version: 2 },
       resultsRevision: 4,
     });
     renderView();
-    const weight = await screen.findByLabelText("Weight for Ada Faculty");
-    fireEvent.change(weight, { target: { value: "0.35" } });
-    fireEvent.blur(weight);
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Ada Faculty/ }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Ada Faculty" });
+    fireEvent.change(within(dialog).getByLabelText(/^Weight/), {
+      target: { value: "0.35" },
+    });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenCalledWith(
@@ -1658,9 +1852,10 @@ describe("scaled organizer workspace", () => {
         "token",
       ),
     );
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
   });
 
-  test("patches a row's phone on blur with the row version and skips unchanged values", async () => {
+  test("saves a person's phone from their panel and shows it on the row", async () => {
     patchRosterParticipant.mockResolvedValueOnce({
       participant: {
         id: "roster-1",
@@ -1671,18 +1866,16 @@ describe("scaled organizer workspace", () => {
       resultsRevision: 4,
     });
     renderView();
-    const phone = await screen.findByLabelText("Phone for Ada Faculty");
-    expect(phone).toHaveValue("");
-    expect(screen.getByLabelText("Search participants")).toHaveAttribute(
+    expect(await screen.findByLabelText("Search participants")).toHaveAttribute(
       "placeholder",
-      "Search name, email or phone",
+      "Search name, email, phone or group",
     );
-
-    fireEvent.blur(phone);
-    expect(patchRosterParticipant).not.toHaveBeenCalled();
-
+    await userEvent.click(screen.getByRole("button", { name: /^Ada Faculty/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Ada Faculty" });
+    const phone = within(dialog).getByLabelText(/^Phone/);
+    expect(phone).toHaveValue("");
     fireEvent.change(phone, { target: { value: "+1 (555) 010-0199" } });
-    fireEvent.blur(phone);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenCalledWith(
         event.code,
@@ -1691,35 +1884,44 @@ describe("scaled organizer workspace", () => {
         "token",
       ),
     );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Cancel" }),
+    );
     const row = screen
       .getByRole("rowheader", { name: /Ada Faculty/ })
       .closest("tr");
-    // The phone is shown under the email; the account class sits by the name.
-    expect(
-      await within(row).findByText("+1 (555) 010-0199"),
-    ).toBeInTheDocument();
-    expect(within(row).getByText("ada@example.com")).toBeInTheDocument();
-    expect(within(row).getByText("Temporary")).toBeInTheDocument();
-    expect(phone).toHaveValue("+1 (555) 010-0199");
+    expect(row).toHaveTextContent("ada@example.com · +1 (555) 010-0199");
   });
 
-  test("rolls an inline roster draft back when the server rejects it", async () => {
+  test("refuses a bad phone locally and keeps a server refusal in the panel", async () => {
     patchRosterParticipant.mockRejectedValueOnce(
       Object.assign(new Error("Enter a valid phone number."), { status: 400 }),
     );
     renderView();
-    const phone = await screen.findByLabelText("Phone for Ada Faculty");
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Ada Faculty/ }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Ada Faculty" });
+    const phone = within(dialog).getByLabelText(/^Phone/);
     fireEvent.change(phone, { target: { value: "call me" } });
-    expect(phone).toHaveValue("call me");
-    fireEvent.blur(phone);
-
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     expect(
-      await screen.findByText("Enter a valid phone number."),
+      await within(dialog).findByText(
+        "Enter a phone number with 7 to 32 digits.",
+      ),
     ).toBeInTheDocument();
-    await waitFor(() => expect(phone).toHaveValue(""));
+    expect(patchRosterParticipant).not.toHaveBeenCalled();
+
+    fireEvent.change(phone, { target: { value: "+1 555 010 0199" } });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Enter a valid phone number.",
+    );
+    // The typed value stays for a corrected retry.
+    expect(phone).toHaveValue("+1 555 010 0199");
   });
 
-  test("shows a membership click at once and keeps it as a draft when refused", async () => {
+  test("changes a person's groups through the picker and keeps the draft when refused", async () => {
     let refuse;
     patchRosterParticipant.mockImplementationOnce(
       () =>
@@ -1728,15 +1930,29 @@ describe("scaled organizer workspace", () => {
         }),
     );
     renderView();
-    const faculty = await screen.findByLabelText("Ada Faculty in Faculty");
-    expect(faculty).toBeChecked();
-
-    fireEvent.click(faculty);
-    expect(faculty).not.toBeChecked();
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Ada Faculty/ }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Ada Faculty" });
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "+ Add to group" }),
+    );
+    const picker = await screen.findByRole("dialog", {
+      name: "Groups for Ada Faculty",
+    });
+    expect(within(picker).getByLabelText("Faculty")).toBeChecked();
+    await userEvent.click(within(picker).getByLabelText("Faculty"));
+    await userEvent.click(
+      within(picker).getByRole("button", { name: "Apply" }),
+    );
+    expect(
+      await within(
+        within(dialog).getByRole("list", { name: "Groups" }),
+      ).findByText("No group"),
+    ).toBeInTheDocument();
     expect(patchRosterParticipant).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Save group changes" }));
-    // The boxes stay locked while the save is in flight.
-    expect(faculty).toBeDisabled();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenCalledWith(
         event.code,
@@ -1749,49 +1965,61 @@ describe("scaled organizer workspace", () => {
       refuse(Object.assign(new Error("Not now"), { status: 400 }));
     });
 
-    expect(await screen.findByText("Not now")).toBeInTheDocument();
-    // The refused change stays on screen as an unsaved draft to retry or
-    // discard.
-    expect(faculty).not.toBeChecked();
-    expect(faculty).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
-    expect(faculty).toBeChecked();
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Not now",
+    );
+    // The refused change stays as a draft to retry or discard.
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(
+      within(within(dialog).getByRole("list", { name: "Groups" })).getByText(
+        "No group",
+      ),
+    ).toBeInTheDocument();
   });
 
-  test("serializes rapid updates to one roster row with the latest version", async () => {
-    let resolveGroupUpdate;
+  test("serializes rapid changes to one roster row with the latest version", async () => {
+    let resolveFirst;
     patchRosterParticipant
       .mockImplementationOnce(
         () =>
           new Promise((resolve) => {
-            resolveGroupUpdate = resolve;
+            resolveFirst = resolve;
           }),
       )
       .mockResolvedValueOnce({
         participant: {
           id: "roster-1",
-          group: "Research",
-          included: false,
+          included: true,
           version: 3,
         },
         resultsRevision: 5,
       });
     renderView();
-    const faculty = await screen.findByLabelText("Ada Faculty in Faculty");
-    fireEvent.click(faculty);
-    fireEvent.click(screen.getByRole("button", { name: "Save group changes" }));
+    const row = (
+      await screen.findByRole("rowheader", { name: /Ada Faculty/ })
+    ).closest("tr");
+    await userEvent.click(
+      within(row).getByRole("button", { name: "Actions for Ada Faculty" }),
+    );
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Leave out of results" }),
+    );
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenCalledTimes(1),
     );
 
-    await userEvent.click(screen.getByLabelText("Include Ada Faculty"));
+    await userEvent.click(
+      within(row).getByRole("button", { name: "Actions for Ada Faculty" }),
+    );
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Leave out of results" }),
+    );
     expect(patchRosterParticipant).toHaveBeenCalledTimes(1);
     await act(async () => {
-      resolveGroupUpdate({
+      resolveFirst({
         participant: {
           id: "roster-1",
-          group: "Research",
-          included: true,
+          included: false,
           version: 2,
         },
         resultsRevision: 4,
@@ -1801,27 +2029,28 @@ describe("scaled organizer workspace", () => {
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenCalledTimes(2),
     );
+    // The second click meant "leave out" too (the row still said so), and
+    // it goes out against the version the first change came back with.
     expect(patchRosterParticipant.mock.calls[1][2]).toEqual({
       included: false,
       expectedVersion: 2,
     });
   });
 
-  test("pastes, maps, previews, and merges a roster import", async () => {
+  test("pastes, maps, previews, and merges a roster import, then reviews its invitations", async () => {
     mockRosterImportPreview();
     commitRosterImport.mockResolvedValue({
-      autoInvitedCount: 1,
-      deliveryRequest: {
-        id: "import-delivery",
-        recipientCount: 1,
-        delivery: { total: 1, pending: 1 },
-      },
+      autoInvitedCount: 0,
+      deliveryRequest: null,
       receipt: {
+        mode: "merge",
         importedCount: 1,
         createdCount: 1,
         updatedCount: 0,
         resultsRevision: 4,
       },
+      addedParticipantIds: ["roster-9"],
+      importedParticipantIds: ["roster-9"],
     });
     renderView();
     await screen.findByText("Ada Faculty");
@@ -1832,43 +2061,63 @@ describe("scaled organizer workspace", () => {
       expect.objectContaining({ columnMapping: { name: "0", email: "1" } }),
       "token",
     );
-    // Invitations are opt-in: the box is unchecked until the organizer
-    // ticks it, and the commit label follows.
-    const sendBox = screen.getByLabelText(
-      "Send invitations to newly added people",
-    );
-    expect(sendBox).not.toBeChecked();
+    // The import itself never emails anyone.
     expect(
-      screen.getByRole("button", { name: "Merge participants" }),
-    ).toBeInTheDocument();
-    await userEvent.click(sendBox);
+      screen.queryByLabelText(
+        "Email invitations to the people this import adds",
+      ),
+    ).not.toBeInTheDocument();
     await userEvent.click(
-      screen.getByRole("button", {
-        name: "Merge participants and invite new people",
-      }),
+      screen.getByRole("button", { name: "Import 1 person" }),
     );
 
     await waitFor(() =>
       expect(commitRosterImport).toHaveBeenCalledWith(
         event.code,
         "import-1",
-        { mode: "merge", idempotencyKey: "request-key", sendInvitations: true },
+        {
+          mode: "merge",
+          idempotencyKey: "request-key",
+          sendInvitations: false,
+        },
         "token",
       ),
     );
+    // The sheet stays open on its Done step; its review hands the people
+    // it added to the invitation dialog and reports the import's outcome.
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: "Review and send invitations (1)…",
+      }),
+    );
     expect(
-      await screen.findByRole("button", { name: "Import participants" }),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByLabelText("Event delivery progress"),
-    ).toHaveTextContent("1 queued");
+      screen.queryByRole("dialog", { name: "Import participants" }),
+    ).not.toBeInTheDocument();
     expect(
       (
         await screen.findByText(
-          "Imported 1 people: 1 added, 0 updated. 1 invitation queued.",
+          "Imported 1 people: 1 added, 0 updated. No invitations were sent.",
         )
       ).closest("[role]"),
     ).toHaveAttribute("role", "status");
+    const review = await screen.findByRole("dialog", {
+      name: "Send invitations",
+    });
+    expect(sendRosterInvitations).toHaveBeenCalledWith(
+      event.code,
+      { participantIds: ["roster-9"], preview: true, resend: false },
+      "token",
+    );
+    await within(review).findByText("1 will get an invitation now");
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Continue" }),
+    );
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Send 1 invitation" }),
+    );
+    expect(
+      await screen.findByLabelText("Event delivery progress"),
+    ).toHaveTextContent("1 queued");
   });
 
   test("requires the exact event code before a destructive roster rebuild", async () => {
@@ -1892,14 +2141,14 @@ describe("scaled organizer workspace", () => {
     await screen.findByText("Ada Faculty");
     await openPastedRosterPreview();
     await userEvent.click(
-      screen.getByRole("radio", { name: /Rebuild the participant list/ }),
+      screen.getByRole("radio", { name: /Replace the whole list/ }),
     );
 
     const rebuildButton = screen.getByRole("button", {
-      name: "Rebuild participant list",
+      name: "Replace the list with 1 person",
     });
     expect(screen.getByRole("note")).toHaveTextContent(
-      "Rebuilding clears schedules, invitations, and pending delivery. With invitations enabled below it sends a new invitation to every imported participant; otherwise everyone starts as Not sent and gets no reminders until you send invitations.",
+      "Rebuilding clears schedules, invitations, and pending delivery. Everyone starts as Not sent and gets no reminders until you send invitations, which you can review once the import is done.",
     );
     expect(rebuildButton).toBeDisabled();
     await userEvent.type(
@@ -1947,6 +2196,17 @@ describe("scaled organizer workspace", () => {
         unansweredParticipantTotal: 150,
         excludedParticipantTotal: 0,
       },
+      recipientCount: 2,
+      email: {
+        from: "noreply@releviz.local",
+        replyTo: "",
+        to: "Ada Faculty <ada@example.com>",
+        subject: "Big event is confirmed",
+        html: "<!doctype html><p>See you Thursday</p>",
+        text: "See you Thursday",
+        attachments: ["meeting.ics"],
+      },
+      sample: { name: "Ada Faculty", email: "ada@example.com" },
     });
     confirmFinalMeeting.mockResolvedValue({
       event: {
@@ -1997,6 +2257,21 @@ describe("scaled organizer workspace", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Finalize meeting" }),
     );
+    // The confirmation email is reviewed before anything is finalized.
+    const review = screen.getByRole("dialog", { name: "Finalize meeting" });
+    expect(review).toHaveTextContent(
+      "2 invited people will receive the confirmation and a calendar invitation.",
+    );
+    expect(review).toHaveTextContent("Big event is confirmed");
+    expect(confirmFinalMeeting).not.toHaveBeenCalled();
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Continue" }),
+    );
+    await userEvent.click(
+      within(review).getByRole("button", {
+        name: "Finalize and send 2 emails",
+      }),
+    );
 
     await waitFor(() =>
       expect(confirmFinalMeeting).toHaveBeenCalledWith(
@@ -2039,6 +2314,9 @@ describe("scaled organizer workspace", () => {
           },
         ],
       },
+      recipientCount: 0,
+      email: null,
+      sample: null,
     });
     renderView(jest.fn(), { ...event, status: "active" });
     await screen.findByText(/Results are current at revision 3/);
@@ -2344,9 +2622,8 @@ describe("scaled organizer workspace", () => {
         await screen.findByRole("group", { name: "Attendance review" }),
       ).toBeInTheDocument();
 
-      await userEvent.click(
-        screen.getByRole("button", { name: "Finalize meeting" }),
-      );
+      // Nobody was invited by email: finalizing goes ahead without email.
+      await finalizeThroughReview();
       await waitFor(() =>
         expect(confirmFinalMeeting).toHaveBeenCalledWith(
           event.code,
@@ -2370,6 +2647,21 @@ describe("scaled organizer workspace", () => {
 
   test("reactivating a finalized event clears the previously chosen window", async () => {
     mockCalendarWindowFlow();
+    previewEventLifecycle.mockResolvedValue({
+      cancellation: {
+        recipientCount: 2,
+        email: {
+          from: "noreply@releviz.local",
+          replyTo: "",
+          to: "Ada Faculty <ada@example.com>",
+          subject: "Big event was canceled",
+          html: "<!doctype html><p>Canceled</p>",
+          text: "Canceled",
+          attachments: ["meeting.ics"],
+        },
+        sample: { name: "Ada Faculty", email: "ada@example.com" },
+      },
+    });
     updateEventLifecycle.mockResolvedValue({
       event: {
         ...calendarEvent,
@@ -2377,6 +2669,8 @@ describe("scaled organizer workspace", () => {
         version: 4,
         finalMeeting: null,
       },
+      cancellationDeliveryRequestId: "cancel-1",
+      cancellationEnqueued: 2,
     });
     const nowSpy = jest
       .spyOn(Date, "now")
@@ -2396,9 +2690,7 @@ describe("scaled organizer workspace", () => {
         screen.getByRole("button", { name: "Review attendance" }),
       );
       await screen.findByRole("group", { name: "Attendance review" });
-      await userEvent.click(
-        screen.getByRole("button", { name: "Finalize meeting" }),
-      );
+      await finalizeThroughReview();
       await waitFor(() =>
         expect(headerStatus()).toHaveTextContent("finalized"),
       );
@@ -2427,8 +2719,30 @@ describe("scaled organizer workspace", () => {
         ),
       ).toBeInTheDocument();
 
+      // Reopening tells the confirmation's recipients the meeting is
+      // canceled, so their email is reviewed first.
       await userEvent.click(
         screen.getByRole("button", { name: "Reactivate event" }),
+      );
+      const review = await screen.findByRole("dialog", {
+        name: "Reopen scheduling",
+      });
+      expect(previewEventLifecycle).toHaveBeenCalledWith(
+        event.code,
+        { status: "active", responseDeadline: calendarEvent.responseDeadline },
+        "token",
+      );
+      expect(review).toHaveTextContent(
+        "2 people who received the confirmation will be told the meeting is canceled.",
+      );
+      expect(updateEventLifecycle).not.toHaveBeenCalled();
+      await userEvent.click(
+        within(review).getByRole("button", { name: "Continue" }),
+      );
+      await userEvent.click(
+        within(review).getByRole("button", {
+          name: "Reopen and send 2 emails",
+        }),
       );
 
       await waitFor(() =>
@@ -2439,6 +2753,9 @@ describe("scaled organizer workspace", () => {
         ),
       );
       await waitFor(() => expect(headerStatus()).toHaveTextContent("active"));
+      expect(
+        await screen.findByLabelText("Event delivery progress"),
+      ).toHaveTextContent("Final cancellation delivery");
       // The old pick is gone: the step is back to its empty state, and stays
       // open rather than folding away under the organizer.
       expect(finalizeSection()).toHaveTextContent("No time selected yet");
@@ -2798,9 +3115,9 @@ describe("scaled organizer workspace", () => {
       expect(
         await screen.findByText(/Results are updating for revision 4/),
       ).toBeInTheDocument();
-      expect(screen.getByLabelText("Participant summary")).toHaveTextContent(
-        "1 submitted",
-      );
+      expect(
+        screen.getByText(/· 1 submitted · 0 not submitted ·/),
+      ).toBeInTheDocument();
       // Only the revision moved, so the event is patched rather than re-read.
       expect(fetchEvent).not.toHaveBeenCalled();
       expect(setEvent).toHaveBeenCalledWith({ ...event, resultsRevision: 4 });
