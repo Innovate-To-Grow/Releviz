@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import TestCase
 
 from scripts.ci.plan_django_tests import APPS, select_apps
-from scripts.ci.plan_e2e_tests import ALL_PROJECTS, select_matrix
+from scripts.ci.plan_e2e_tests import ALL_PROJECTS, SHARDS, select_matrix
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -38,9 +38,16 @@ class DjangoPlannerTests(TestCase):
 
 
 class E2EPlannerTests(TestCase):
-    def test_every_browser_runs_every_spec(self):
+    def test_every_browser_runs_every_spec_across_its_shards(self):
         matrix = select_matrix()
-        self.assertEqual([item["project"] for item in matrix], list(ALL_PROJECTS))
+        self.assertEqual(
+            [(item["project"], item["shard"], item["shard_index"]) for item in matrix],
+            [
+                (project, f"{index}/{SHARDS}", index)
+                for project in ALL_PROJECTS
+                for index in range(1, SHARDS + 1)
+            ],
+        )
         self.assertTrue(all(item["spec_args"] == "" for item in matrix))
 
     def test_full_flag_prints_the_matrix_and_projects_for_the_workflow(self):
@@ -49,7 +56,7 @@ class E2EPlannerTests(TestCase):
         matrix_line, projects_line = result.stdout.splitlines()
         self.assertEqual(
             json.loads(matrix_line.removeprefix("matrix=")),
-            [{"project": project, "spec_args": ""} for project in ALL_PROJECTS],
+            select_matrix(),
         )
         self.assertEqual(json.loads(projects_line.removeprefix("projects=")), list(ALL_PROJECTS))
 

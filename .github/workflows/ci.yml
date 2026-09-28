@@ -1222,7 +1222,7 @@ jobs:
             >> "$GITHUB_OUTPUT"
 
   e2e:
-    name: E2E (${{ matrix.project }})
+    name: E2E (${{ matrix.project }} ${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 35
     needs:
@@ -1263,6 +1263,7 @@ jobs:
       DJANGO_SUPERUSER_EMAIL: admin@releviz.local
       NEXT_E2E_SERVER: "1"
       PW_PROJECT: ${{ matrix.project }}
+      PW_SHARD: ${{ matrix.shard }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -1348,19 +1349,25 @@ jobs:
             --config=src/e2e/playwright.config.js \
             "${args[@]}" \
             --project="$PW_PROJECT" \
+            --shard="$PW_SHARD" \
             --reporter=blob
 
       # Chromium runs every spec, including the Chromium-only ones, so its
-      # log is the complete record of the API routes the suite reaches.
-      - name: Audit E2E endpoint coverage
+      # shards' logs together record every API route the suite reaches; the
+      # E2E Endpoint Coverage job audits them.
+      - name: Upload E2E endpoint log
         if: ${{ matrix.project == 'chromium' }}
-        run: python scripts/ci/audit_e2e_coverage.py endpoints --hits "$E2E_ENDPOINT_LOG"
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-endpoints-chromium-${{ matrix.shard_index }}
+          path: ${{ env.E2E_ENDPOINT_LOG }}
+          if-no-files-found: error
 
       - name: Upload Playwright blob report
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: blob-${{ matrix.project }}
+          name: blob-${{ matrix.project }}-${{ matrix.shard_index }}
           path: blob-report
           if-no-files-found: warn
 
@@ -1368,11 +1375,32 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-diagnostics-${{ matrix.project }}
+          name: e2e-diagnostics-${{ matrix.project }}-${{ matrix.shard_index }}
           path: |
             test-results
             src/e2e/test-results
           if-no-files-found: ignore
+
+  e2e-endpoint-audit:
+    name: E2E Endpoint Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [e2e, changes]
+    if: ${{ needs.changes.outputs.e2e == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Download Chromium endpoint logs
+        uses: actions/download-artifact@v8
+        with:
+          path: e2e-endpoint-logs
+          pattern: e2e-endpoints-chromium-*
+
+      - name: Audit E2E endpoint coverage
+        run: |
+          cat e2e-endpoint-logs/*/*.log > e2e-endpoints.log
+          python3 scripts/ci/audit_e2e_coverage.py endpoints --hits e2e-endpoints.log
 
   e2e-report:
     name: E2E Report
@@ -1473,7 +1501,7 @@ jobs:
     name: E2E Required Result
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [e2e-plan, e2e, changes]
+    needs: [e2e-plan, e2e, e2e-endpoint-audit, changes]
     if: ${{ always() }}
     steps:
       - name: Enforce E2E result
@@ -1489,6 +1517,7 @@ jobs:
           results = {
               "e2e-plan": needs["e2e-plan"]["result"],
               "e2e": needs["e2e"]["result"],
+              "e2e-endpoint-audit": needs["e2e-endpoint-audit"]["result"],
           }
           failed = {name: result for name, result in results.items() if result != "success"}
           if failed:

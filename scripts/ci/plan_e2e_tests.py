@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Emit the full Playwright browser matrix for CI.
+"""Emit the full, sharded Playwright browser matrix for CI.
 
 Every pull request, push, and manual dispatch runs every browser and every
 spec: the "Full CI Scope" job in .github/workflows/ci.yml enables every area,
@@ -14,12 +14,21 @@ import argparse
 import json
 
 ALL_PROJECTS = ("chromium", "firefox", "webkit")
+# Each browser's suite is split across this many jobs. Playwright's --shard
+# gives each job an even share of the tests, and the E2E Report job merges
+# the shards' blob reports into one report.
+SHARDS = 3
 
 
-def select_matrix() -> list[dict[str, str]]:
+def select_matrix() -> list[dict[str, str | int]]:
     # `spec_args` stays in each entry because the workflow forwards it to
-    # Playwright; it is always empty, so every spec runs.
-    return [{"project": project, "spec_args": ""} for project in ALL_PROJECTS]
+    # Playwright; it is always empty, so every spec runs. `shard_index` names
+    # each shard's artifacts, which cannot contain the slash in `shard`.
+    return [
+        {"project": project, "shard": f"{index}/{SHARDS}", "shard_index": index, "spec_args": ""}
+        for project in ALL_PROJECTS
+        for index in range(1, SHARDS + 1)
+    ]
 
 
 def main() -> int:
@@ -33,7 +42,7 @@ def main() -> int:
     matrix = select_matrix()
     compact = json.dumps(matrix, separators=(",", ":"))
     print(f"matrix={compact}")
-    print(f"projects={json.dumps([item['project'] for item in matrix], separators=(',', ':'))}")
+    print(f"projects={json.dumps(list(ALL_PROJECTS), separators=(',', ':'))}")
     return 0
 
 
