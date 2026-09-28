@@ -392,8 +392,28 @@ async function adminPasswordLogin(
     .click();
   await page.locator("#id_email").fill(email);
   await page.locator("#id_password").fill(password);
-  await page.getByRole("button", { name: "Sign In" }).click();
+  await submitAdminLoginForm(
+    page,
+    page.getByRole("button", { name: "Sign In" }),
+  );
   await expect(page).toHaveURL(/\/admin\/$/);
+}
+
+// Clicks an admin sign-in form's submit button until the form posts. Under
+// load, Firefox has dropped this click on a freshly loaded login page without
+// sending anything; the click is repeated only while nothing was posted, so a
+// form is never submitted twice.
+async function submitAdminLoginForm(page, button) {
+  await expect(async () => {
+    const posted = page.waitForRequest(
+      (request) =>
+        request.method() === "POST" &&
+        new URL(request.url()).pathname === "/admin/login/",
+      { timeout: 3_000 },
+    );
+    await button.click();
+    await posted;
+  }).toPass({ timeout: 15_000 });
 }
 
 // A deterministic wrong six-digit code.
@@ -872,6 +892,7 @@ module.exports = {
   ROOT,
   VERIFICATION_EMAIL_SUBJECTS,
   adminPasswordLogin,
+  submitAdminLoginForm,
   apiJson,
   beforeUnloadIsBlocked,
   closeBlockedTimes,

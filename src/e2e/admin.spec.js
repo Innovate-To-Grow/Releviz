@@ -18,6 +18,7 @@ const {
   newRunId,
   registerAccountViaApi,
   runDjangoJson,
+  submitAdminLoginForm,
   submitResponse,
 } = require("./helpers/releviz");
 const {
@@ -152,19 +153,28 @@ async function submitAdminPassword(page, email, password) {
   await expect(page.getByText("Sign in with password")).toBeVisible();
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: "Sign In" }).click();
+  await submitAdminLoginForm(
+    page,
+    page.getByRole("button", { name: "Sign In" }),
+  );
 }
 
 // The first (email) step of the default admin sign-in.
 async function submitAdminEmail(page, email) {
   await expect(page.getByText("Welcome back to")).toBeVisible();
   await page.getByLabel("Email").fill(email);
-  await page.getByRole("button", { name: "Send verification code" }).click();
+  await submitAdminLoginForm(
+    page,
+    page.getByRole("button", { name: "Send verification code" }),
+  );
 }
 
 async function submitAdminCode(page, code) {
   await page.getByLabel("Verification code").fill(code);
-  await page.getByRole("button", { name: "Verify and sign in" }).click();
+  await submitAdminLoginForm(
+    page,
+    page.getByRole("button", { name: "Verify and sign in" }),
+  );
 }
 
 // Unfold's user menu sits at the foot of the sidebar under the member's name.
@@ -222,6 +232,11 @@ async function confirmTyped(page, word, typed = word) {
     await expect(button).toBeEnabled({ timeout: 1_000 });
   }).toPass({ timeout: 15_000 });
   await button.click();
+  // The confirmation posts and the admin redirects to the result page. Wait
+  // for that page, or a following goto can collide with the redirect (WebKit
+  // schedules it late enough for click() to return first).
+  await expect(button).toHaveCount(0);
+  await page.waitForLoadState("load");
 }
 
 // A Django admin message (success, warning or error) with this text.
