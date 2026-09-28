@@ -166,6 +166,27 @@ function tempAccessPut(page, code, body) {
   );
 }
 
+// POST events/temp-access/<path> with the page's own cookie, as the app's
+// pages do. A 204 has no payload.
+function tempAccessPost(page, path, body) {
+  return page.evaluate(
+    async ({ url, data }) => {
+      const response = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      const text = await response.text();
+      return {
+        status: response.status,
+        payload: text ? JSON.parse(text) : null,
+      };
+    },
+    { url: `${BACKEND_URL}/events/temp-access/${path}`, data: body },
+  );
+}
+
 // A route handler that holds temporary-access saves until release() is
 // called; `entered` resolves once one is being held.
 function holdTempSaves() {
@@ -1289,7 +1310,8 @@ test.describe("Temporary session", () => {
       ]);
 
       // The cookie belongs to its event: Quinn's other event asks for a
-      // link, and the miss does not revoke the session.
+      // link, and the miss neither revokes the session nor clears the cookie.
+      const quinnCookie = await tempCookie(context);
       await secondTab.goto(`/temp-access?code=${other.code}`);
       await expect(heading(secondTab, LINK_REQUIRED)).toBeVisible();
       await expect(
@@ -1300,6 +1322,194 @@ test.describe("Temporary session", () => {
         { active: true, revoked: false },
       ]);
       expect(tempSessions(quinnEmail, other.code)).toEqual([]);
+      expect((await tempCookie(context))?.value).toBe(quinnCookie.value);
+      await secondTab.goto(`/temp-access?code=${event.code}`);
+      await expect(
+        secondTab.getByText("You are responding as Quinn Second"),
+      ).toBeVisible();
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("another event's page, saves, upgrade and sign-out are refused as if signed out but keep this event's cookie, which still opens its event until the session expires", async ({
+    browser,
+    request,
+  }) => {
+    const { runId, token, event } = await organizerEvent(request, "temp-keep");
+    const other = await createEvent(request, token, {
+      name: `temp-keep other ${runId}`,
+    });
+    const email = `temp-keep-kit-${runId}@example.com`;
+    const { path } = await inviteTemporaryPerson(
+      request,
+      token,
+      event,
+      "Kit Keep",
+      email,
+    );
+    const context = await browser.newContext();
+    try {
+      const tab = await context.newPage();
+      await openTemporaryAccess(tab, event, email, path, "Kit Keep");
+      const cookie = await tempCookie(context);
+      expect(cookie).toBeDefined();
+      const cookieValue = async () => (await tempCookie(context))?.value;
+
+      // A second tab opens the other event without an invitation: it asks
+      // for a link, and Kit's cookie for this event stays.
+      const otherTab = await context.newPage();
+      const missed = otherTab.waitForResponse(
+        (response) =>
+          SESSION_ROUTE.test(response.url()) &&
+          response.request().method() === "GET",
+      );
+      await otherTab.goto(`/temp-access?code=${other.code}`);
+      expect((await missed).status()).toBe(401);
+      await expect(heading(otherTab, LINK_REQUIRED)).toBeVisible();
+      expect(await cookieValue()).toBe(cookie.value);
+
+      // The other event's save and upgrade get the signed-out answer, and
+      // signing out of it ends nothing; none of them touch the cookie.
+      const inactive = {
+        error: "Temporary event access is not active.",
+        errorCode: "temp_session_inactive",
+      };
+      const save = await tempAccessPut(otherTab, other.code, {
+        availabilityInperson: Array(other.slotCount).fill(0),
+        expectedVersion: 1,
+      });
+      expect(save).toEqual({ status: 401, payload: inactive });
+      expect(
+        await tempAccessPost(
+          otherTab,
+          `upgrade-registration?code=${other.code}`,
+          {},
+        ),
+      ).toEqual({ status: 401, payload: inactive });
+      expect(
+        await tempAccessPost(otherTab, "logout", { code: other.code }),
+      ).toEqual({ status: 204, payload: null });
+      expect(await cookieValue()).toBe(cookie.value);
+      expect(tempSessions(email, event.code)).toMatchObject([
+        { active: true, revoked: false },
+      ]);
+
+      // Kit's own event still opens from the cookie.
+      await tab.reload();
+      await expect(heading(tab, event.name)).toBeVisible();
+      await expect(
+        tab.getByText("You are responding as Kit Keep"),
+      ).toBeVisible();
+
+      // Once the session is really gone, even the other event's page clears
+      // the cookie.
+      expireTempSessions(email);
+      const expired = otherTab.waitForResponse(
+        (response) =>
+          SESSION_ROUTE.test(response.url()) &&
+          response.request().method() === "GET",
+      );
+      await otherTab.reload();
+      expect((await expired).status()).toBe(401);
+      await expect(heading(otherTab, LINK_REQUIRED)).toBeVisible();
+      await expect.poll(cookieValue).toBeUndefined();
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("Sign out on an event whose cookie another event's verification has since replaced leaves that event signed in, and its own Sign out still ends it", async ({
+    browser,
+    request,
+  }) => {
+    const { runId, token, event } = await organizerEvent(request, "temp-swap");
+    const other = await createEvent(request, token, {
+      name: `temp-swap other ${runId}`,
+    });
+    const email = `temp-swap-sam-${runId}@example.com`;
+    const first = await inviteTemporaryPerson(
+      request,
+      token,
+      event,
+      "Sam Swap",
+      email,
+    );
+    // Sam is invited to the other event too, as the same temporary identity.
+    const second = await inviteTemporaryPerson(
+      request,
+      token,
+      other,
+      "Sam Swap",
+      email,
+    );
+    const context = await browser.newContext();
+    try {
+      const tab = await context.newPage();
+      const firstCode = await openTemporaryAccess(
+        tab,
+        event,
+        email,
+        first.path,
+        "Sam Swap",
+      );
+
+      // A second tab verifies the other event; its cookie replaces this
+      // event's, while the first tab still shows this event's editor.
+      const otherTab = await context.newPage();
+      const requestedAt = Date.now() - 1000;
+      await otherTab.goto(second.path);
+      await expect(heading(otherTab, "Check your email")).toBeVisible();
+      const otherCode = await latestVerificationCode(
+        email,
+        requestedAt,
+        "temp_event_access",
+        { notCode: firstCode },
+      );
+      await otherTab.getByLabel("Verification code").fill(otherCode);
+      await otherTab
+        .getByRole("button", { name: "Verify and open schedule" })
+        .click();
+      await expect(heading(otherTab, other.name)).toBeVisible();
+      await expect(
+        otherTab.getByText("You are responding as Sam Swap"),
+      ).toBeVisible();
+      const otherCookie = await tempCookie(context);
+      expect(otherCookie).toBeDefined();
+      expect(tempSessions(email, other.code)).toMatchObject([
+        { active: true, revoked: false },
+      ]);
+
+      // Sign out on the first tab names its own event, so the other event's
+      // session and the cookie that holds it stay.
+      const signedOut = tab.waitForResponse(
+        (response) =>
+          LOGOUT_ROUTE.test(response.url()) &&
+          response.request().method() === "POST",
+      );
+      await tempEditorControls(tab).signOut.click();
+      const logout = await signedOut;
+      expect(logout.request().postDataJSON()).toEqual({ code: event.code });
+      expect(logout.status()).toBe(204);
+      await expect(heading(tab, "You are signed out")).toBeVisible();
+      expect((await tempCookie(context))?.value).toBe(otherCookie.value);
+      expect(tempSessions(email, other.code)).toMatchObject([
+        { active: true, revoked: false },
+      ]);
+      await otherTab.reload();
+      await expect(heading(otherTab, other.name)).toBeVisible();
+      await expect(
+        otherTab.getByText("You are responding as Sam Swap"),
+      ).toBeVisible();
+
+      // The other event's own Sign out ends its session and clears the
+      // cookie.
+      await tempEditorControls(otherTab).signOut.click();
+      await expect(heading(otherTab, "You are signed out")).toBeVisible();
+      expect(await tempCookie(context)).toBeUndefined();
+      expect(tempSessions(email, other.code)).toMatchObject([
+        { active: false, revoked: true },
+      ]);
     } finally {
       await context.close();
     }
