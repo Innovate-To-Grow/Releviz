@@ -62,8 +62,11 @@ module.exports = defineConfig({
   webServer: [
     {
       // The stream endpoint needs an ASGI server (runserver is WSGI); this is
-      // the production server, gunicorn running uvicorn workers.
-      command: `${JSON.stringify(pythonBin)} -m gunicorn config.asgi:application -k uvicorn_worker.UvicornWorker --chdir src/api --bind 127.0.0.1:${backendPort} --workers 1`,
+      // the production server, gunicorn running uvicorn workers. Keep-alive
+      // matches production (src/api/Dockerfile): with gunicorn's 2 s default,
+      // a test's API client can reuse an idle connection just as the server
+      // closes it and get ECONNRESET.
+      command: `${JSON.stringify(pythonBin)} -m gunicorn config.asgi:application -k uvicorn_worker.UvicornWorker --chdir src/api --bind 127.0.0.1:${backendPort} --workers 1 --keep-alive 75`,
       cwd: rootDir,
       url: `${backendUrl}/health`,
       env: backendEnv,
