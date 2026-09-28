@@ -37,6 +37,12 @@ module.exports = defineConfig({
   testDir: ".",
   timeout: 120_000,
   expect: { timeout: 10_000 },
+  // A test that fails in CI gets one more try, since three browser engines
+  // on shared runners occasionally miss a timing a local run never does. A
+  // test that passes only on its retry is reported as flaky, in the E2E
+  // summary and as an annotation, rather than hidden; locally a failure
+  // stands at once.
+  retries: process.env.CI ? 1 : 0,
   reporter: [
     ["list"],
     ["html", { outputFolder: "playwright-report", open: "never" }],

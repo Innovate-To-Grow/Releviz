@@ -1378,19 +1378,21 @@ jobs:
       - name: Merge blob reports
         env:
           PLAYWRIGHT_JUNIT_OUTPUT_NAME: results.xml
+          PLAYWRIGHT_JSON_OUTPUT_NAME: results.json
         run: |
           set -euo pipefail
           if [ ! -d all-blob-reports ] || [ -z "$(ls -A all-blob-reports 2>/dev/null)" ]; then
             echo "::notice::No blob reports to merge."
             exit 0
           fi
-          npx playwright merge-reports --reporter html,github,junit all-blob-reports
+          npx playwright merge-reports --reporter html,github,junit,json all-blob-reports
 
       - name: Write E2E summary
         if: ${{ always() }}
         run: |
           python3 - <<'PY'
           import glob
+          import json
           import os
           import xml.etree.ElementTree as ET
 
@@ -1409,13 +1411,25 @@ jobs:
                   skip += int(suite.get("skipped", 0))
                   duration += float(suite.get("time", 0) or 0)
           passed = total - fail - err - skip
+          # JUnit counts a test that passed on its retry as passed; the JSON
+          # report's stats say how many of those passes were flaky.
+          flaky = 0
+          try:
+              with open("results.json", encoding="utf-8") as fh:
+                  flaky = int(json.load(fh).get("stats", {}).get("flaky", 0))
+          except (OSError, ValueError):
+              pass
+          if flaky:
+              print(f"::warning::{flaky} E2E test(s) passed only on retry; see the flaky annotations.")
           summary = os.environ.get("GITHUB_STEP_SUMMARY")
           if summary:
               with open(summary, "a", encoding="utf-8") as fh:
                   fh.write("## Playwright E2E\n\n")
-                  fh.write("| Total | Passed | Failed | Skipped | Duration |\n")
-                  fh.write("|---:|---:|---:|---:|---:|\n")
-                  fh.write(f"| {total} | {passed} | {fail + err} | {skip} | {duration:.1f}s |\n")
+                  fh.write("| Total | Passed | Flaky | Failed | Skipped | Duration |\n")
+                  fh.write("|---:|---:|---:|---:|---:|---:|\n")
+                  fh.write(
+                      f"| {total} | {passed} | {flaky} | {fail + err} | {skip} | {duration:.1f}s |\n"
+                  )
           PY
 
       - name: Annotate test results
@@ -1436,6 +1450,7 @@ jobs:
           path: |
             playwright-report
             results.xml
+            results.json
           if-no-files-found: warn
 
   e2e-required-result:
