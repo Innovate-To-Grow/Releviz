@@ -69,6 +69,7 @@ class AcceptInvitationViewTests(TestCase):
         self.assertContains(response, "Grant admin access")
         member.refresh_from_db()
         self.assertFalse(member.is_staff)
+        self.assertFalse(member.is_superuser)
         self.assertEqual(member.admin_apps, [])
         invitation.refresh_from_db()
         self.assertEqual(invitation.status, AdminInvitation.Status.PENDING)
@@ -115,10 +116,12 @@ class AcceptInvitationViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         member = ContactEmail.objects.get(email_address="invite@example.com").member
         self.assertTrue(member.is_staff)
+        self.assertTrue(member.is_superuser)
         self.assertTrue(member.is_active)
-        # No app grant is handed out at acceptance time; the Releviz Master grants
-        # apps later via the Member admin (see apps.core.utils.access).
+        # Accepted invitations grant the single admin role immediately.
         self.assertEqual(member.admin_apps, [])
+        self.assertTrue(member.can_access_app("scheduling"))
+        self.assertTrue(member.can_access_app("authn"))
 
     def test_post_rechecks_invitation_after_form_validation(self):
         from apps.authn.views.admin.invitation import AcceptInvitationView
@@ -166,7 +169,10 @@ class AcceptInvitationViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         existing.refresh_from_db()
         self.assertTrue(existing.is_staff)
+        self.assertTrue(existing.is_superuser)
         self.assertEqual(existing.admin_apps, [])
+        self.assertTrue(existing.can_access_app("core"))
+        self.assertTrue(existing.can_access_app("mail"))
 
     def test_post_existing_member_rechecks_locked_invitation(self):
         from apps.authn.views.admin.invitation import AcceptInvitationView

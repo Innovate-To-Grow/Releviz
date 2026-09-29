@@ -1,247 +1,141 @@
-"""Tests for the ``admin_apps`` field on the Member admin change form.
-
-The foundation replaced the per-model ``user_permissions`` widget with a
-multi-select of registered admin app labels backed by ``Member.admin_apps``
-(see apps.authn.admin.members.forms.MemberChangeForm and apps.core.utils.access).
-These tests assert the change form renders the new control, exposes the
-registered app labels as choices, persists a submitted selection, and no
-longer exposes ``user_permissions``.
-
-The admin restricts the form's editable fields to those in ``MemberAdmin``'s
-fieldsets (``admin_apps`` is in; ``user_permissions`` is out), so assertions go
-through the admin-bound form (``MemberAdmin.get_form``) and the real change
-page rather than the raw ``__all__`` form class.
-"""
-
-from html.parser import HTMLParser
+"""The member editor exposes one Administrator role with full backend access."""
 
 from django import forms
 from django.contrib import admin
 from django.core.cache import cache
-from django.test import RequestFactory, TestCase, override_settings
+from django.test import Client, RequestFactory, TestCase, override_settings
+from django.urls import reverse
 
-from apps.authn.admin.members.forms import admin_app_choices
-from apps.authn.models import ContactEmail, Member
+from apps.authn.admin.members.forms import MemberChangeForm
+from apps.authn.models import Member
+
+LEGACY_PERMISSION_FIELDS = ("admin_apps", "is_superuser", "groups", "user_permissions")
 
 
-def _admin_change_form(obj):
-    """Return the admin-bound change form class for ``obj`` (restricted by fieldsets)."""
-    model_admin = admin.site._registry[Member]
+def _admin_form(obj=None):
     request = RequestFactory().get("/")
-    request.user = Member(is_superuser=True, is_staff=True, is_active=True)
-    return model_admin.get_form(request, obj=obj, change=True)
+    # Verify the editor does not require the legacy superuser flag.
+    request.user = Member(is_staff=True, is_superuser=False, is_active=True)
+    return admin.site._registry[Member].get_form(request, obj=obj, change=obj is not None)
 
 
-class MemberChangeFormFieldTests(TestCase):
-    """Assertions on the admin-bound change form (the surface operators see)."""
-
+class MemberAdministratorFormTests(TestCase):
     def setUp(self):
-        self.member = Member.objects.create_user(
-            password="StrongPass123!", first_name="Form", last_name="Field", is_staff=True
-        )
+        self.member = Member.objects.create_user(first_name="Form", last_name="Member")
 
-    def test_admin_apps_is_a_multi_select(self):
-        form = _admin_change_form(self.member)()
-        field = form.fields["admin_apps"]
-        self.assertIsInstance(field, forms.MultipleChoiceField)
-        self.assertIsInstance(field.widget, forms.CheckboxSelectMultiple)
+    def test_change_form_exposes_single_administrator_toggle(self):
+        form = _admin_form(self.member)()
+        field = form.fields["is_staff"]
+        self.assertIsInstance(field, forms.BooleanField)
+        self.assertEqual(field.label, "Administrator")
+        self.assertIn("full access", field.help_text)
         self.assertFalse(field.required)
+        for name in LEGACY_PERMISSION_FIELDS:
+            self.assertNotIn(name, form.fields)
+            self.assertNotIn(name, MemberChangeForm().fields)
 
-    def test_user_permissions_is_not_a_form_field(self):
-        form = _admin_change_form(self.member)()
-        self.assertNotIn("user_permissions", form.fields)
-
-    def test_admin_apps_choices_include_registered_admin_apps(self):
-        form = _admin_change_form(self.member)()
-        labels = {value for value, _label in form.fields["admin_apps"].choices}
-        for expected in ("scheduling", "mail", "authn"):
-            self.assertIn(expected, labels)
-
-    def test_admin_app_choices_helper_matches_registry(self):
-        labels = {value for value, _label in admin_app_choices()}
-        registry_labels = {model._meta.app_label for model in admin.site._registry}
-        self.assertEqual(labels, registry_labels)
-
-    def test_admin_app_choice_labels_include_label_in_parens(self):
-        choices = dict(admin_app_choices())
-        # Rendered as "<verbose name> (<label>)" for operator clarity.
-        self.assertIn("(authn)", choices["authn"])
-
-    def test_admin_bound_form_persists_admin_apps(self):
-        FormClass = _admin_change_form(self.member)
-        form = FormClass(
-            data={
-                "first_name": "Form",
-                "last_name": "Field",
-                "is_active": "on",
-                "is_staff": "on",
-                "admin_apps": ["scheduling", "mail"],
-            },
-            instance=self.member,
-        )
-        self.assertTrue(form.is_valid(), form.errors)
-        saved = form.save()
-        saved.refresh_from_db()
-        self.assertEqual(sorted(saved.admin_apps), ["mail", "scheduling"])
-
-    def test_admin_bound_form_rejects_unregistered_app_label(self):
-        FormClass = _admin_change_form(self.member)
-        form = FormClass(
-            data={
-                "first_name": "Form",
-                "last_name": "Field",
-                "is_active": "on",
-                "is_staff": "on",
-                "admin_apps": ["not_a_real_app"],
-            },
-            instance=self.member,
-        )
-        self.assertFalse(form.is_valid())
-        self.assertIn("admin_apps", form.errors)
+    def test_creation_form_exposes_the_same_role(self):
+        form = _admin_form()()
+        self.assertEqual(form.fields["is_staff"].label, "Administrator")
+        self.assertFalse(form.fields["is_staff"].required)
+        for name in LEGACY_PERMISSION_FIELDS:
+            self.assertNotIn(name, form.fields)
 
 
 @override_settings(ROOT_URLCONF="config.urls", ADMIN_REQUIRE_CONFIRMATION=False)
-class MemberAdminChangePageTests(TestCase):
-    """Exercise the real admin change page through the test client.
-
-    ``ADMIN_REQUIRE_CONFIRMATION=False`` skips the confirm-on-save interstitial
-    so the POST commits directly (matching the inline-submit test class), letting
-    us assert persistence of the submitted ``admin_apps`` selection.
-    """
-
+class MemberAdministratorPageTests(TestCase):
     def setUp(self):
         cache.clear()
-        self.superuser = Member.objects.create_superuser(
-            password="StrongPass123!",
-            first_name="Super",
-            last_name="User",
-            is_staff=True,
-            is_active=True,
-        )
-        ContactEmail.objects.create(
-            member=self.superuser,
-            email_address="super@example.com",
-            email_type="primary",
-            verified=True,
+        self.administrator = Member.objects.create_user(
+            password="StrongPass123!", first_name="Admin", last_name="User", is_staff=True
         )
         self.target = Member.objects.create_user(
-            password="StrongPass123!",
-            first_name="Target",
-            last_name="User",
-            is_staff=True,
-            is_active=True,
+            password="StrongPass123!", first_name="Target", last_name="Member"
         )
-        ContactEmail.objects.create(
-            member=self.target,
-            email_address="target@example.com",
-            email_type="primary",
-            verified=True,
-        )
-        self.client.force_login(self.superuser)
+        self.client.force_login(self.administrator)
 
     def tearDown(self):
         cache.clear()
 
     def _change_url(self):
-        return f"/admin/authn/member/{self.target.pk}/change/"
+        return reverse("admin:authn_member_change", args=[self.target.pk])
 
-    def test_change_page_renders_admin_apps_multiselect(self):
-        resp = self.client.get(self._change_url())
-        self.assertEqual(resp.status_code, 200)
-        content = resp.content.decode()
-        # Rendered as named checkbox inputs whose values are app labels.
-        self.assertIn('name="admin_apps"', content)
-        self.assertIn('value="scheduling"', content)
-        self.assertIn('value="mail"', content)
+    def _post_data(self, **overrides):
+        return {
+            "first_name": "Target",
+            "last_name": "Member",
+            "is_active": "on",
+            "contact_emails-TOTAL_FORMS": "0",
+            "contact_emails-INITIAL_FORMS": "0",
+            "contact_emails-MIN_NUM_FORMS": "0",
+            "contact_emails-MAX_NUM_FORMS": "1000",
+            "_save": "Save",
+            **overrides,
+        }
 
-    def test_change_page_omits_user_permissions(self):
-        resp = self.client.get(self._change_url())
-        self.assertEqual(resp.status_code, 200)
-        content = resp.content.decode()
-        self.assertNotIn('name="user_permissions"', content)
-        self.assertNotIn('id="id_user_permissions"', content)
+    def test_add_and_change_pages_have_no_separate_permission_controls(self):
+        for url in (self._change_url(), reverse("admin:authn_member_add")):
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, 'name="is_staff"')
+                self.assertContains(response, "Administrator")
+                for name in LEGACY_PERMISSION_FIELDS:
+                    self.assertNotContains(response, f'name="{name}"')
 
-    def test_post_persists_selected_admin_apps(self):
-        data = self._build_post_data({"admin_apps": ["mail", "scheduling"]})
-        resp = self.client.post(self._change_url(), data)
-        # 302 = a successful save+redirect; a 200 would mean the form re-rendered
-        # with errors and never committed, so assert the redirect explicitly.
-        self.assertEqual(resp.status_code, 302, resp.content.decode())
+    def test_administrator_can_promote_member_to_full_backend_access(self):
+        response = self.client.post(self._change_url(), self._post_data(is_staff="on"))
+        self.assertEqual(response.status_code, 302, response.content.decode())
         self.target.refresh_from_db()
-        self.assertEqual(sorted(self.target.admin_apps), ["mail", "scheduling"])
-
-    def test_post_clearing_admin_apps_persists_empty_list(self):
-        self.target.admin_apps = ["scheduling"]
-        self.target.save(update_fields=["admin_apps"])
-        # Omit admin_apps entirely -> the not-required multi-select clears to [].
-        data = self._build_post_data()
-        data.pop("admin_apps", None)
-        resp = self.client.post(self._change_url(), data)
-        self.assertEqual(resp.status_code, 302, resp.content.decode())
-        self.target.refresh_from_db()
+        self.assertTrue(self.target.is_staff)
+        self.assertTrue(self.target.is_superuser)
         self.assertEqual(self.target.admin_apps, [])
 
-    def _build_post_data(self, overrides=None):
-        """Scrape the change page's form inputs into a POST-ready dict.
+        promoted_client = Client()
+        promoted_client.force_login(self.target)
+        self.assertEqual(promoted_client.get("/admin/scheduling/event/").status_code, 200)
+        self.assertEqual(promoted_client.get("/admin/core/awscredentialconfig/").status_code, 200)
 
-        Mirrors the helper in test_member_admin_inlines so the round-trip
-        submits a complete, valid Member change form.
-        """
-        resp = self.client.get(self._change_url())
-        self.assertEqual(resp.status_code, 200)
+    def test_administrator_can_demote_another_administrator(self):
+        self.target.is_staff = True
+        self.target.save(update_fields=["is_staff"])
+        demoted_client = Client()
+        demoted_client.force_login(self.target)
 
-        fields: dict[str, str] = {}
-        textarea_name: str | None = None
-        select_name: str | None = None
-        selected_value: str | None = None
+        response = self.client.post(self._change_url(), self._post_data())
+        self.assertEqual(response.status_code, 302, response.content.decode())
+        self.target.refresh_from_db()
+        self.assertFalse(self.target.is_staff)
+        self.assertFalse(self.target.is_superuser)
+        self.assertEqual(demoted_client.get("/admin/authn/member/").status_code, 302)
 
-        class _FormParser(HTMLParser):
-            def handle_starttag(self, tag, attrs):
-                nonlocal textarea_name, select_name, selected_value
-                attr = dict(attrs)
-                name = attr.get("name")
-                if tag == "input" and name:
-                    if attr.get("type") == "checkbox":
-                        if "checked" in attr:
-                            fields[name] = attr.get("value", "on")
-                    else:
-                        fields.setdefault(name, attr.get("value", ""))
-                elif tag == "textarea" and name:
-                    textarea_name = name
-                elif tag == "select" and name:
-                    select_name = name
-                elif tag == "option" and select_name and "selected" in attr:
-                    selected_value = attr.get("value", "")
+    def test_administrator_can_create_another_administrator(self):
+        response = self.client.post(
+            reverse("admin:authn_member_add"),
+            self._post_data(first_name="New", is_staff="on", password1="", password2=""),
+        )
+        self.assertEqual(response.status_code, 302, response.content.decode())
+        created = Member.objects.get(first_name="New")
+        self.assertTrue(created.is_staff)
+        self.assertTrue(created.is_superuser)
 
-            def handle_data(self, data):
-                nonlocal textarea_name
-                if textarea_name:
-                    fields.setdefault(textarea_name, data.strip())
+    def test_legacy_fields_cannot_override_administrator_toggle(self):
+        self.target.admin_apps = ["mail"]
+        self.target.save(update_fields=["admin_apps"])
+        response = self.client.post(
+            self._change_url(),
+            self._post_data(is_superuser="on", admin_apps=["scheduling"]),
+        )
+        self.assertEqual(response.status_code, 302, response.content.decode())
+        self.target.refresh_from_db()
+        self.assertFalse(self.target.is_staff)
+        self.assertFalse(self.target.is_superuser)
+        self.assertEqual(self.target.admin_apps, ["mail"])
 
-            def handle_endtag(self, tag):
-                nonlocal textarea_name, select_name, selected_value
-                if tag == "textarea":
-                    textarea_name = None
-                elif tag == "select" and select_name:
-                    if selected_value is not None:
-                        fields.setdefault(select_name, selected_value)
-                    select_name = None
-                    selected_value = None
-
-        parser = _FormParser()
-        parser.feed(resp.content.decode())
-
-        # No inline rows for this round-trip.
-        for prefix in ("contact_emails",):
-            fields.setdefault(f"{prefix}-TOTAL_FORMS", "0")
-            fields.setdefault(f"{prefix}-INITIAL_FORMS", "0")
-            fields.setdefault(f"{prefix}-MIN_NUM_FORMS", "0")
-            fields.setdefault(f"{prefix}-MAX_NUM_FORMS", "1000")
-
-        if overrides:
-            fields.update(overrides)
-
-        fields.pop("_addanother", None)
-        fields.pop("_continue", None)
-        fields["_save"] = "Save"
-        return fields
+    def test_regular_member_cannot_promote_self(self):
+        self.client.force_login(self.target)
+        response = self.client.post(self._change_url(), self._post_data(is_staff="on"))
+        self.assertEqual(response.status_code, 302)
+        self.target.refresh_from_db()
+        self.assertFalse(self.target.is_staff)
+        self.assertFalse(self.target.is_superuser)
