@@ -388,7 +388,9 @@ are recomputed on the next read.
 
 On the meeting-time calendar, blocked times are hatched, show no percentage, and cannot be picked.
 An open slot whose meeting window would run into a blocked time shows its percentage but cannot
-start a meeting.
+start a meeting. Until at least one response is counted the calendar is not shaded at all (a wall of
+0% would read as "nobody is free" when nobody has answered), and says so under the calendar; any
+window can still be picked, and its summary says that no responses have been counted yet.
 
 **Finalize** fixes one continuous meeting time, emails an iCalendar invitation to participants, and
 offers the calendar file for download. As soon as a window is picked, Finalize counts who could

@@ -5,6 +5,7 @@ import {
   cellMetrics,
   cellState,
   confirmedBlock,
+  countsNobody,
   daysBetween,
   defaultView,
   formatDate,
@@ -1084,6 +1085,28 @@ describe("cellMetrics and windowMetrics", () => {
       unweighted: null,
     });
     expect(windowMetrics(perSlotResults, "inperson", null)).toEqual({
+      weighted: null,
+      unweighted: null,
+    });
+  });
+
+  test("reads a snapshot that counts nobody as having no shares at all", () => {
+    // Its stored shares are all 0, but nobody has answered: that is not "0% free".
+    const nobody = {
+      countedResponseTotal: 0,
+      channels: { inperson: { weighted: [0, 0], unweighted: [0, 0] } },
+    };
+    expect(countsNobody(nobody)).toBe(true);
+    expect(countsNobody({ ...nobody, countedResponseTotal: 1 })).toBe(false);
+    // Nothing says how many were counted (an older snapshot), or nothing loaded.
+    expect(countsNobody({ channels: nobody.channels })).toBe(false);
+    expect(countsNobody({ ...nobody, countedResponseTotal: "0" })).toBe(false);
+    expect(countsNobody(null)).toBe(false);
+    expect(cellMetrics(nobody, "inperson", 0)).toEqual({
+      weighted: null,
+      unweighted: null,
+    });
+    expect(windowMetrics(nobody, "inperson", [0, 1])).toEqual({
       weighted: null,
       unweighted: null,
     });

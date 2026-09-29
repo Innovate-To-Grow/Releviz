@@ -1442,6 +1442,61 @@ describe("MeetingCalendar", () => {
     );
   });
 
+  test("shades nothing while a snapshot counts nobody, and stays pickable", async () => {
+    // Every share of an empty snapshot is stored as 0: painted, it would read
+    // as "nobody is free" when nobody has answered.
+    const nobody = {
+      ...results,
+      countedResponseTotal: 0,
+      channels: {
+        inperson: { weighted: Array(8).fill(0), unweighted: Array(8).fill(0) },
+      },
+      recommendations: [],
+    };
+    const { onSelect } = renderCalendar({ results: nobody });
+
+    expect(document.querySelector(".meeting-calendar__note")).toHaveTextContent(
+      /^No responses are counted yet, so nothing is shaded\. Shading appears as people submit their schedules\. You can already pick any window\.$/,
+    );
+    document.querySelectorAll("[data-cell-idx]").forEach((element) => {
+      expect(element.style.backgroundColor).toBe("");
+      expect(
+        element.querySelector(".meeting-calendar__cell-value"),
+      ).toHaveTextContent("");
+      expect(element).toHaveClass("meeting-calendar__cell--neutral");
+    });
+    expect(cell(0)).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("No responses counted yet."),
+    );
+    expect(cell(0)).not.toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("Weighted"),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Next week" }));
+    await userEvent.click(cell(4));
+
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "inperson",
+        slotIndices: [4, 5],
+        metrics: { exact: false, weighted: null, unweighted: null },
+      }),
+    );
+  });
+
+  test("keeps the snapshot's own shading once anyone is counted", () => {
+    renderCalendar({ results: { ...results, countedResponseTotal: 1 } });
+
+    expect(document.querySelector(".meeting-calendar__note")).toBeNull();
+    expect(cell(0)).not.toHaveClass("meeting-calendar__cell--neutral");
+    expect(cell(0)).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("of 1 responses"),
+    );
+  });
+
   test("renders legacy date groups and keeps their instants", async () => {
     const { onSelect } = renderCalendar({
       event: legacyEvent,

@@ -421,7 +421,19 @@ function finiteOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+/**
+ * A snapshot that counts nobody stores every share as 0, which would read as
+ * "nobody is free" when it means "nobody has answered".
+ */
+export function countsNobody(results) {
+  return (
+    Number.isFinite(results?.countedResponseTotal) &&
+    results.countedResponseTotal === 0
+  );
+}
+
 export function cellMetrics(results, channel, index) {
+  if (countsNobody(results)) return { weighted: null, unweighted: null };
   const channelResults = results?.channels?.[channel];
   return {
     weighted: finiteOrNull(channelResults?.weighted?.[index]),
