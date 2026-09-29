@@ -22,6 +22,11 @@ on the home page:
 - **Access**: Invite only (default) or Open link
 - **Participants start as**: Available (default; people mark the times that do not work) or Busy
   (people mark the times that work)
+- **Response Deadline**: optional, entered in the event's timezone. People can't respond after it;
+  without one, responses stay open until you close them
+
+**Advanced options** (folded away) holds the slot length and the automatic reminder emails, which
+go out before the response deadline and so only apply to an event that has one.
 
 New events are active immediately and accept responses as soon as participants join. Creating an
 event does not send any email.
@@ -60,8 +65,8 @@ the counts line then reads **Showing n of N people**.
 
 Once an active event's response deadline has passed, a banner says so: people can't be added,
 invited, or changed, and your own schedule is locked, but you can still enter schedules for the
-people you answer for. **Change deadline** opens the event settings in the Overview with **Advanced
-options** expanded and the **Response Deadline** field ready to edit.
+people you answer for. **Change deadline** opens the event settings in the Overview with the
+**Response Deadline** field ready to edit.
 
 ### Add people
 
@@ -311,10 +316,10 @@ page says which in plain words, next to the buttons that change it:
 Closing and archiving ask for confirmation first and say what they do; nobody is emailed about
 either. The **Archive** button on the account dashboard asks the same question. When an active
 event's response deadline passes, the line says people can no longer respond and offers **Change
-deadline**, which opens the event settings in the Overview with **Advanced options** expanded and
-the **Response Deadline** field ready to edit; the same button is on the Participants banner. An
-active event needs a deadline in the future or none, so reactivating an event whose deadline has
-passed removes it, says so, and offers **Set a new deadline**.
+deadline**, which opens the event settings in the Overview with the **Response Deadline** field
+ready to edit; the same button is on the Participants banner. An active event needs a deadline in
+the future or none, so reactivating an event whose deadline has passed removes it, says so, and
+offers **Set a new deadline**.
 
 ### Editing the event
 

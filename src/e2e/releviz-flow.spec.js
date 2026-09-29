@@ -1824,10 +1824,15 @@ test.describe("Releviz account and scheduling flow", () => {
       "busy",
     );
     await page.getByLabel("Meeting Duration").fill("60");
-    await expandAdvancedOptions(page);
+    // The deadline is a main setting: filling it needs no Advanced options.
     await page
       .getByLabel("Response Deadline")
       .fill(datetimeLocalHoursFromNow(48));
+    // Reminders are counted back from it and stay folded away until asked for.
+    await expandAdvancedOptions(page);
+    await expect(
+      page.getByLabel("Reminder Hours Before Deadline"),
+    ).toBeVisible();
     await page.getByRole("button", { name: "Create Event" }).click();
     await page.waitForURL(/\/event\?code=/);
     const eventCode = new URL(page.url()).searchParams.get("code");
@@ -3260,8 +3265,8 @@ assert Event.objects.filter(code="${eventCode}").update(response_deadline=past) 
       .filter({ hasText: "The response deadline (" });
     await expect(banner).toContainText(/\(.*UTC\) has passed/);
 
-    // Either notice opens the settings with the deadline field ready, even
-    // though it sits under Advanced options.
+    // Either notice opens the settings with the deadline field ready to type
+    // in; the deadline is a main setting, so Advanced options stay folded.
     const deadline = page.getByLabel("Response Deadline");
     await expect(deadline).toHaveCount(0);
     await banner.getByRole("button", { name: "Change deadline" }).click();
@@ -3269,6 +3274,9 @@ assert Event.objects.filter(code="${eventCode}").update(response_deadline=past) 
     await expect(
       page.getByText("Uses the event timezone (UTC)."),
     ).toBeVisible();
+    await expect(
+      page.locator("details").filter({ hasText: "Advanced options" }),
+    ).not.toHaveAttribute("open", "");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(deadline).toHaveCount(0);
     await lifecycle.getByRole("button", { name: "Change deadline" }).click();

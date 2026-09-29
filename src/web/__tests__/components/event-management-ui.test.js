@@ -596,7 +596,7 @@ describe("organizer event management UI", () => {
     expect(replace).not.toHaveBeenCalled();
   });
 
-  test("a request for the deadline opens Advanced options and focuses the field", async () => {
+  test("a request for the deadline focuses the field, which is not behind Advanced options", () => {
     const quiet = render(
       <CreateEvent
         operation="edit"
@@ -604,10 +604,14 @@ describe("organizer event management UI", () => {
         initialEvent={baseEvent}
       />,
     );
-    // Without a request the inline editor keeps the rarely used settings folded.
-    expect(
-      screen.getByText("Advanced options").closest("details"),
-    ).not.toHaveAttribute("open");
+    // The deadline is one of the main settings, so it is on screen without a
+    // request while the rarely used ones stay folded.
+    const advanced = screen.getByText("Advanced options").closest("details");
+    expect(advanced).not.toHaveAttribute("open");
+    expect(advanced).not.toContainElement(
+      screen.getByLabelText("Response Deadline"),
+    );
+    expect(screen.getByLabelText("Response Deadline")).toBeVisible();
     expect(screen.getByLabelText("Response Deadline")).not.toHaveFocus();
     quiet.unmount();
 
@@ -619,20 +623,17 @@ describe("organizer event management UI", () => {
         focusRequest={{ field: "deadline" }}
       />,
     );
-    const advanced = screen.getByText("Advanced options").closest("details");
-    expect(advanced).toHaveAttribute("open");
+    const folded = screen.getByText("Advanced options").closest("details");
+    expect(folded).not.toHaveAttribute("open");
     expect(screen.getByLabelText("Response Deadline")).toHaveFocus();
-    // The picker shows the organizer's clock, so say whose clock it means.
-    expect(
-      screen.getByText("Uses the event timezone (UTC)."),
-    ).toBeInTheDocument();
+    // Optional, what it does, and whose clock the picker shows.
     expect(
       screen.getByLabelText("Response Deadline"),
-    ).toHaveAccessibleDescription("Uses the event timezone (UTC).");
+    ).toHaveAccessibleDescription(
+      "Optional. People can't respond after this time; without one, responses stay open until you close them. Uses the event timezone (UTC).",
+    );
 
-    // Folded again by hand, a fresh request opens it once more.
-    await userEvent.click(screen.getByText("Advanced options"));
-    await waitFor(() => expect(advanced).not.toHaveAttribute("open"));
+    // A fresh request moves the keyboard there again.
     screen.getByLabelText("Response Deadline").blur();
     view.rerender(
       <CreateEvent
@@ -642,12 +643,10 @@ describe("organizer event management UI", () => {
         focusRequest={{ field: "deadline" }}
       />,
     );
-    await waitFor(() => expect(advanced).toHaveAttribute("open"));
     expect(screen.getByLabelText("Response Deadline")).toHaveFocus();
 
-    // A request for anything else leaves the form as it is.
-    await userEvent.click(screen.getByText("Advanced options"));
-    await waitFor(() => expect(advanced).not.toHaveAttribute("open"));
+    // A request for anything else leaves the keyboard where it is.
+    screen.getByLabelText("Response Deadline").blur();
     view.rerender(
       <CreateEvent
         operation="edit"
@@ -656,7 +655,8 @@ describe("organizer event management UI", () => {
         focusRequest={{ field: "name" }}
       />,
     );
-    expect(advanced).not.toHaveAttribute("open");
+    expect(screen.getByLabelText("Response Deadline")).not.toHaveFocus();
+    expect(folded).not.toHaveAttribute("open");
   });
 
   test("edit form exposes conflicts, load errors, and authentication recovery", async () => {
@@ -756,6 +756,16 @@ describe("organizer event management UI", () => {
     expect(advancedOptions).not.toContainElement(accessField);
     expect(advancedOptions).not.toContainElement(startingField);
 
+    // The deadline decides when people stop being able to respond, so it sits
+    // with who can join rather than behind Advanced options.
+    const deadlineField = screen.getByLabelText("Response Deadline");
+    expect(deadlineField).toBeVisible();
+    expect(deadlineField).toHaveValue("");
+    expect(advancedOptions).not.toContainElement(deadlineField);
+    expect(deadlineField).toHaveAccessibleDescription(
+      `Optional. People can't respond after this time; without one, responses stay open until you close them. Uses the event timezone (${timezoneField.value}).`,
+    );
+
     expect(advancedOptions).toContainElement(
       screen.getByLabelText("Slot Duration"),
     );
@@ -763,11 +773,11 @@ describe("organizer event management UI", () => {
     // visibility setting to expose.
     expect(screen.queryByLabelText("Participant View")).not.toBeInTheDocument();
     expect(advancedOptions).toContainElement(
-      screen.getByLabelText("Response Deadline"),
-    );
-    expect(advancedOptions).toContainElement(
       screen.getByLabelText("Reminder Hours Before Deadline"),
     );
+    expect(
+      screen.getByText(/Automatic reminders go out before the response/),
+    ).toBeInTheDocument();
     await userEvent.click(screen.getByText("Advanced options"));
     expect(advancedOptions).toHaveAttribute("open");
     expect(

@@ -37,6 +37,9 @@ const ERROR_FIELD_ORDER = [
 
 const ADVANCED_ERROR_FIELDS = new Set(["reminderHours"]);
 
+const DEADLINE_HELP =
+  "Optional. People can't respond after this time; without one, responses stay open until you close them.";
+
 const FALLBACK_TIMEZONES = [
   "UTC",
   "Africa/Cairo",
@@ -225,15 +228,7 @@ function CreateEvent({
   const [resetParticipantCount, setResetParticipantCount] = useState(0);
   const [resetConfirmed, setResetConfirmed] = useState(false);
   const [conflictEvent, setConflictEvent] = useState(null);
-  const [advancedOpen, setAdvancedOpen] = useState(
-    (editing && !inline) || focusRequest?.field === "deadline",
-  );
-  const [seenFocusRequest, setSeenFocusRequest] = useState(focusRequest);
-  if (focusRequest !== seenFocusRequest) {
-    // The deadline sits under Advanced options: a new request for it opens them.
-    setSeenFocusRequest(focusRequest);
-    if (focusRequest?.field === "deadline") setAdvancedOpen(true);
-  }
+  const [advancedOpen, setAdvancedOpen] = useState(editing && !inline);
   const timezoneOptions = useMemo(
     () => getTimezoneOptions(eventTimezone),
     [eventTimezone],
@@ -824,8 +819,8 @@ function CreateEvent({
               Meeting &amp; access
             </SectionHeading>
             <p>
-              Choose how the group meets, the event timezone and length, and who
-              can join.
+              Choose how the group meets, the event timezone and length, who can
+              join, and when responses close.
             </p>
           </div>
         </div>
@@ -983,6 +978,24 @@ function CreateEvent({
               <option value="busy">Busy (they mark the times that work)</option>
             </select>
           </FormField>
+
+          <FormField
+            id="response-deadline"
+            label="Response Deadline"
+            help={
+              eventTimezone.trim()
+                ? `${DEADLINE_HELP} Uses the event timezone (${eventTimezone.trim()}).`
+                : DEADLINE_HELP
+            }
+          >
+            <input
+              className="form-control"
+              aria-label="Response Deadline"
+              type="datetime-local"
+              value={responseDeadline}
+              onChange={(event) => setResponseDeadline(event.target.value)}
+            />
+          </FormField>
         </div>
       </section>
 
@@ -1001,8 +1014,7 @@ function CreateEvent({
                 Advanced options
               </SectionHeading>
               <p className="mb-0">
-                Fine-tune slot granularity, participant visibility, deadlines,
-                and reminders.
+                Fine-tune the slot length and the reminder emails.
               </p>
             </div>
           </div>
@@ -1022,8 +1034,8 @@ function CreateEvent({
                   Fine tuning
                 </AdvancedHeading>
                 <p>
-                  Adjust availability granularity, schedule visibility, and
-                  reminder timing when the defaults are not enough.
+                  Adjust the availability grid and the automatic reminders when
+                  the defaults are not enough.
                 </p>
               </div>
             </div>
@@ -1049,25 +1061,6 @@ function CreateEvent({
               </p>
 
               <div className="form-row-2">
-                <FormField
-                  id="response-deadline"
-                  label="Response Deadline"
-                  help={
-                    eventTimezone.trim()
-                      ? `Uses the event timezone (${eventTimezone.trim()}).`
-                      : null
-                  }
-                >
-                  <input
-                    className="form-control"
-                    aria-label="Response Deadline"
-                    type="datetime-local"
-                    value={responseDeadline}
-                    onChange={(event) =>
-                      setResponseDeadline(event.target.value)
-                    }
-                  />
-                </FormField>
                 <FormField
                   id="reminder-hours"
                   label="Reminder Hours Before Deadline"
@@ -1121,6 +1114,10 @@ function CreateEvent({
                   Send reminder emails before the deadline
                 </label>
               </div>
+              <p className="form-text mb-0">
+                Automatic reminders go out before the response deadline, so they
+                only apply once one is set.
+              </p>
             </div>
           </section>
         </div>
