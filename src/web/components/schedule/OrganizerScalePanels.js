@@ -56,6 +56,7 @@ import {
   normalizeSlotGroups,
   rankedRecommendations,
   recommendationForWindow,
+  recommendationMetrics,
   selectionFromRecommendation,
   selectionFromWindow,
   selectionKey,
@@ -1130,6 +1131,7 @@ function recommendedTimesIntro({ basis, count, meetingMinutes, mixed }) {
     return `The calendar outlines every recommended time. ${pointer}`;
   const sentences = [
     `We recommend times someone can attend for the whole ${meetingMinutes} minutes, at least half as available as the best, never overlapping${mixed ? " in the same format" : ""}.`,
+    `Shares count each person for the whole ${meetingMinutes} minutes, so they can be lower than the calendar's per-slot shading.`,
   ];
   const total = qualifyingTotal(basis, count);
   if (basis.listEnd === "limit")
@@ -1428,9 +1430,10 @@ function useStartableDays(event, now) {
 }
 
 // One open time as a chip: its start (the chip's visible name), its full
-// local times, the lowest slot's weighted share (an upper bound, as in
-// Finalize), its rank when the same time is also recommended, and whether
-// it is the current pick.
+// local times, its weighted share, its rank when the same time is also
+// recommended, and whether it is the current pick. A recommended time has
+// its exact share, the one its chip in Recommended times prints; any other
+// has its lowest slot's, an upper bound (as in Finalize).
 function otherTimeEntries({
   day,
   k,
@@ -1441,12 +1444,17 @@ function otherTimeEntries({
 }) {
   return day.rows.map((row, index) => {
     const window = windowAt(day.column, row, k);
-    const share = windowMetrics(results, channel, window.slotIndices).weighted;
     const recommendation = recommendationForWindow(
       recommendations,
       channel,
       window,
     );
+    const { exact, weighted: share } = recommendation
+      ? recommendationMetrics(recommendation)
+      : {
+          exact: false,
+          ...windowMetrics(results, channel, window.slotIndices),
+        };
     const times = formatWindowTimes(day.column.slots.slice(row, row + k));
     const [start, end] = times.split("–");
     return {
@@ -1458,7 +1466,11 @@ function otherTimeEntries({
       start,
       end,
       share:
-        share == null ? null : share > 0 ? `up to ${shareOf(share)}%` : "0%",
+        share == null
+          ? null
+          : share > 0
+            ? `${exact ? "" : "up to "}${shareOf(share)}%`
+            : "0%",
       chipShare: share == null ? null : share > 0 ? shareOf(share) : "0",
       rank: recommendation?.rank ?? null,
       selected:
@@ -1797,8 +1809,9 @@ function OtherTimesSection({
             ? `Any open time in the next ${OTHER_TIMES_WEEKS} weeks, recommended or not (the calendar reaches further).`
             : "Any open time the calendar lets you pick, recommended or not."}{" "}
           Choose a day, then click a start time: each starts a {meetingMinutes}
-          -minute meeting. Shares are weighted, from each time&apos;s lowest
-          slot; times are in {timeZone}.
+          -minute meeting. Recommended times show their exact weighted share;
+          any other shows up to its lowest slot&apos;s, since people must be
+          free for all of it. Times are in {timeZone}.
         </p>
         {(mixed || groups.length > 1) && (
           <div className="other-times__controls">

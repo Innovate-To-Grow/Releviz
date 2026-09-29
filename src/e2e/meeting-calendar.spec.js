@@ -380,7 +380,7 @@ test.describe("Organizer meeting-time calendar", () => {
     const monday10 = cellAt(grid, 2, 0);
     await expect(monday10).toHaveAttribute(
       "aria-label",
-      /Weighted 100%, unweighted 100% of 4 responses/,
+      /Free in this slot: weighted 100%, unweighted 100% of 4 responses/,
     );
     await expect(monday10).toHaveAttribute(
       "aria-label",
@@ -389,7 +389,7 @@ test.describe("Organizer meeting-time calendar", () => {
     const thursday9 = cellAt(grid, 0, 3);
     await expect(thursday9).toHaveAttribute(
       "aria-label",
-      /Weighted 43%, unweighted 50% of 4 responses/,
+      /Free in this slot: weighted 43%, unweighted 50% of 4 responses/,
     );
     await expect(thursday9.locator(".meeting-calendar__cell-value")).toHaveText(
       "43%",
@@ -411,7 +411,7 @@ test.describe("Organizer meeting-time calendar", () => {
       "50%",
     );
     await expect(
-      page.getByText("0% → 100% of responses free (unweighted)"),
+      page.getByText("0% → 100% of responses free in a slot (unweighted)"),
     ).toBeVisible();
     await weightedButton.click();
     await expect(thursday9.locator(".meeting-calendar__cell-value")).toHaveText(
@@ -798,7 +798,7 @@ test.describe("Organizer meeting-time calendar", () => {
     );
     await expect(cellAt(grid, 0, 0)).toHaveAttribute(
       "aria-label",
-      /Weighted 100%, unweighted 100% of 3 responses/,
+      /Free in this slot: weighted 100%, unweighted 100% of 3 responses/,
     );
 
     await virtual.click();
@@ -820,7 +820,7 @@ test.describe("Organizer meeting-time calendar", () => {
     // person), so it is shaded but not ranked.
     await expect(cellAt(grid, 0, 0)).toHaveAttribute(
       "aria-label",
-      /Weighted 33%, unweighted 33% of 3 responses/,
+      /Free in this slot: weighted 33%, unweighted 33% of 3 responses/,
     );
     await expect(cellAt(grid, 0, 0)).not.toHaveAttribute(
       "aria-label",
@@ -833,7 +833,7 @@ test.describe("Organizer meeting-time calendar", () => {
     ).toBeVisible();
     await expect(cellAt(grid, 0, 0)).toHaveAttribute(
       "aria-label",
-      /Weighted 0%, unweighted 0% of 3 responses/,
+      /Free in this slot: weighted 0%, unweighted 0% of 3 responses/,
     );
     await expect(
       page.getByRole("button", { name: "Previous dates" }),
@@ -848,7 +848,7 @@ test.describe("Organizer meeting-time calendar", () => {
     const lastDay10 = cellAt(grid, 2, 1);
     await expect(lastDay10).toHaveAttribute(
       "aria-label",
-      /Weighted 67%, unweighted 67% of 3 responses.*Inside recommended time #2/,
+      /Free in this slot: weighted 67%, unweighted 67% of 3 responses.*Inside recommended time #2/,
     );
     await lastDay10.click();
     const candidate = page.locator(".final-candidate");
@@ -980,7 +980,7 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(monday930).not.toHaveAttribute("data-blocked-slot");
     await expect(monday930).toHaveAttribute(
       "aria-label",
-      /Weighted 0%, unweighted 0% of 3 responses.*would overlap a blocked time/,
+      /Free in this slot: weighted 0%, unweighted 0% of 3 responses.*would overlap a blocked time/,
     );
     await expect(cellAt(grid, 0, 0)).toHaveAttribute("data-state", "startable");
 
@@ -993,7 +993,7 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(tuesday11).toHaveAttribute("data-state", "startable");
     await expect(tuesday11).toHaveAttribute(
       "aria-label",
-      /Weighted 67%, unweighted 67% of 3 responses.*Inside recommended time #1/,
+      /Free in this slot: weighted 67%, unweighted 67% of 3 responses.*Inside recommended time #1/,
     );
     await expect(monday10).not.toHaveAttribute(
       "aria-label",

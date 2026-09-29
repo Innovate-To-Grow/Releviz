@@ -480,7 +480,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
             ? "No availability snapshot yet."
             : nobodyCounted
               ? "No responses counted yet."
-              : `Weighted ${weightedPercent ?? 0}%, unweighted ${unweightedPercent ?? 0}%${
+              : `Free in this slot: weighted ${weightedPercent ?? 0}%, unweighted ${unweightedPercent ?? 0}%${
                   Number.isFinite(counted) ? ` of ${counted} responses` : ""
                 }.`;
         const rank = blockRankByIndex.get(slot.index);
@@ -1287,7 +1287,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
                 className="meeting-calendar__legend-gradient"
                 aria-hidden="true"
               />
-              <span>0% → 100% of responses free ({metric})</span>
+              <span>0% → 100% of responses free in a slot ({metric})</span>
             </li>
             {showRankedWindows && (
               <li className="meeting-calendar__legend-item">

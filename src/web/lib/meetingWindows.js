@@ -490,7 +490,7 @@ export function formatDateLabel(iso, timeZone) {
 
 // --- selections -------------------------------------------------------------
 
-function recommendationMetrics(recommendation) {
+export function recommendationMetrics(recommendation) {
   return {
     exact: true,
     weighted: finiteOrNull(

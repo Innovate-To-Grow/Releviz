@@ -3714,6 +3714,8 @@ async function renderRanking(recommendations, basis) {
 
 const RANKING_RULE =
   "We recommend times someone can attend for the whole 60 minutes, at least half as available as the best, never overlapping in the same format.";
+const RANKING_SHARES =
+  "Shares count each person for the whole 60 minutes, so they can be lower than the calendar's per-slot shading.";
 const RANKING_POINTER =
   "Point at one to find it on the calendar; click one to select it.";
 
@@ -3774,7 +3776,7 @@ test.each([
   async (_case, recommendations, basis, reason) => {
     const { rail, intro } = await renderRanking(recommendations, basis);
     expect(intro).toHaveTextContent(
-      `${RANKING_RULE} ${reason} ${RANKING_POINTER}`,
+      `${RANKING_RULE} ${RANKING_SHARES} ${reason} ${RANKING_POINTER}`,
       { normalizeWhitespace: true },
     );
     expect(
@@ -5031,7 +5033,7 @@ test("Other times picks any open time with one click, like Recommended times", a
 
     await openOtherTimes();
     expect(other).toHaveTextContent(
-      "Any open time the calendar lets you pick, recommended or not. Choose a day, then click a start time: each starts a 60-minute meeting. Shares are weighted, from each time's lowest slot; times are in UTC.",
+      "Any open time the calendar lets you pick, recommended or not. Choose a day, then click a start time: each starts a 60-minute meeting. Recommended times show their exact weighted share; any other shows up to its lowest slot's, since people must be free for all of it. Times are in UTC.",
     );
     // One date: no week stepper, one day, already open.
     expect(
@@ -5043,8 +5045,8 @@ test("Other times picks any open time with one click, like Recommended times", a
     expect(days).toHaveLength(1);
     expect(days[0]).toHaveAttribute("aria-pressed", "true");
 
-    // Every start the calendar would accept, as chips: times, the lowest
-    // slot's share, and the rank when it is also recommended.
+    // Every start the calendar would accept, as chips: times, the weighted
+    // share, and the rank when it is also recommended.
     const list = within(other).getByRole("list", {
       name: /^Start times on /,
     });
@@ -5072,7 +5074,7 @@ test("Other times picks any open time with one click, like Recommended times", a
     expect(chips.map((chip) => chip.tabIndex)).toEqual([0, -1, -1]);
     const detail = () => other.querySelector(".ranked-chips__detail");
     expect(detail()).toHaveTextContent(
-      /09:00–10:00 · up to 50% weighted · recommended #2$/,
+      /09:00–10:00 · 50% weighted · recommended #2$/,
     );
     await userEvent.hover(chips[2]);
     expect(detail()).toHaveTextContent(/10:00–11:00 · up to 40% weighted$/);
@@ -5123,6 +5125,56 @@ test("Other times picks any open time with one click, like Recommended times", a
     expect(
       within(rail).getByRole("button", { name: /selected time/ }),
     ).toHaveTextContent("#2");
+  } finally {
+    nowSpy.mockRestore();
+  }
+});
+
+test("Other times shows a recommended time's exact share and the rest at most their lowest slot's", async () => {
+  const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
+  try {
+    // Every slot of 09:00–10:00 is at least half free, yet only 45% of the
+    // group (weighted) can attend all of it.
+    fetchEventResults.mockResolvedValue({
+      status: "fresh",
+      requestedRevision: 7,
+      computedRevision: 7,
+      results: {
+        countedResponseTotal: 3,
+        channels: {
+          inperson: {
+            weighted: [0.5, 0.9, 0.9, 0.4],
+            unweighted: [0.4, 0.8, 0.8, 0.3],
+          },
+        },
+        recommendations: [
+          { ...datedRanked, weightedAvailability: 0.7 },
+          { ...datedRunnerUp, weightedAvailability: 0.45 },
+        ],
+      },
+    });
+    render(<PickingTimeTable {...timeTableProps(datedEvent)} />);
+    await resultsAreCurrent(7);
+    const other = await openOtherTimes();
+    const chips = otherChips(other);
+    expect(
+      textsOf(chips.map((chip) => chip.querySelector(".ranked-chip__share"))),
+    ).toEqual(["45% weighted", "70% weighted", "40% weighted"]);
+    expect(chips[0]).toHaveAccessibleName(
+      /^09:00\s*–10:00 45% weighted\s*, Thu, Aug 20, recommended #2, select this time$/,
+    );
+    const detail = () => other.querySelector(".ranked-chips__detail");
+    expect(detail()).toHaveTextContent(
+      /09:00–10:00 · 45% weighted · recommended #2$/,
+    );
+    await userEvent.hover(chips[2]);
+    expect(detail()).toHaveTextContent(/10:00–11:00 · up to 40% weighted$/);
+    // The chip under Recommended times prints the same figure.
+    const rail = document.getElementById("organizer-recommended-times");
+    expect(textsOf([...rail.querySelectorAll(".ranked-chip__share")])).toEqual([
+      "70% weighted",
+      "45% weighted",
+    ]);
   } finally {
     nowSpy.mockRestore();
   }

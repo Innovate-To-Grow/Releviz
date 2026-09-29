@@ -386,11 +386,14 @@ The Time Table shows the meeting-time calendar, with two collapsible steps under
 default: **Blocked times** (see above) and **Finalize**. Picking a time on the calendar opens
 Finalize. Inside Finalize:
 
-- **Recommended times** lists the recommended windows of the meeting's length as chips. The calendar
-  outlines them only while the list is open, and pointing at a chip highlights its time.
+- **Recommended times** lists the recommended windows of the meeting's length as chips, each with
+  the weighted share of the group who could attend all of it. The calendar outlines them only while
+  the list is open, and pointing at a chip highlights its time.
 - **Other times** picks any open time, recommended or not: choose a day (weekly events offer the
-  next four weeks, a week at a time), then click one of its start times, shown with the lowest
-  slot's share and the rank when the time is also recommended.
+  next four weeks, a week at a time), then click one of its start times, shown with its weighted
+  share and the rank when the time is also recommended. A recommended time shows its exact share,
+  the one on its chip under Recommended times; any other time shows up to its lowest slot's share,
+  since the share who can attend all of it can only be lower.
 
 While either list is open and in view, the calendar stays pinned under the section nav (on screens
 with room for it, with a shorter grid; scrolled past the lists, it goes with the page). Opening
@@ -410,7 +413,12 @@ hours). The list says why it ends where it does, and an empty list names the rea
 yet, nobody free for a whole window, no upcoming times). Results cached under an older ranking rule
 are recomputed on the next read.
 
-On the meeting-time calendar, blocked times are hatched, show no percentage, and cannot be picked.
+On the meeting-time calendar, a cell's percentage is the share of counted responses free in that one
+slot (a cell says so when read out, and the legend says "free in a slot"). A meeting covers several
+slots and counts each person by their lowest slot in it, so a recommended time's share can be lower
+than the shading of the cells it covers; a window picked on the calendar that is not recommended is
+summarized as "Up to" its lowest slot's share for the same reason. Blocked times are hatched, show
+no percentage, and cannot be picked.
 An open slot whose meeting window would run into a blocked time shows its percentage but cannot
 start a meeting. Until at least one response is counted the calendar is not shaded at all (a wall of
 0% would read as "nobody is free" when nobody has answered), and says so under the calendar; any
