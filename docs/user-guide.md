@@ -49,8 +49,9 @@ and not submitted responses, and groups. Adding people and sending invitations a
 steps, and nobody is emailed until you have seen the email and confirmed it: **Add and send
 invitation**, **Review and send invitations** at the end of an import, **Send invitation…** (in
 the selection bar or a row's **⋯** menu), and the **Email** menu all open the email review (see
-[Review before sending](#review-before-sending)). Closed, finalized, and archived events show the
-list read-only until they are reactivated.
+[Review before sending](#review-before-sending)). In an invite-only event a banner above the list
+says how many people haven't been invited yet (see [Send invitations](#send-invitations)). Closed,
+finalized, and archived events show the list read-only until they are reactivated.
 
 Above the list, the search box matches names, emails, phones, and groups; **Group:** narrows the
 list to one group (or **No group**); and **Filter** narrows it by response, invitation state, or
@@ -209,7 +210,11 @@ Invitations go to a selection or to everyone still uninvited:
 - Tick people in the list (the header checkbox selects the page, and **Select all N matching**
   extends that to everyone matching the filter), then click **Send invitation…** in the selection
   bar. One person's **⋯** menu has **Send invitation** or **Resend invitation** too.
-- The **Email** menu offers **Invite everyone not invited yet (N)…**.
+- The **Email** menu offers **Invite everyone not invited yet (N)…**. In an invite-only event the
+  Participants list also says so above the list, as long as anyone is left: **N people haven't been
+  invited yet. Nobody is emailed until you send invitations.** Its **Send invitations…** does the
+  same, and the notice goes away once everyone is invited. Open link events don't show it, since
+  the link works without an invitation, and neither does a list that can't be changed.
 - **Add and send invitation** in the add panel, and **Review and send invitations (N)…** at the
   end of an import, invite the people just added.
 

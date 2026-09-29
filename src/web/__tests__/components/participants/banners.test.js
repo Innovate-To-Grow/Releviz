@@ -8,8 +8,35 @@ import "@testing-library/jest-dom";
 import {
   DeadlineBanner,
   LeftOutBanner,
+  NotInvitedBanner,
   ReadOnlyBanner,
 } from "@/components/schedule/participants/Banners";
+
+describe("NotInvitedBanner", () => {
+  test("renders nothing when everyone has been invited", () => {
+    const { container } = render(
+      <NotInvitedBanner count={0} onSend={jest.fn()} />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  test("says nothing is sent yet and offers to send the invitations", () => {
+    const onSend = jest.fn();
+    render(<NotInvitedBanner count={3} onSend={onSend} />);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "3 people haven't been invited yet. Nobody is emailed until you send invitations.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send invitations…" }));
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  test("uses the singular for one person", () => {
+    render(<NotInvitedBanner count={1} onSend={jest.fn()} />);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "1 person hasn't been invited yet. Nobody is emailed until you send invitations.",
+    );
+  });
+});
 
 describe("LeftOutBanner", () => {
   test("renders nothing when nobody is left out", () => {

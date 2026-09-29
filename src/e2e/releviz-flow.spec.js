@@ -1181,6 +1181,14 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByRole("region", { name: "Selected people" }),
     ).toHaveCount(0);
+    // The list keeps saying that person has not been emailed, for as long
+    // as that is true.
+    const notInvitedBanner = page
+      .getByRole("status")
+      .filter({ hasText: /been invited yet/ });
+    await expect(notInvitedBanner).toContainText(
+      "1 person hasn't been invited yet. Nobody is emailed until you send invitations.",
+    );
 
     const rosterAfterAdd = await apiJson(
       request,
@@ -1235,6 +1243,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expectToast(page, "Queued 1 invitation.");
     await expect(selectionBar).toHaveCount(0);
     await expect(eventDeliveryProgress).toBeVisible();
+    await expect(notInvitedBanner).toHaveCount(0);
 
     dispatchEmailJobs();
     // Delivery moves the invitation, which the live sync picks up as a

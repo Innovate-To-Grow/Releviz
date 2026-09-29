@@ -1150,6 +1150,82 @@ describe("RosterPanel selection and bulk changes", () => {
 });
 
 describe("RosterPanel invitations", () => {
+  test("tells an invite-only organizer that nobody is emailed until they send invitations", async () => {
+    sendRosterInvitations
+      .mockResolvedValueOnce({
+        preview: true,
+        requestedCount: 1,
+        willSend: 1,
+        skipped: { alreadyInvited: 0, noEmail: 0, organizer: 0, inFlight: 0 },
+        email: invitationEmail("Second Person <second@example.com>"),
+        sample: { name: "Second Person", email: "second@example.com" },
+      })
+      .mockResolvedValueOnce({
+        queuedCount: 1,
+        skipped: { alreadyInvited: 0, noEmail: 0 },
+        deliveryRequest: { id: "delivery-1", recipientCount: 1 },
+      });
+    await renderPanel();
+    // The default listing has one person who was never invited.
+    expect(
+      await screen.findByText(
+        "1 person hasn't been invited yet. Nobody is emailed until you send invitations.",
+      ),
+    ).toBeInTheDocument();
+
+    // The action is the Email menu's "invite everyone not invited yet".
+    fireEvent.click(screen.getByRole("button", { name: "Send invitations…" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Send invitations",
+    });
+    await within(dialog).findByText("1 will get an invitation now");
+    expect(sendRosterInvitations).toHaveBeenCalledWith(
+      "ROSTER1",
+      {
+        filter: { invitationStatus: "not_sent" },
+        preview: true,
+        resend: false,
+      },
+      "token",
+    );
+
+    // Once they are invited the notice goes away by itself.
+    fetchRoster.mockResolvedValue(
+      rosterResponse([participant(), { ...second, invitationStatus: "sent" }]),
+    );
+    confirmEmail(dialog, "Send 1 invitation");
+    await waitFor(() =>
+      expect(screen.queryByText(/been invited yet/)).not.toBeInTheDocument(),
+    );
+  });
+
+  test.each([
+    [
+      "an open-link event, where the link works without an invitation",
+      {},
+      { accessMode: "open_link" },
+    ],
+    ["a closed event", {}, { status: "closed" }],
+    [
+      "an event whose response deadline has passed",
+      {},
+      { responseDeadline: "2020-01-01T00:00:00Z" },
+    ],
+    ["a list where everyone is already invited", { everyoneInvited: true }, {}],
+  ])(
+    "leaves the not-invited notice out of %s",
+    async (_name, options, overrides) => {
+      if (options.everyoneInvited) {
+        fetchRoster.mockResolvedValue(rosterResponse([participant()]));
+      }
+      await renderPanel({ event: { ...event, ...overrides } });
+      expect(screen.queryByText(/been invited yet/)).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Send invitations…" }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
   test("previews and sends invitations to the selected people", async () => {
     const onDeliveryRequestChange = jest.fn();
     sendRosterInvitations
