@@ -3395,7 +3395,17 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(copyRoster.response.status()).toBe(200);
     expect(copyRoster.payload.participants).toEqual([]);
 
+    // Archiving says what it does first, and can be backed out of.
     await updatedCard.getByRole("button", { name: "Archive" }).click();
+    const archiveDialog = page.getByRole("dialog", {
+      name: "Archive this event?",
+    });
+    await expect(archiveDialog).toContainText("People can no longer respond.");
+    await archiveDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(archiveDialog).toHaveCount(0);
+    await expect(updatedCard.getByText("Status: active")).toBeVisible();
+    await updatedCard.getByRole("button", { name: "Archive" }).click();
+    await archiveDialog.getByRole("button", { name: "Archive event" }).click();
     await expect(page.getByText(`${updatedName} was archived.`)).toBeVisible();
     await expect(updatedCard.getByText("Status: archived")).toBeVisible();
     await expect(

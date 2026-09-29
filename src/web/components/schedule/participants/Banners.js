@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import { formatDateTimeInTimezone } from "@/lib/format";
@@ -45,17 +44,17 @@ export function LeftOutBanner({
 }
 
 /** Active event whose response deadline is in the past. */
-export function DeadlineBanner({ deadline, editHref }) {
+export function DeadlineBanner({ deadline, onEdit }) {
   return (
     <Alert
       variant="warning"
       role="status"
       className="participants-banner"
       actions={
-        editHref ? (
-          <Link className="alert-link" href={editHref}>
+        onEdit ? (
+          <AppButton variant="text" size="sm" className="p-0" onClick={onEdit}>
             Change deadline
-          </Link>
+          </AppButton>
         ) : null
       }
     >

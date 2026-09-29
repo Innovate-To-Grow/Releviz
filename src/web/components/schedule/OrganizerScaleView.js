@@ -178,6 +178,7 @@ export default function OrganizerScaleView() {
   const paceRef = useRef(null);
   const eventRef = useRef(event);
   const rosterRef = useRef(null);
+  const overviewRef = useRef(null);
   const resultsRef = useRef(null);
   const resultsHeadingRef = useRef(null);
   const finalizeHeadingRef = useRef(null);
@@ -430,6 +431,16 @@ export default function OrganizerScaleView() {
     [event],
   );
 
+  // Sends the organizer to the Overview and opens its inline editor, for the
+  // notices elsewhere on the page that point at a setting (the deadline).
+  const handleEditEvent = useCallback(() => {
+    document.getElementById("organizer-overview")?.scrollIntoView({
+      behavior: "auto",
+      block: "start",
+    });
+    overviewRef.current?.edit();
+  }, []);
+
   const invalidateResults = useCallback(() => {
     setSelection(null);
     setResultsInvalidationKey((current) => current + 1);
@@ -477,6 +488,7 @@ export default function OrganizerScaleView() {
             getToken={getToken}
             setDeliveryRequest={setDeliveryRequest}
             onReactivated={() => setSelection(null)}
+            onEditEvent={handleEditEvent}
           />
         }
       />
@@ -519,7 +531,11 @@ export default function OrganizerScaleView() {
           style={SECTION_SCROLL_STYLE}
           aria-labelledby="organizer-overview-heading"
         >
-          <OverviewPanel event={event} onEventSaved={handleEventSaved} />
+          <OverviewPanel
+            ref={overviewRef}
+            event={event}
+            onEventSaved={handleEventSaved}
+          />
         </section>
 
         <section
@@ -558,6 +574,7 @@ export default function OrganizerScaleView() {
             getToken={getToken}
             onResultsInvalidated={invalidateResults}
             onDeliveryRequestChange={setDeliveryRequest}
+            onEditEvent={handleEditEvent}
           />
         </section>
       </div>

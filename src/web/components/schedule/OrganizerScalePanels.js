@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/icons";
 import CreateEventClient from "@/components/event/CreateEventClient";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
+import LifecycleConfirmDialog from "@/components/event/LifecycleConfirmDialog";
 import BlockedSlotsControls, {
   useBlockedSlotsDraft,
 } from "@/components/schedule/BlockedSlotsEditor";
@@ -67,6 +68,7 @@ import {
   windowSlotCount,
 } from "@/lib/meetingWindows";
 import { createLocalDateTimeResolver } from "@/lib/time";
+import useDeadlinePassed from "@/lib/useDeadlinePassed";
 import {
   confirmFinalMeeting,
   downloadFinalCalendar,
@@ -518,19 +520,38 @@ const LIFECYCLE_SUMMARIES = {
   archived: "This event is archived.",
 };
 
+// An active event past its deadline still reads "active", but nobody can
+// respond, so the sentence says so rather than promising responses.
+function lifecycleSummaryOf(event, deadlinePassed) {
+  if (deadlinePassed) {
+    return "The response deadline has passed, so people can no longer respond.";
+  }
+  if (event.status === "archived" && event.finalMeeting) {
+    return "This event is archived. The confirmed meeting still stands.";
+  }
+  return LIFECYCLE_SUMMARIES[event.status] || "";
+}
+
 export function EventControls({
   event,
   setEvent,
   getToken,
   setDeliveryRequest,
   onReactivated,
+  onEditEvent,
 }) {
   const [changing, setChanging] = useState(false);
   const [error, setError] = useState("");
+  // "closed" | "archived" while the consequences of that change are put to
+  // the organizer.
+  const [confirming, setConfirming] = useState(null);
+  // What a reactivation did beyond reopening, shown until the next change.
+  const [notice, setNotice] = useState("");
   // { cancellation, busy, error } while the cancellation emails reopening a
-  // finalized event sends are reviewed.
+  // confirmed meeting sends are reviewed.
   const [reopen, setReopen] = useState(null);
-  const lifecycleSummary = LIFECYCLE_SUMMARIES[event.status] || "";
+  const deadlinePassed = useDeadlinePassed(event);
+  const lifecycleSummary = lifecycleSummaryOf(event, deadlinePassed);
 
   // Reactivating past the old deadline clears it, as an active event needs
   // a deadline ahead of it.
@@ -544,16 +565,22 @@ export function EventControls({
   // Makes the change; a failure is the caller's to show.
   const applyLifecycle = async (nextStatus) => {
     const token = await getToken();
+    const deadline = deadlineFor(nextStatus);
     const data = await updateEventLifecycle(
       event.code,
       {
         status: nextStatus,
         expectedVersion: event.version,
-        responseDeadline: deadlineFor(nextStatus),
+        responseDeadline: deadline,
       },
       token,
     );
     setEvent(data.event);
+    setNotice(
+      deadline === null && event.responseDeadline
+        ? "Responses are open again. The old deadline had passed, so it was removed."
+        : "",
+    );
     if (nextStatus === "active") onReactivated?.();
     if (data.cancellationDeliveryRequestId) {
       setDeliveryRequest({
@@ -580,11 +607,16 @@ export function EventControls({
     }
   };
 
-  // Reopening a finalized event cancels its meeting and emails everyone the
-  // confirmation reached, so those emails are reviewed and confirmed first.
-  // With nobody to tell, it reopens at once.
+  const confirmLifecycle = async () => {
+    await changeLifecycle(confirming);
+    setConfirming(null);
+  };
+
+  // Reopening an event that holds a confirmed meeting cancels it and emails
+  // everyone the confirmation reached, so those emails are reviewed and
+  // confirmed first. With nobody to tell, it reopens at once.
   const reactivate = async () => {
-    if (event.status === "finalized") {
+    if (event.status === "finalized" || event.finalMeeting) {
       setChanging(true);
       setError("");
       try {
@@ -634,25 +666,20 @@ export function EventControls({
       className="organizer-event-controls d-flex flex-wrap align-items-center gap-2 mw-100"
       aria-labelledby="organizer-lifecycle-title"
     >
-      <div className="organizer-event-controls__label d-inline-flex align-items-center gap-2 me-1">
-        <StatusBadge
-          status={event.status}
-          className="organizer-lifecycle-panel__status"
-        >
-          {event.status || "unknown"}
-        </StatusBadge>
-        <h3
-          id="organizer-lifecycle-title"
-          className="small fw-semibold text-secondary mb-0"
-        >
-          Event controls
-        </h3>
-      </div>
+      <h3 id="organizer-lifecycle-title" className="visually-hidden">
+        Event controls
+      </h3>
+      <StatusBadge
+        status={event.status}
+        className="organizer-lifecycle-panel__status me-1"
+      >
+        {event.status || "unknown"}
+      </StatusBadge>
 
       {event.status === "active" && (
         <AppButton
           variant="outlined"
-          onClick={() => changeLifecycle("closed")}
+          onClick={() => setConfirming("closed")}
           disabled={changing}
         >
           Close responses
@@ -671,7 +698,7 @@ export function EventControls({
         <AppButton
           variant="outlined"
           icon={<ArchiveIcon />}
-          onClick={() => changeLifecycle("archived")}
+          onClick={() => setConfirming("archived")}
           disabled={changing}
         >
           Archive event
@@ -685,6 +712,40 @@ export function EventControls({
             role="status"
           >
             {lifecycleSummary}
+            {deadlinePassed && onEditEvent && (
+              <>
+                {" "}
+                <AppButton
+                  variant="text"
+                  size="sm"
+                  className="p-0 align-baseline"
+                  onClick={onEditEvent}
+                >
+                  Change deadline
+                </AppButton>
+              </>
+            )}
+          </p>
+        )}
+        {notice && event.status === "active" && !event.responseDeadline && (
+          <p
+            className="organizer-event-controls__notice small text-secondary mb-0"
+            role="status"
+          >
+            {notice}
+            {onEditEvent && (
+              <>
+                {" "}
+                <AppButton
+                  variant="text"
+                  size="sm"
+                  className="p-0 align-baseline"
+                  onClick={onEditEvent}
+                >
+                  Set a new deadline
+                </AppButton>
+              </>
+            )}
           </p>
         )}
         {error && (
@@ -693,6 +754,18 @@ export function EventControls({
           </Alert>
         )}
       </div>
+
+      {confirming && (
+        <LifecycleConfirmDialog
+          action={confirming}
+          event={event}
+          busy={changing}
+          onConfirm={() => void confirmLifecycle()}
+          onClose={() => {
+            if (!changing) setConfirming(null);
+          }}
+        />
+      )}
 
       {reopen && (
         <EmailSendDialog
@@ -727,7 +800,10 @@ export function EventControls({
   );
 }
 
-export function OverviewPanel({ event, onEventSaved }) {
+export const OverviewPanel = forwardRef(function OverviewPanel(
+  { event, onEventSaved },
+  ref,
+) {
   const [editing, setEditing] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
   const [saveStatus, setSaveStatus] = useState("");
@@ -764,6 +840,14 @@ export function OverviewPanel({ event, onEventSaved }) {
     closeEditor();
   };
 
+  // Lets the rest of the workspace (a deadline notice, say) open the editor
+  // here rather than sending the organizer to another page.
+  useImperativeHandle(ref, () => ({
+    edit: () => {
+      if (!editLocked) openEditor();
+    },
+  }));
+
   return (
     <Panel
       ref={panelRef}
@@ -771,7 +855,11 @@ export function OverviewPanel({ event, onEventSaved }) {
       headingLevel={3}
       titleId="organizer-overview-heading"
       title="Overview"
-      description="Review the event schedule and response settings."
+      description={
+        editLocked
+          ? `Review the event schedule and response settings. ${editLockReason}`
+          : "Review the event schedule and response settings."
+      }
       actions={
         editLocked ? (
           <AppButton
@@ -858,7 +946,7 @@ export function OverviewPanel({ event, onEventSaved }) {
       )}
     </Panel>
   );
-}
+});
 
 /**
  * Blocked times: the first step under the Time Table calendar. While it is

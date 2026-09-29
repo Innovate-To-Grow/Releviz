@@ -129,6 +129,18 @@ class LifecycleDomainTests(TestCase):
         )
         self.assertEqual(finalized.status, Event.Status.ACTIVE)
 
+        # A finished meeting can be put away without cancelling it.
+        finished = self.event(code="ARCHFINAL", status=Event.Status.FINALIZED)
+        changed = transition_event(
+            finished,
+            Event.Status.ARCHIVED,
+            response_deadline=None,
+            now=self.now,
+        )
+        self.assertEqual(finished.status, Event.Status.ARCHIVED)
+        self.assertEqual(finished.archived_at, self.now)
+        self.assertIn("archived_at", changed)
+
         with self.assertRaisesMessage(LifecycleError, "Invalid event status"):
             transition_event(active, "unknown", response_deadline=future, now=self.now)
         with self.assertRaisesMessage(LifecycleError, "Confirm a final meeting time"):

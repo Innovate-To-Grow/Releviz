@@ -1251,6 +1251,71 @@ test.each([
   expect(screen.getByRole("button", { name: "Edit event" })).toBeDisabled();
 });
 
+test.each([
+  [
+    "a finalized event",
+    { status: "finalized" },
+    "Reactivate this finalized event before editing it.",
+  ],
+  [
+    "an archived event",
+    { status: "archived" },
+    "Reactivate this archived event before editing it.",
+  ],
+  [
+    "an event with a confirmed meeting",
+    { finalMeeting: { id: "final-1" } },
+    "Reactivate the event before editing a confirmed meeting.",
+  ],
+])(
+  "overview says why %s cannot be edited, in the page itself",
+  (_label, overrides, reason) => {
+    render(<OverviewPanel event={{ ...baseEvent, ...overrides }} />);
+
+    expect(
+      screen.getByText(
+        `Review the event schedule and response settings. ${reason}`,
+      ),
+    ).toBeInTheDocument();
+  },
+);
+
+test("the overview opens its inline editor when the workspace asks it to", async () => {
+  const ref = createRef();
+  render(
+    <OverviewPanel ref={ref} event={baseEvent} onEventSaved={jest.fn()} />,
+  );
+  expect(
+    screen.queryByRole("region", { name: "Edit event" }),
+  ).not.toBeInTheDocument();
+
+  act(() => ref.current.edit());
+
+  expect(
+    await screen.findByRole("region", { name: "Edit event" }),
+  ).toBeInTheDocument();
+  await waitFor(() =>
+    expect(screen.getByRole("heading", { name: "Edit event" })).toHaveFocus(),
+  );
+});
+
+test("the overview does not open an editor for an event that cannot be edited", () => {
+  const ref = createRef();
+  render(
+    <OverviewPanel
+      ref={ref}
+      event={{ ...baseEvent, status: "finalized" }}
+      onEventSaved={jest.fn()}
+    />,
+  );
+
+  act(() => ref.current.edit());
+
+  expect(
+    screen.queryByRole("region", { name: "Edit event" }),
+  ).not.toBeInTheDocument();
+});
+
 test("event controls close an active event without a reminders button", async () => {
   const setEvent = jest.fn();
   const setDeliveryRequest = jest.fn();
@@ -1285,6 +1350,26 @@ test("event controls close an active event without a reminders button", async ()
   await userEvent.click(
     within(controls).getByRole("button", { name: "Close responses" }),
   );
+  // What closing does is put to the organizer first; declining changes
+  // nothing.
+  let dialog = await screen.findByRole("dialog", { name: "Close responses?" });
+  expect(dialog).toHaveTextContent(
+    "Nobody can submit or change a schedule while responses are closed",
+  );
+  expect(dialog).toHaveTextContent(
+    "Invitation and reminder emails still waiting to go out are canceled and automatic reminders stop.",
+  );
+  await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(updateEventLifecycle).not.toHaveBeenCalled();
+
+  await userEvent.click(
+    within(controls).getByRole("button", { name: "Close responses" }),
+  );
+  dialog = await screen.findByRole("dialog", { name: "Close responses?" });
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Close responses" }),
+  );
   await waitFor(() =>
     expect(updateEventLifecycle).toHaveBeenCalledWith(
       baseEvent.code,
@@ -1294,6 +1379,9 @@ test("event controls close an active event without a reminders button", async ()
   );
   expect(setEvent).toHaveBeenCalledWith(
     expect.objectContaining({ status: "closed" }),
+  );
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
   );
 });
 
@@ -1497,7 +1585,176 @@ test("event controls surface lifecycle errors", async () => {
     />,
   );
   await userEvent.click(screen.getByRole("button", { name: "Archive event" }));
+  await userEvent.click(
+    within(
+      await screen.findByRole("dialog", { name: "Archive this event?" }),
+    ).getByRole("button", { name: "Archive event" }),
+  );
   expect(await screen.findByRole("alert")).toHaveTextContent("cannot archive");
+  // The failure is reported where the buttons are, not behind the dialog.
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+test("archiving says what it does to a live event's emails and asks first", async () => {
+  const setEvent = jest.fn();
+  updateEventLifecycle.mockResolvedValueOnce({
+    event: { ...baseEvent, status: "archived", version: 5 },
+  });
+  render(
+    <EventControls
+      event={baseEvent}
+      setEvent={setEvent}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "Archive event" }));
+  let dialog = await screen.findByRole("dialog", {
+    name: "Archive this event?",
+  });
+  expect(dialog).toHaveTextContent(
+    "The event becomes read-only and moves to Archived on your dashboard. People can no longer respond.",
+  );
+  expect(dialog).toHaveTextContent(
+    "Invitation and reminder emails still waiting to go out are canceled. Nobody is emailed about the change, and you can reactivate the event at any time.",
+  );
+  await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(updateEventLifecycle).not.toHaveBeenCalled();
+
+  await userEvent.click(screen.getByRole("button", { name: "Archive event" }));
+  dialog = await screen.findByRole("dialog", { name: "Archive this event?" });
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Archive event" }),
+  );
+  await waitFor(() =>
+    expect(updateEventLifecycle).toHaveBeenCalledWith(
+      baseEvent.code,
+      expect.objectContaining({ status: "archived", expectedVersion: 4 }),
+      "token",
+    ),
+  );
+  expect(setEvent).toHaveBeenCalledWith(
+    expect.objectContaining({ status: "archived" }),
+  );
+});
+
+test("archiving a finalized event leaves its confirmed meeting standing and says so", async () => {
+  const setEvent = jest.fn();
+  const setDeliveryRequest = jest.fn();
+  const finalized = {
+    ...baseEvent,
+    status: "finalized",
+    finalMeeting: { id: "final-1", active: true },
+  };
+  updateEventLifecycle.mockResolvedValueOnce({
+    event: { ...finalized, status: "archived", version: 5 },
+  });
+  render(
+    <EventControls
+      event={finalized}
+      setEvent={setEvent}
+      getToken={getToken}
+      setDeliveryRequest={setDeliveryRequest}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "Archive event" }));
+  const dialog = await screen.findByRole("dialog", {
+    name: "Archive this event?",
+  });
+  expect(dialog).toHaveTextContent(
+    "The confirmed meeting stays as it is and nobody is emailed. Reactivating the event later cancels it and emails the people it reached.",
+  );
+  // A finalized event was not collecting responses, so nothing is stopped.
+  expect(dialog).not.toHaveTextContent("People can no longer respond.");
+  expect(dialog).not.toHaveTextContent("still waiting to go out");
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Archive event" }),
+  );
+  await waitFor(() =>
+    expect(updateEventLifecycle).toHaveBeenCalledWith(
+      baseEvent.code,
+      expect.objectContaining({ status: "archived" }),
+      "token",
+    ),
+  );
+  expect(setDeliveryRequest).not.toHaveBeenCalled();
+});
+
+test("archiving a closed event without a meeting promises no email cancellations", async () => {
+  render(
+    <EventControls
+      event={{ ...baseEvent, status: "closed" }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "Archive event" }));
+  const dialog = await screen.findByRole("dialog", {
+    name: "Archive this event?",
+  });
+  expect(dialog).toHaveTextContent(
+    "Nobody is emailed about the change, and you can reactivate the event at any time.",
+  );
+  expect(dialog).not.toHaveTextContent("People can no longer respond.");
+  expect(dialog).not.toHaveTextContent("still waiting to go out");
+});
+
+test("an archived event with a confirmed meeting says the meeting still stands", () => {
+  render(
+    <EventControls
+      event={{
+        ...baseEvent,
+        status: "archived",
+        finalMeeting: { id: "final-1", active: true },
+      }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+    />,
+  );
+
+  expect(
+    screen.getByText(
+      "This event is archived. The confirmed meeting still stands.",
+    ),
+  ).toBeInTheDocument();
+});
+
+test("reactivating an archived event that holds a confirmed meeting reviews the cancellations first", async () => {
+  previewEventLifecycle.mockResolvedValueOnce({
+    cancellation: {
+      recipientCount: 2,
+      email: previewEmail({ subject: "Scale event was canceled" }),
+      sample: { name: "Ada Lovelace", email: "ada@example.com" },
+    },
+  });
+  render(
+    <EventControls
+      event={{
+        ...baseEvent,
+        status: "archived",
+        finalMeeting: { id: "final-1", active: true },
+      }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+    />,
+  );
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Reactivate event" }),
+  );
+  const dialog = await screen.findByRole("dialog", {
+    name: "Reopen scheduling",
+  });
+  expect(dialog).toHaveTextContent(
+    "2 people who received the confirmation will be told the meeting is canceled.",
+  );
+  expect(updateEventLifecycle).not.toHaveBeenCalled();
 });
 
 const LIFECYCLE_SUMMARIES = {
@@ -1650,6 +1907,11 @@ test("closing responses does not report a reactivation", async () => {
   await userEvent.click(
     screen.getByRole("button", { name: "Close responses" }),
   );
+  await userEvent.click(
+    within(
+      await screen.findByRole("dialog", { name: "Close responses?" }),
+    ).getByRole("button", { name: "Close responses" }),
+  );
 
   await waitFor(() =>
     expect(setEvent).toHaveBeenCalledWith(
@@ -1657,6 +1919,158 @@ test("closing responses does not report a reactivation", async () => {
     ),
   );
   expect(onReactivated).not.toHaveBeenCalled();
+});
+
+test("an active event past its deadline says nobody can respond and offers to change the deadline", async () => {
+  const onEditEvent = jest.fn();
+  const { rerender } = render(
+    <EventControls
+      event={{ ...baseEvent, responseDeadline: "2020-01-01T00:00:00Z" }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+      onEditEvent={onEditEvent}
+    />,
+  );
+
+  const controls = screen.getByRole("region", { name: "Event controls" });
+  const lifecycle = within(controls).getByText(
+    "The response deadline has passed, so people can no longer respond.",
+  );
+  expect(lifecycle).toHaveAttribute("role", "status");
+  expect(
+    screen.queryByText("This event is active and accepting responses."),
+  ).not.toBeInTheDocument();
+  await userEvent.click(
+    within(controls).getByRole("button", { name: "Change deadline" }),
+  );
+  expect(onEditEvent).toHaveBeenCalledTimes(1);
+
+  // Without a place to change it, the sentence stands on its own.
+  rerender(
+    <EventControls
+      event={{ ...baseEvent, responseDeadline: "2020-01-01T00:00:00Z" }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+    />,
+  );
+  expect(
+    within(controls).queryByRole("button", { name: "Change deadline" }),
+  ).not.toBeInTheDocument();
+});
+
+test("a deadline still ahead keeps the accepting-responses sentence", () => {
+  render(
+    <EventControls
+      event={{
+        ...baseEvent,
+        responseDeadline: new Date(Date.now() + 86400000).toISOString(),
+      }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+      onEditEvent={jest.fn()}
+    />,
+  );
+
+  expect(
+    screen.getByText("This event is active and accepting responses."),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Change deadline" }),
+  ).not.toBeInTheDocument();
+});
+
+test("reactivating past an old deadline says it was removed, until a new one is set", async () => {
+  const onEditEvent = jest.fn();
+  updateEventLifecycle.mockResolvedValueOnce({
+    event: {
+      ...baseEvent,
+      status: "active",
+      version: 6,
+      responseDeadline: null,
+    },
+  });
+  function Harness() {
+    const [event, setEvent] = useState({
+      ...baseEvent,
+      status: "closed",
+      version: 5,
+      responseDeadline: "2020-01-01T00:00:00Z",
+    });
+    return (
+      <>
+        <EventControls
+          event={event}
+          setEvent={setEvent}
+          getToken={getToken}
+          setDeliveryRequest={jest.fn()}
+          onEditEvent={onEditEvent}
+        />
+        <button
+          type="button"
+          onClick={() =>
+            setEvent((current) => ({
+              ...current,
+              responseDeadline: "2099-01-01T00:00:00Z",
+            }))
+          }
+        >
+          Set deadline elsewhere
+        </button>
+      </>
+    );
+  }
+  render(<Harness />);
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Reactivate event" }),
+  );
+  expect(updateEventLifecycle).toHaveBeenCalledWith(
+    baseEvent.code,
+    expect.objectContaining({ status: "active", responseDeadline: null }),
+    "token",
+  );
+  expect(
+    await screen.findByText(
+      "Responses are open again. The old deadline had passed, so it was removed.",
+    ),
+  ).toBeInTheDocument();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Set a new deadline" }),
+  );
+  expect(onEditEvent).toHaveBeenCalledTimes(1);
+
+  // Once the event has a deadline again, the reminder goes away.
+  await userEvent.click(
+    screen.getByRole("button", { name: "Set deadline elsewhere" }),
+  );
+  expect(
+    screen.queryByText(/The old deadline had passed/),
+  ).not.toBeInTheDocument();
+});
+
+test("a reactivation that removed no deadline shows no notice", async () => {
+  updateEventLifecycle.mockResolvedValueOnce({
+    event: { ...baseEvent, status: "active", version: 6 },
+  });
+  render(
+    <StatefulEventControls
+      initialEvent={{ ...baseEvent, status: "closed", version: 5 }}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+      onEditEvent={jest.fn()}
+    />,
+  );
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Reactivate event" }),
+  );
+  await screen.findByText("This event is active and accepting responses.");
+  expect(
+    screen.queryByText(/The old deadline had passed/),
+  ).not.toBeInTheDocument();
 });
 
 test("a rejected reactivation shows the error and reports nothing", async () => {

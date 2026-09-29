@@ -84,22 +84,22 @@ describe("LeftOutBanner", () => {
 });
 
 describe("DeadlineBanner", () => {
-  test("names the deadline and links to the edit page", () => {
+  test("names the deadline and offers to change it", () => {
+    const onEdit = jest.fn();
     const deadline = "2026-09-01T12:00:00Z";
-    render(<DeadlineBanner deadline={deadline} editHref="/edit?code=ABC" />);
+    render(<DeadlineBanner deadline={deadline} onEdit={onEdit} />);
     const banner = screen.getByRole("status");
     expect(banner).toHaveClass("alert-warning");
     expect(banner).toHaveTextContent(
       `The response deadline (${new Date(deadline).toLocaleString([], {})}) has passed, so people can't be added, invited or changed. You can still enter schedules for people you answer for.`,
     );
-    expect(
-      screen.getByRole("link", { name: "Change deadline" }),
-    ).toHaveAttribute("href", "/edit?code=ABC");
+    fireEvent.click(screen.getByRole("button", { name: "Change deadline" }));
+    expect(onEdit).toHaveBeenCalledTimes(1);
   });
 
-  test("omits the link without an href", () => {
+  test("omits the action without a handler", () => {
     render(<DeadlineBanner deadline="2026-09-01T12:00:00Z" />);
-    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 });
 

@@ -856,6 +856,62 @@ describe("scaled organizer workspace", () => {
     ).toBeDisabled();
   });
 
+  test("a passed deadline is changed in place, from the controls and from the Participants notice", async () => {
+    renderView(jest.fn(), {
+      ...event,
+      responseDeadline: "2020-01-01T00:00:00Z",
+    });
+    await screen.findByText("Ada Faculty");
+
+    const controls = screen.getByRole("region", { name: "Event controls" });
+    expect(
+      within(controls).getByText(
+        "The response deadline has passed, so people can no longer respond.",
+      ),
+    ).toBeInTheDocument();
+    const overviewSection = document.getElementById("organizer-overview");
+    const rosterSection = document.getElementById("organizer-roster");
+    expect(
+      within(overviewSection).queryByRole("heading", { name: "Edit event" }),
+    ).not.toBeInTheDocument();
+
+    // The Participants notice brings the organizer to the Overview's editor
+    // instead of leaving the workspace.
+    HTMLElement.prototype.scrollIntoView.mockClear();
+    await userEvent.click(
+      within(rosterSection).getByRole("button", { name: "Change deadline" }),
+    );
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
+      behavior: "auto",
+      block: "start",
+    });
+    expect(HTMLElement.prototype.scrollIntoView.mock.contexts).toContain(
+      overviewSection,
+    );
+    expect(
+      await within(overviewSection).findByRole("heading", {
+        name: "Edit event",
+      }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(
+      within(overviewSection).getByRole("button", { name: "Cancel" }),
+    );
+    expect(
+      within(overviewSection).queryByRole("heading", { name: "Edit event" }),
+    ).not.toBeInTheDocument();
+
+    // So does the sentence in the controls.
+    await userEvent.click(
+      within(controls).getByRole("button", { name: "Change deadline" }),
+    );
+    expect(
+      await within(overviewSection).findByRole("heading", {
+        name: "Edit event",
+      }),
+    ).toBeInTheDocument();
+  });
+
   test("reports when the roster cannot be re-read after a reset", async () => {
     renderView();
     await screen.findByText("Ada Faculty");

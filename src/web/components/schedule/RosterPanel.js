@@ -233,7 +233,14 @@ function scrollToDelivery() {
 }
 
 const RosterPanel = forwardRef(function RosterPanel(
-  { event, setEvent, getToken, onResultsInvalidated, onDeliveryRequestChange },
+  {
+    event,
+    setEvent,
+    getToken,
+    onResultsInvalidated,
+    onDeliveryRequestChange,
+    onEditEvent,
+  },
   forwardedRef,
 ) {
   const [participants, setParticipants] = useState([]);
@@ -1662,7 +1669,7 @@ const RosterPanel = forwardRef(function RosterPanel(
           {deadlinePassed && (
             <DeadlineBanner
               deadline={event.responseDeadline}
-              editHref={`/edit?code=${encodeURIComponent(event.code)}`}
+              onEdit={onEditEvent}
             />
           )}
           {loaded && excludedCount > 0 && (

@@ -59,7 +59,7 @@ the counts line then reads **Showing n of N people**.
 
 Once an active event's response deadline has passed, a banner says so: people can't be added,
 invited, or changed, and your own schedule is locked, but you can still enter schedules for the
-people you answer for. **Change deadline** opens the event settings.
+people you answer for. **Change deadline** opens the event settings in the Overview.
 
 ### Add people
 
@@ -286,6 +286,28 @@ Participants only ever see their own schedule; group availability is visible to 
 Open the organizer view from the account that created the event. It is one page with three
 sections, **Overview**, **Time Table**, and **Participants**; finalizing is a step inside the Time
 Table.
+
+### Event status
+
+An event is **active**, **closed**, **finalized**, or **archived**, and the line at the top of the
+page says which in plain words, next to the buttons that change it:
+
+- **Close responses** stops people from submitting or changing schedules and makes the participant
+  list read-only. You can still pick and finalize a time. Invitation and reminder emails still
+  waiting to go out are canceled and automatic reminders stop.
+- **Archive event** (from an active, closed, or finalized event) makes the event read-only and
+  moves it to **Archived** on your dashboard. An archived event that had a confirmed meeting keeps
+  it, and nobody is emailed until you reactivate the event.
+- **Reactivate event** opens a closed, finalized, or archived event again. Reopening one with a
+  confirmed meeting cancels the meeting and emails the people the confirmation reached, after you
+  have reviewed that email (see [Time Table and finalizing](#time-table-and-finalizing)).
+
+Closing and archiving ask for confirmation first and say what they do; nobody is emailed about
+either. The **Archive** button on the account dashboard asks the same question. When an active
+event's response deadline passes, the line says people can no longer respond and offers **Change
+deadline**, which opens the event settings in the Overview; the same button is on the Participants
+banner. An active event needs a deadline in the future or none, so reactivating an event whose
+deadline has passed removes it, says so, and offers **Set a new deadline**.
 
 ### Participants and schedules
 

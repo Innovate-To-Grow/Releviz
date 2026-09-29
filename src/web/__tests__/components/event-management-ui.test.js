@@ -168,8 +168,30 @@ describe("organizer event management UI", () => {
       ),
     ).toBeInTheDocument();
 
+    // Archiving is put to the organizer first; declining changes nothing.
     await userEvent.click(
       within(sourceCard).getByRole("button", { name: "Archive" }),
+    );
+    let archiveDialog = await screen.findByRole("dialog", {
+      name: "Archive this event?",
+    });
+    expect(archiveDialog).toHaveTextContent(
+      "The event becomes read-only and moves to Archived on your dashboard.",
+    );
+    await userEvent.click(
+      within(archiveDialog).getByRole("button", { name: "Cancel" }),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(updateEventLifecycle).not.toHaveBeenCalled();
+
+    await userEvent.click(
+      within(sourceCard).getByRole("button", { name: "Archive" }),
+    );
+    archiveDialog = await screen.findByRole("dialog", {
+      name: "Archive this event?",
+    });
+    await userEvent.click(
+      within(archiveDialog).getByRole("button", { name: "Archive event" }),
     );
     await waitFor(() =>
       expect(updateEventLifecycle).toHaveBeenCalledWith(
@@ -185,6 +207,7 @@ describe("organizer event management UI", () => {
     expect(
       await screen.findByText("Planning session was archived."),
     ).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     const archivedCard = screen
       .getByRole("link", { name: baseEvent.name })
       .closest("article");
@@ -285,7 +308,7 @@ describe("organizer event management UI", () => {
     const archived = screen.getByRole("region", { name: "Archived (1)" });
     expect(
       within(archived).getByText(
-        "Archived events are read-only. Duplicate one to start again, or delete it permanently.",
+        "Archived events are read-only. Open one and choose Reactivate event to bring it back, duplicate it to start again, or delete it permanently.",
       ),
     ).toBeInTheDocument();
     const archivedCard = within(archived)
@@ -377,7 +400,13 @@ describe("organizer event management UI", () => {
     await userEvent.click(
       within(card).getByRole("button", { name: "Archive" }),
     );
+    await userEvent.click(
+      within(
+        await screen.findByRole("dialog", { name: "Archive this event?" }),
+      ).getByRole("button", { name: "Archive event" }),
+    );
     expect(await screen.findByText("Archive refused")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     await userEvent.click(within(card).getByRole("button", { name: "Delete" }));
     await userEvent.type(
@@ -404,6 +433,16 @@ describe("organizer event management UI", () => {
     const click = new MouseEvent("click", { bubbles: true, cancelable: true });
     edit.dispatchEvent(click);
     expect(click.defaultPrevented).toBe(true);
+
+    // A finalized event can be archived; its confirmed meeting stays.
+    await userEvent.click(
+      within(finalizedCard).getByRole("button", { name: "Archive" }),
+    );
+    expect(
+      await screen.findByRole("dialog", { name: "Archive this event?" }),
+    ).toHaveTextContent(
+      "The confirmed meeting stays as it is and nobody is emailed.",
+    );
   });
 
   test("dashboard reports load failures and redirects unauthenticated users", async () => {
