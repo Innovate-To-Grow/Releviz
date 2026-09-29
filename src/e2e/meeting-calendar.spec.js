@@ -296,9 +296,7 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(
       page.getByRole("heading", { level: 2, name: event.name }),
     ).toBeVisible();
-    await expect(
-      page.getByText(/Results are current at revision/),
-    ).toBeVisible();
+    await expect(page.locator('[data-results-status="fresh"]')).toBeVisible();
     const grid = page.getByRole("grid", { name: /^Meeting time calendar, / });
     await expect(grid).toBeVisible();
     await expect(grid.getByRole("columnheader")).toHaveCount(6);
@@ -782,9 +780,7 @@ test.describe("Organizer meeting-time calendar", () => {
     recomputeEventResults(event.code);
 
     await page.goto(`/event?code=${event.code}`);
-    await expect(
-      page.getByText(/Results are current at revision/),
-    ).toBeVisible();
+    await expect(page.locator('[data-results-status="fresh"]')).toBeVisible();
     const grid = page.getByRole("grid", { name: /^Meeting time calendar, / });
     await expect(grid).toBeVisible();
     await expect(
@@ -952,9 +948,7 @@ test.describe("Organizer meeting-time calendar", () => {
     expect(snapshot.channels.inperson.weighted[mon10]).toBe(0);
 
     await page.goto(`/event?code=${event.code}`);
-    await expect(
-      page.getByText(/Results are current at revision/),
-    ).toBeVisible();
+    await expect(page.locator('[data-results-status="fresh"]')).toBeVisible();
     // The editor only opens itself on an event without blocks.
     const blockedTimes = page.locator("details.organizer-blocked-times");
     await expect(blockedTimes).not.toHaveAttribute("open", "");

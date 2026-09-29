@@ -90,6 +90,18 @@ import {
   weekStartOf,
 } from "@/lib/meetingWindows";
 
+// Waits until the Time Table shows a finished snapshot (of `revision`, when
+// given): the section names the freshness of what it shows.
+function resultsAreCurrent(revision) {
+  return waitFor(() => {
+    const section = document.querySelector('[data-results-status="fresh"]');
+    expect(section).toBeInTheDocument();
+    if (revision !== undefined) {
+      expect(section).toHaveAttribute("data-results-revision", `${revision}`);
+    }
+  });
+}
+
 const getToken = jest.fn().mockResolvedValue("token");
 const baseEvent = {
   code: "SCALE1",
@@ -2149,6 +2161,12 @@ test("results support the legacy envelope and failed or empty snapshots", async 
       requestedRevision: 6,
       computedRevision: 5,
       results: { recommendations: [] },
+    })
+    .mockResolvedValueOnce({
+      status: "failed",
+      requestedRevision: 6,
+      computedRevision: null,
+      results: null,
     });
   const onChoose = jest.fn();
   const { rerender } = render(
@@ -2159,9 +2177,11 @@ test("results support the legacy envelope and failed or empty snapshots", async 
       onChoose={onChoose}
     />,
   );
-  expect(
-    await screen.findByText(/Results are current at revision 5/),
-  ).toBeInTheDocument();
+  await resultsAreCurrent(5);
+  // A current snapshot needs no notice: the calendar and lists speak for it,
+  // and the section only names its freshness for assistive tooling.
+  expect(screen.queryByText(/Results are current/)).not.toBeInTheDocument();
+  expect(document.querySelector(".alert")).not.toBeInTheDocument();
   // baseEvent has no slotGroups: the calendar falls back to its empty state
   // while the ranked list still lists the legacy recommendation.
   expect(
@@ -2188,12 +2208,27 @@ test("results support the legacy envelope and failed or empty snapshots", async 
       onChoose={onChoose}
     />,
   );
-  expect(
-    await screen.findByText(/Result calculation failed/),
-  ).toBeInTheDocument();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "The results could not be calculated. It will be retried automatically; the last calculated results stay on screen.",
+  );
   expect(
     screen.getByText("No valid meeting window is available yet."),
   ).toBeInTheDocument();
+
+  // With nothing calculated yet there are no earlier results to promise.
+  rerender(
+    <ResultsSnapshotPanel
+      event={baseEvent}
+      getToken={getToken}
+      invalidationKey={2}
+      onChoose={onChoose}
+    />,
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /^The results could not be calculated\. It will be retried automatically\.$/,
+    ),
+  );
 });
 
 test("results expose request failures", async () => {
@@ -3342,7 +3377,7 @@ test("results hand the workspace their freshness and reload silently for it", as
   );
   // Nothing to compare against before the first load lands.
   expect(panel.current.activity()).toBeNull();
-  await screen.findByText(/Results are current at revision 7/);
+  await resultsAreCurrent(7);
   expect(panel.current.activity()).toEqual({
     status: "fresh",
     requestedRevision: 7,
@@ -3379,9 +3414,11 @@ test("results hand the workspace their freshness and reload silently for it", as
     });
     await silent;
   });
-  expect(
-    screen.getByText(/Results are updating for revision 8/),
-  ).toBeInTheDocument();
+  expect(screen.getByText(/Results are updating/)).toBeInTheDocument();
+  // The section names the state and the revision it is showing.
+  const section = document.querySelector("[data-results-status]");
+  expect(section).toHaveAttribute("data-results-status", "refreshing");
+  expect(section).toHaveAttribute("data-results-revision", "7");
   expect(panel.current.activity()).toEqual({
     status: "refreshing",
     requestedRevision: 8,
@@ -3398,9 +3435,7 @@ test("results hand the workspace their freshness and reload silently for it", as
     ).rejects.toThrow("offline");
   });
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  expect(
-    screen.getByText(/Results are updating for revision 8/),
-  ).toBeInTheDocument();
+  expect(screen.getByText(/Results are updating/)).toBeInTheDocument();
 
   // A legacy envelope without freshness fields reports nulls for them.
   fetchEventResults.mockResolvedValueOnce({ results: { recommendations: [] } });
@@ -3413,6 +3448,8 @@ test("results hand the workspace their freshness and reload silently for it", as
     computedRevision: null,
     generatedAt: null,
   });
+  expect(section).toHaveAttribute("data-results-status", "fresh");
+  expect(section).not.toHaveAttribute("data-results-revision");
 });
 
 test("the ranked list is collapsed by default and summarizes the best window", async () => {
@@ -3533,7 +3570,7 @@ test(
       />
     );
     const { rerender } = render(panel(true));
-    await screen.findByText(/Results are updating for revision 8/);
+    await screen.findByText(/Showing the last calculated results meanwhile/);
     expect(fetchEventResults).toHaveBeenCalledTimes(1);
     // With the server pushing changes, the workspace's digest pass reloads
     // the snapshot the moment it is published, so the panel does not poll
@@ -3577,7 +3614,7 @@ test(
     // so the panel tries again on its own ...
     await tick(2000);
     await waitFor(() => expect(fetchEventResults).toHaveBeenCalledTimes(2));
-    await screen.findByText(/Results are updating for revision 8/);
+    await screen.findByText(/Showing the last calculated results meanwhile/);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     // ... and once a load succeeds, it leaves the snapshot to the push.
     await tick(2000);
@@ -3670,7 +3707,7 @@ async function renderRanking(recommendations, basis) {
       onSelect={jest.fn()}
     />,
   );
-  await screen.findByText(/Results are current at revision 2/);
+  await resultsAreCurrent(2);
   const rail = document.querySelector("details.organizer-recommended-times");
   return { ...view, rail, intro: rail.querySelector(".ranked-chips__intro") };
 }
@@ -3878,7 +3915,7 @@ test("an older snapshot's 0% padding is neither listed nor outlined", async () =
       },
     });
     render(<ResultsSnapshotPanel {...timeTableProps(datedEvent)} />);
-    await screen.findByText(/Results are updating for revision 7/);
+    await screen.findByText(/Showing the last calculated results meanwhile/);
     const rail = document.querySelector("details.organizer-recommended-times");
     await toggleRecommendedTimes();
     expect(rail.querySelectorAll(".ranked-chip")).toHaveLength(1);
@@ -3959,7 +3996,7 @@ test("a focused recommended time keeps its highlight and focus when a live updat
     render(
       <ResultsSnapshotPanel ref={panel} {...timeTableProps(datedEvent)} />,
     );
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     await toggleRecommendedTimes();
     const rail = document.querySelector("details.organizer-recommended-times");
     const chipFor = (label) =>
@@ -4130,7 +4167,7 @@ const STEP_DESCRIPTION =
 
 test("the blocked-times step starts closed and turns the calendar into the paint surface while open", async () => {
   const { unmount } = renderTimeTable(weeklyEvent);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
 
   const details = blockedTimesDetails();
   expect(details).not.toHaveAttribute("open");
@@ -4218,7 +4255,7 @@ test("the blocked-times step starts closed and turns the calendar into the paint
   // The API always emits `blockedSlots: {}` for a fresh event (truthy, but
   // empty): still closed, still nothing to save.
   const { unmount: unmountEmpty } = renderTimeTable(blockedWeeklyEvent({}));
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   expect(blockedTimesDetails()).not.toHaveAttribute("open");
   expect(blockedTimesDetails()).toHaveTextContent("0 slots blocked");
   await openBlockedTimes();
@@ -4226,7 +4263,7 @@ test("the blocked-times step starts closed and turns the calendar into the paint
   unmountEmpty();
 
   renderTimeTable(blockedWeeklyEvent({ "weekday:1": [1], "weekday:3": [2] }));
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   expect(blockedTimesDetails()).not.toHaveAttribute("open");
   expect(blockedTimesDetails()).toHaveTextContent("2 slots blocked");
   // Closed: the calendar shows the stored blocks as blocked slots.
@@ -4275,7 +4312,7 @@ test("the blocked-times step counts blocked rows defensively and keeps the discl
     ...weeklyEvent,
     blockedSlots: "not-a-map",
   });
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   expect(blockedTimesDetails()).toHaveTextContent("0 slots blocked");
   expect(blockedTimesDetails()).not.toHaveAttribute("open");
 
@@ -4290,7 +4327,7 @@ test("the blocked-times step counts blocked rows defensively and keeps the discl
     ...weeklyEvent,
     blockedSlots: { "weekday:1": "rows?", "weekday:3": [0, 3] },
   });
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   expect(blockedTimesDetails()).toHaveTextContent("2 slots blocked");
   expect(blockedTimesDetails()).not.toHaveAttribute("open");
 });
@@ -4310,7 +4347,7 @@ test("painting on the calendar saves the marked rows and re-hydrates from the sa
   // `weeklyEvent` omits `slotCount`: the marks fall back to the highest
   // slot index.
   renderStatefulTimeTable(weeklyEvent, onEventSaved);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
 
   paintCell(0);
@@ -4370,7 +4407,7 @@ test("painting on the calendar saves the marked rows and re-hydrates from the sa
 test("the Open brush unmarks on the calendar and Clear all clears every mark", async () => {
   updateEvent.mockResolvedValue({ event: weeklyEvent });
   renderTimeTable(blockedWeeklyEvent({ "weekday:1": [1], "weekday:3": [2] }));
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
   expect(saveButton()).toBeDisabled();
 
@@ -4430,7 +4467,7 @@ test("the blocked-times draft recovers from a conflict by loading the newer even
     }),
   );
   renderStatefulTimeTable(weeklyEvent, onEventSaved);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
 
   paintCell(0);
@@ -4466,7 +4503,7 @@ test("the blocked-times draft keeps unsaved marks across an inline event edit", 
     responsesReset: 0,
   }));
   renderStatefulTimeTable(blockedWeeklyEvent(), onEventSaved);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
 
   paintCell(0);
@@ -4528,7 +4565,7 @@ test("the blocked-times draft announces unsaved marks it discards for a changed 
     })),
   };
   const { rerender } = renderTimeTable(stored);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
   const show = (event) =>
     rerender(<ResultsSnapshotPanel {...timeTableProps(event)} />);
@@ -4595,7 +4632,7 @@ test("the blocked-times draft reloads the page for a conflict without the newer 
     Object.assign(new Error("Version mismatch"), { status: 409 }),
   );
   renderTimeTable(weeklyEvent, { onEventSaved });
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
 
   paintCell(2);
@@ -4627,7 +4664,7 @@ test("the blocked-times draft surfaces other failures without a reload action", 
     )
     .mockRejectedValueOnce(Object.assign(new Error(""), { status: 500 }));
   renderTimeTable(weeklyEvent);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
 
   paintCell(4);
@@ -4676,7 +4713,7 @@ test.each([
   "the blocked-times paint surface is read-only for %s",
   async (_label, overrides, reason) => {
     renderTimeTable(blockedWeeklyEvent({ "weekday:1": [1] }, overrides));
-    await screen.findByText(/Results are current/);
+    await resultsAreCurrent();
     await openBlockedTimes();
 
     expect(saveButton()).toBeDisabled();
@@ -4704,7 +4741,7 @@ test.each([
 test("the blocked-times draft handles events without slot groups or slots", async () => {
   updateEvent.mockResolvedValue({ event: weeklyEvent });
   const { unmount } = renderTimeTable(baseEvent);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   // No slots: the calendar shows its empty state (the only one on screen)
   // and the step has nothing to paint on.
   expect(
@@ -4724,7 +4761,7 @@ test("the blocked-times draft handles events without slot groups or slots", asyn
       ...weeklyEvent.slotGroups.slice(1),
     ],
   });
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
   expect(calendarGrid().querySelectorAll("[data-cell-idx]")).toHaveLength(4);
   expect(screen.getByText("0 slots marked")).toBeInTheDocument();
@@ -4744,7 +4781,7 @@ test("the blocked-times draft handles events without slot groups or slots", asyn
 test("the blocked-times draft stands alone without a lock or a save listener", async () => {
   updateEvent.mockResolvedValue({ event: weeklyEvent });
   renderTimeTable(weeklyEvent);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
 
   // Unlocked by default: no lock title, and the grid takes paint.
@@ -4807,7 +4844,7 @@ test("the blocked-times draft hook defaults to an unlocked, saveable draft", asy
 
 test("the blocked-times tools sit in a bar under the calendar only while the step is open", async () => {
   renderTimeTable(weeklyEvent);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   expect(
     screen.queryByRole("region", { name: "Blocked times tools" }),
   ).not.toBeInTheDocument();
@@ -4852,7 +4889,7 @@ test("the blocked-times tools sit in a bar under the calendar only while the ste
 test("painting on the calendar never picks a window", async () => {
   const onSelect = jest.fn();
   renderTimeTable(weeklyEvent, { onSelect });
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
 
   paintCell(1);
@@ -4976,7 +5013,7 @@ test("Other times picks any open time with one click, like Recommended times", a
     mockDatedSnapshot();
     const onSelect = jest.fn();
     render(<PickingTimeTable {...timeTableProps(datedEvent, { onSelect })} />);
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const finalize = document.getElementById("organizer-finalize");
     const other = document.getElementById("organizer-other-times");
     expect(finalize).toContainElement(other);
@@ -5124,7 +5161,7 @@ test("Other times pages a weekly event by week in its own time zone", async () =
         )}
       />,
     );
-    await screen.findByText(/Results are current at revision 1/);
+    await resultsAreCurrent(1);
     const other = document.getElementById("organizer-other-times");
     expect(other.querySelector("summary")).toHaveTextContent(
       "21 open times in the next 4 weeks · recommended or not",
@@ -5227,7 +5264,7 @@ test("Other times reopens on the day of the pick, and follows a pick made elsewh
   try {
     mockEmptySnapshot();
     render(<PickingTimeTable {...timeTableProps(weeklyEvent)} />);
-    await screen.findByText(/Results are current/);
+    await resultsAreCurrent();
     let other = await openOtherTimes();
     const stepper = () =>
       within(other).getByRole("group", { name: "Week shown" });
@@ -5284,7 +5321,7 @@ test("choosing a time shows on the time table: the day, the time pointed at, and
   try {
     mockDatedSnapshot();
     render(<PickingTimeTable {...timeTableProps(datedEvent)} />);
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const results = document.querySelector(".meeting-results");
     const candidate = () =>
       document.querySelector(".meeting-calendar__block--candidate");
@@ -5362,7 +5399,7 @@ test("the calendar stays where the organizer puts it; only Other times' own brow
     render(
       <PickingTimeTable panelRef={panelRef} {...timeTableProps(weeklyEvent)} />,
     );
-    await screen.findByText(/Results are current/);
+    await resultsAreCurrent();
     const shownWeek = () =>
       within(calendarGrid())
         .getAllByRole("columnheader")
@@ -5468,7 +5505,7 @@ test("the pinned calendar follows the lists: pinned, pushed out by their end, le
   try {
     mockDatedSnapshot();
     render(<PickingTimeTable {...timeTableProps(datedEvent)} />);
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const root = document.documentElement;
     const results = document.querySelector(".meeting-results");
     const calendar = results.querySelector(":scope > .meeting-calendar");
@@ -5562,7 +5599,7 @@ test("Other times marks a pick only in its own format", async () => {
         {...timeTableProps({ ...datedEvent, mode: "mixed" })}
       />,
     );
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const other = await openOtherTimes();
     await userEvent.click(otherChips(other)[0]);
     expect(otherChips(other)[0]).toHaveAttribute("aria-pressed", "true");
@@ -5620,7 +5657,7 @@ test("Other times pages dates like the calendar, and the pages stay put as dates
     const { unmount } = render(
       <ResultsSnapshotPanel {...timeTableProps(nineDateEvent)} />,
     );
-    await screen.findByText(/Results are current/);
+    await resultsAreCurrent();
     let other = await openOtherTimes();
     let stepper = within(other).getByRole("group", { name: "Dates shown" });
     expect(stepper).toHaveTextContent("Aug 20 – Aug 26, 2026");
@@ -5640,7 +5677,7 @@ test("Other times pages dates like the calendar, and the pages stay put as dates
     nowSpy.mockReturnValue(Date.parse("2026-08-21T00:00:00Z"));
     mockEmptySnapshot();
     render(<ResultsSnapshotPanel {...timeTableProps(nineDateEvent)} />);
-    await screen.findByText(/Results are current/);
+    await resultsAreCurrent();
     other = await openOtherTimes();
     stepper = within(other).getByRole("group", { name: "Dates shown" });
     expect(stepper).toHaveTextContent("Aug 21 – Aug 26, 2026");
@@ -5658,7 +5695,7 @@ test("Other times follows the calendar's format and explains when nothing can st
         {...timeTableProps({ ...datedEvent, mode: "mixed" })}
       />,
     );
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     let other = await openOtherTimes();
     const format = within(other).getByRole("group", { name: "Format" });
     expect(
@@ -5685,7 +5722,7 @@ test("Other times follows the calendar's format and explains when nothing can st
     const passed = render(
       <ResultsSnapshotPanel {...timeTableProps(datedEvent)} />,
     );
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     other = document.getElementById("organizer-other-times");
     expect(other.querySelector("summary")).toHaveTextContent(
       "No upcoming open time",
@@ -5710,7 +5747,7 @@ test("Other times follows the calendar's format and explains when nothing can st
         )}
       />,
     );
-    await screen.findByText(/Results are current/);
+    await resultsAreCurrent();
     // Closed, the list renders nothing but its (empty) status line: no
     // controls and no stale "nothing can start" note.
     other = document.getElementById("organizer-other-times");
@@ -5733,7 +5770,7 @@ test("Other times follows the calendar's format and explains when nothing can st
         {...timeTableProps({ ...datedEvent, meetingDurationMinutes: 45 })}
       />,
     );
-    await screen.findByText(/Results are current/);
+    await resultsAreCurrent();
     other = document.getElementById("organizer-other-times");
     expect(other.querySelector("summary")).toHaveTextContent(
       "The meeting length does not fit the slots",
@@ -5760,7 +5797,7 @@ test("opening Blocked times hides the ranked outlines and the pick until it clos
     render(
       <ResultsSnapshotPanel {...timeTableProps(datedEvent, { selection })} />,
     );
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const rankBlock = () =>
       document.querySelector(".meeting-calendar__block--rank");
     const selectedBlock = () =>
@@ -5792,7 +5829,7 @@ test("ranked windows are compact chips that highlight their window on the calend
   try {
     mockDatedSnapshot();
     render(<ResultsSnapshotPanel {...timeTableProps(datedEvent)} />);
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const rail = document.querySelector("details.organizer-recommended-times");
     await toggleRecommendedTimes();
 
@@ -5858,7 +5895,7 @@ test("choosing a ranked window leaves painting mode and keeps the draft", async 
     render(
       <ResultsSnapshotPanel {...timeTableProps(datedEvent, { onChoose })} />,
     );
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
 
     await openBlockedTimes();
     paintCell(0);
@@ -5893,7 +5930,7 @@ test("the calendar draws the ranked windows only while the ranked list is open",
     render(
       <ResultsSnapshotPanel {...timeTableProps(datedEvent, { onSelect })} />,
     );
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const grid = screen.getByRole("grid", { name: /^Meeting time calendar/ });
     const cell = (index) => grid.querySelector(`[data-cell-idx="${index}"]`);
     const rankBlock = () =>
@@ -6039,7 +6076,7 @@ test("the blocked-times step sits first under the calendar and saves through the
     responsesReset: 0,
   });
   renderTimeTable(weeklyEvent, { onEventSaved });
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
 
   const stack = document.querySelector(".time-table__sections");
   expect(Array.from(stack.children).map((step) => step.id)).toEqual([
@@ -6113,13 +6150,13 @@ test("results note blocked slots only when the snapshot lists them", async () =>
 
   // A snapshot computed before blocking shipped simply has no note.
   rerender(<ResultsSnapshotPanel {...panelProps} invalidationKey={1} />);
-  await screen.findByText(/Results are current at revision 8/);
+  await resultsAreCurrent(8);
   expect(
     screen.queryByText(/blocked slots are excluded/),
   ).not.toBeInTheDocument();
 
   rerender(<ResultsSnapshotPanel {...panelProps} invalidationKey={2} />);
-  await screen.findByText(/Results are current at revision 9/);
+  await resultsAreCurrent(9);
   expect(
     screen.queryByText(/blocked slots are excluded/),
   ).not.toBeInTheDocument();
@@ -6132,7 +6169,7 @@ test("a finalized meeting locks picking until the event is reactivated", async (
     const onSelect = jest.fn();
     const props = timeTableProps(datedEvent, { onSelect });
     const { rerender } = render(<PickingTimeTable {...props} />);
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const cellAt = (index) =>
       screen
         .getByRole("grid", { name: /^Meeting time calendar/ })

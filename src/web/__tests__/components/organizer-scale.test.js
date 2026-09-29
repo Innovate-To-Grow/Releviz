@@ -141,6 +141,18 @@ import {
   sendRosterInvitations,
 } from "@/lib/api/roster";
 
+// Waits until the Time Table shows a finished snapshot (of `revision`, when
+// given): the section names the freshness of what it shows.
+function resultsAreCurrent(revision) {
+  return waitFor(() => {
+    const section = document.querySelector('[data-results-status="fresh"]');
+    expect(section).toBeInTheDocument();
+    if (revision !== undefined) {
+      expect(section).toHaveAttribute("data-results-revision", `${revision}`);
+    }
+  });
+}
+
 // The event streams the workspace opened in the current test, oldest
 // first: the fake connection records the handlers it was given so a test
 // can push the server's frames, and its `close` is a spy. Nothing is pushed
@@ -651,7 +663,7 @@ describe("scaled organizer workspace", () => {
       screen.getByTestId("organizer-header-event-status"),
     ).toHaveTextContent("active");
     await screen.findByText("Ada Faculty");
-    await screen.findByText(/Results are current at revision 3/);
+    await resultsAreCurrent(3);
 
     // Event facts first, then the calendar picker with its confirmation step
     // inside it, then the roster that feeds them.
@@ -932,7 +944,7 @@ describe("scaled organizer workspace", () => {
   test("reports when the roster cannot be re-read after a reset", async () => {
     renderView();
     await screen.findByText("Ada Faculty");
-    await screen.findByText(/Results are current at revision 3/);
+    await resultsAreCurrent(3);
     fetchRoster.mockRejectedValueOnce(new Error(""));
 
     const overviewSection = document.getElementById("organizer-overview");
@@ -2302,9 +2314,7 @@ describe("scaled organizer workspace", () => {
     });
     const setEvent = jest.fn();
     renderView(setEvent, { ...event, status: "active" });
-    expect(
-      await screen.findByText(/Results are current at revision 3/),
-    ).toBeInTheDocument();
+    await resultsAreCurrent(3);
     await toggleRecommendedTimes();
     await userEvent.click(
       screen.getByRole("button", { name: /choose this time/i }),
@@ -2392,7 +2402,7 @@ describe("scaled organizer workspace", () => {
       sample: null,
     });
     renderView(jest.fn(), { ...event, status: "active" });
-    await screen.findByText(/Results are current at revision 3/);
+    await resultsAreCurrent(3);
 
     // Playwright's getByRole("heading", { name }) is a substring match, so
     // only the panel title and the Finalize step may mention them.
@@ -2464,7 +2474,7 @@ describe("scaled organizer workspace", () => {
   test("refreshes the roster when a saved edit reset responses", async () => {
     renderView();
     await screen.findByText("Ada Faculty");
-    await screen.findByText(/Results are current at revision 3/);
+    await resultsAreCurrent(3);
     fetchRoster.mockClear();
     fetchEventResults.mockClear();
 
@@ -2490,7 +2500,7 @@ describe("scaled organizer workspace", () => {
   test("keeps the ranked list and the empty Finalize step collapsed under the calendar", async () => {
     renderView();
     await screen.findByText("Ada Faculty");
-    await screen.findByText(/Results are current at revision 3/);
+    await resultsAreCurrent(3);
 
     const finalizeSection = document.getElementById("organizer-finalize");
     expect(finalizeSection).toHaveTextContent("No time selected yet");
@@ -2558,7 +2568,7 @@ describe("scaled organizer workspace", () => {
 
     try {
       render(<StatefulWorkspace initialEvent={calendarEvent} />);
-      await screen.findByText(/Results are current/);
+      await resultsAreCurrent();
       fetchEventResults.mockClear();
       const finalizeSection = () =>
         document.getElementById("organizer-finalize");
@@ -2643,7 +2653,7 @@ describe("scaled organizer workspace", () => {
     try {
       const setEvent = jest.fn();
       renderView(setEvent, calendarEvent);
-      await screen.findByText(/Results are current/);
+      await resultsAreCurrent();
 
       // The step re-keys on every new selection, so query it fresh.
       const finalizeSection = () =>
@@ -2756,7 +2766,7 @@ describe("scaled organizer workspace", () => {
 
     try {
       render(<StatefulWorkspace initialEvent={calendarEvent} />);
-      await screen.findByText(/Results are current/);
+      await resultsAreCurrent();
       const finalizeSection = () =>
         document.getElementById("organizer-finalize");
       const headerStatus = () =>
@@ -2881,7 +2891,7 @@ describe("scaled organizer workspace", () => {
       },
     });
     renderView();
-    await screen.findByText(/Results are current at revision 3/);
+    await resultsAreCurrent(3);
 
     const channelGroup = screen.getByRole("group", {
       name: "Meeting channel",
@@ -2962,7 +2972,7 @@ describe("scaled organizer workspace", () => {
       .mockReturnValue(Date.parse("2026-08-01T00:00:00Z"));
     try {
       renderView(jest.fn(), calendarEvent);
-      await screen.findByText(/Results are current/);
+      await resultsAreCurrent();
       const finalize = document.getElementById("organizer-finalize");
       await userEvent.click(finalize.querySelector(":scope > summary"));
       const other = document.getElementById("organizer-other-times");
@@ -3002,7 +3012,7 @@ describe("scaled organizer workspace", () => {
       });
     try {
       renderView(jest.fn(), calendarEvent);
-      await screen.findByText(/Results are current/);
+      await resultsAreCurrent();
       const finalize = document.getElementById("organizer-finalize");
       await userEvent.click(finalize.querySelector(":scope > summary"));
       const other = document.getElementById("organizer-other-times");
@@ -3031,7 +3041,7 @@ describe("scaled organizer workspace", () => {
       .mockReturnValue(Date.parse("2026-08-01T00:00:00Z"));
     try {
       renderView(jest.fn(), calendarEvent);
-      await screen.findByText(/Results are current/);
+      await resultsAreCurrent();
       await userEvent.click(calendarCell(1));
 
       expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
@@ -3070,7 +3080,7 @@ describe("scaled organizer workspace", () => {
     ) {
       const view = renderView(setEvent, currentEvent);
       await screen.findByText("Ada Faculty");
-      await screen.findByText(/Results are current at revision 3/);
+      await resultsAreCurrent(3);
       fetchEvent.mockClear();
       fetchRoster.mockClear();
       fetchEventResults.mockClear();
@@ -3188,7 +3198,7 @@ describe("scaled organizer workspace", () => {
         "token",
       );
       expect(
-        await screen.findByText(/Results are updating for revision 4/),
+        await screen.findByText(/Results are updating/),
       ).toBeInTheDocument();
       expect(
         screen.getByText(/· 1 submitted · 0 not submitted ·/),
@@ -3935,8 +3945,10 @@ describe("scaled organizer workspace", () => {
     renderView();
 
     expect(
-      await screen.findByText(/Results are updating for revision 4/),
-    ).toHaveTextContent("Showing the last successful snapshot meanwhile");
+      await screen.findByText(
+        /Results are updating\. Showing the last calculated results meanwhile\./,
+      ),
+    ).toBeInTheDocument();
     // Named once in the collapsed summary and once in the list itself.
     // Named in the collapsed summary, on the chip, and in the detail line.
     expect(screen.getAllByText(/Previous best window/)).toHaveLength(3);

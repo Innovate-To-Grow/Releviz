@@ -2393,6 +2393,8 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
     <Panel
       ref={sectionRef}
       className="organizer-panel organizer-results-panel"
+      data-results-status={snapshot.status}
+      data-results-revision={snapshot.computedRevision ?? undefined}
       headingLevel={3}
       headingRef={headingRef}
       headingProps={{ tabIndex: -1 }}
@@ -2415,13 +2417,9 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
                 aria-hidden="true"
               />
               <span>
-                Results are updating for revision{" "}
-                {snapshot.requestedRevision ??
-                  event.resultsRevision ??
-                  "latest"}
-                .
+                Results are updating.
                 {snapshot.results
-                  ? " Showing the last successful snapshot meanwhile."
+                  ? " Showing the last calculated results meanwhile."
                   : ""}
               </span>
             </span>
@@ -2429,18 +2427,11 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
         )}
         {snapshot.status === "failed" && (
           <Alert variant="danger" role="alert">
-            Result calculation failed. The worker will retry; the last
-            successful snapshot remains visible.
-          </Alert>
-        )}
-        {snapshot.status === "fresh" && (
-          <Alert variant="secondary" role="status">
-            Results are current at revision{" "}
-            {snapshot.computedRevision ?? "latest"}
-            {snapshot.generatedAt
-              ? ` · generated ${new Date(snapshot.generatedAt).toLocaleString()}`
-              : ""}
-            .
+            The results could not be calculated. It will be retried
+            automatically
+            {snapshot.results
+              ? "; the last calculated results stay on screen."
+              : "."}
           </Alert>
         )}
         {blockedSlotIndices.length > 0 && (

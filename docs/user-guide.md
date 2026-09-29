@@ -433,7 +433,8 @@ and the event reopens only with **Reopen and send N emails**. When nobody receiv
 confirmation, it reopens at once.
 
 While new responses are being processed, the Time Table says it is updating and keeps showing the
-last completed results; once current, it shows when they were generated.
+last calculated results; the notice goes away by itself once they are current. A calculation that
+fails is retried automatically, and the last calculated results stay on screen meanwhile.
 
 ### Live updates
 

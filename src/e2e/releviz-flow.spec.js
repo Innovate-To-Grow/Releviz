@@ -541,15 +541,14 @@ print(json.dumps({
   return JSON.parse(output.trim());
 }
 
-// The revision the Results panel says it is current at, or -1 while it is
-// still updating.
+// The revision the Time Table is current at, or -1 while it is still
+// updating.
 async function currentResultsRevision(page) {
-  const text = await page
-    .getByText(/Results are current at revision \d+/)
-    .textContent({ timeout: 500 })
-    .catch(() => "");
-  const match = String(text || "").match(/revision (\d+)/);
-  return match ? Number(match[1]) : -1;
+  const revision = await page
+    .locator('[data-results-status="fresh"]')
+    .getAttribute("data-results-revision", { timeout: 500 })
+    .catch(() => null);
+  return revision === null ? -1 : Number(revision);
 }
 
 function temporaryAccessPathFromEmail(body) {
@@ -2847,9 +2846,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByText("Group availability for a 60-minute meeting."),
     ).toBeVisible();
-    await expect(
-      page.getByText(/Results are current at revision/),
-    ).toBeVisible();
+    await expect(page.locator('[data-results-status="fresh"]')).toBeVisible();
     await openRecommendedTimes(page);
     await page
       .getByRole("button", { name: "Choose this time" })
