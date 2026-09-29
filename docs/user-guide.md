@@ -409,9 +409,10 @@ with weight zero still count toward the unweighted score. There are no required 
 The list is as long as the good options are, at most ten: a window is listed only if someone with a
 weight above 0 can attend all of it, it scores at least half of the best window, and it shares no
 slot with a better listed window in the same format (so a long free stretch tiles into separate
-hours). The list says why it ends where it does, and an empty list names the reason (no responses
-yet, nobody free for a whole window, no upcoming times). Results cached under an older ranking rule
-are recomputed on the next read.
+hours). The list says why it ends where it does, points to **Other times** when it stops at ten or
+before the next option would fall under half of the best, and an empty list names the reason (no
+responses yet, nobody free for a whole window, no upcoming times). Results cached under an older
+ranking rule are recomputed on the next read.
 
 On the meeting-time calendar, a cell's percentage is the share of counted responses free in that one
 slot (a cell says so when read out, and the legend says "free in a slot"). A meeting covers several

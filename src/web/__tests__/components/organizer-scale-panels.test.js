@@ -3716,6 +3716,7 @@ const RANKING_RULE =
   "We recommend times someone can attend for the whole 60 minutes, at least half as available as the best, never overlapping in the same format.";
 const RANKING_SHARES =
   "Shares count each person for the whole 60 minutes, so they can be lower than the calendar's per-slot shading.";
+const RANKING_OTHER_TIMES = "Other times below lists every open time.";
 const RANKING_POINTER =
   "Point at one to find it on the calendar; click one to select it.";
 
@@ -3741,7 +3742,7 @@ test.each([
       weightedAvailabilityFloor: 0.5,
       nextWeightedAvailability: 0.4286,
     },
-    "The next option drops to 43% weighted, under half of the best.",
+    `The next option drops to 43% weighted, under half of the best. ${RANKING_OTHER_TIMES}`,
   ],
   [
     "the next option rounds to the floor",
@@ -3752,7 +3753,7 @@ test.each([
       weightedAvailabilityFloor: 0.5,
       nextWeightedAvailability: 0.4975,
     },
-    "The next option drops to 49.7% weighted, under half of the best.",
+    `The next option drops to 49.7% weighted, under half of the best. ${RANKING_OTHER_TIMES}`,
   ],
   [
     "a best window under half of the group",
@@ -3763,7 +3764,7 @@ test.each([
       weightedAvailabilityFloor: 0.2,
       nextWeightedAvailability: 0.1,
     },
-    "The next option drops to 10% weighted, under half of the best. No time suits even half of the weighted group; these are the closest.",
+    `The next option drops to 10% weighted, under half of the best. ${RANKING_OTHER_TIMES} No time suits even half of the weighted group; these are the closest.`,
   ],
   [
     "a lone window under half of the group",
@@ -3800,7 +3801,9 @@ test("a full ranked list reports how many more windows qualified", async () => {
   expect(rail.querySelector("summary")).toHaveTextContent(
     "10 of 12 recommended · best Tue 09:00–10:00",
   );
-  expect(intro).toHaveTextContent("Showing the top 10 of 12.");
+  expect(intro).toHaveTextContent(
+    `Showing the top 10 of 12. ${RANKING_OTHER_TIMES}`,
+  );
   expect(rail.querySelectorAll(".ranked-chip")).toHaveLength(10);
 });
 

@@ -344,7 +344,7 @@ test.describe("Organizer meeting-time calendar", () => {
       /^57% weighted/,
     ]);
     await expect(rail.locator(".ranked-chips__intro")).toContainText(
-      "The next option drops to 43% weighted, under half of the best.",
+      "The next option drops to 43% weighted, under half of the best. Other times below lists every open time.",
     );
     await expect(rail.locator("summary")).toContainText(
       "3 recommended · best Mon 10:00–11:00",

@@ -1134,14 +1134,16 @@ function recommendedTimesIntro({ basis, count, meetingMinutes, mixed }) {
     `Shares count each person for the whole ${meetingMinutes} minutes, so they can be lower than the calendar's per-slot shading.`,
   ];
   const total = qualifyingTotal(basis, count);
+  // Where to look when the list stops short of what the organizer wants.
+  const others = "Other times below lists every open time.";
   if (basis.listEnd === "limit")
-    sentences.push(`Showing the top ${count} of ${total}.`);
+    sentences.push(`Showing the top ${count} of ${total}. ${others}`);
   else if (
     basis.listEnd === "belowFloor" &&
     basis.nextWeightedAvailability != null
   )
     sentences.push(
-      `The next option drops to ${shareBelow(basis.nextWeightedAvailability, basis.weightedAvailabilityFloor)}% weighted, under half of the best.`,
+      `The next option drops to ${shareBelow(basis.nextWeightedAvailability, basis.weightedAvailabilityFloor)}% weighted, under half of the best. ${others}`,
     );
   else if (basis.listEnd === "noMoreWindows")
     sentences.push(
