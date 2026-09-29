@@ -117,12 +117,12 @@ or your own row), offers **Edit schedule**, and groups everything about the pers
 
 - **Contact**: **Full name**, **Email**, and **Phone**. A name can be changed for anyone whose
   schedule you still enter; a person who answers under their own account keeps their account's
-  name. An email can be changed only until the person has signed in with their link, joined, or
-  answered. The row then moves to the account behind the new address (or a new temporary
-  identity) and keeps its name, groups, weight, and any schedule you entered; it gets a fresh
-  invitation marked **Not sent**, the old link stops working, and any queued email to the old
-  address is canceled. Adding an email to a person without one makes them an ordinary person you
-  can invite. After saving a new address, the notice offers **Send invitation** for it.
+  name. An email can be changed only until the person has opened their link (someone without a
+  Releviz account), joined, or answered. The row then moves to the account behind the new address
+  (or a new temporary identity) and keeps its name, groups, weight, and any schedule you entered;
+  it gets a fresh invitation marked **Not sent**, the old link stops working, and any queued email
+  to the old address is canceled. Adding an email to a person without one makes them an ordinary
+  person you can invite. After saving a new address, the notice offers **Send invitation** for it.
 - **Groups**: the person's group chips and **+ Add to group**, which opens the group picker.
 - **In the results**: whether their answers are counted (**Count Ada's answers**, for someone
   called Ada) and their **Weight** (0 to 1).
@@ -240,9 +240,10 @@ The **Invitation** badge on each row, which **Filter** also uses, shows:
   event has moved past (to someone since removed, for a meeting time since changed, or for an
   event no longer active) are canceled instead. **Send N again** on the confirmation step queues
   them.
-- **Sent**: emailed, including opened.
-- **Accepted**: the person verified their link, joined, or saved or submitted their own response
-  after the email. A response you enter for them does not count.
+- **Sent**: emailed, including people who have opened their link. Opening the link does not mark
+  the invitation accepted.
+- **Accepted**: the person joined, or saved or submitted their own response after the email.
+  Opening the link is not enough, and a response you enter for them does not count.
 - **No email**: a person without an email of their own; **—** marks your own row.
 
 The delivery card counts recipients that are sent, queued, or failed. It keeps itself current
@@ -263,9 +264,10 @@ reminders go out on their schedule without a review.
 
 ### Who can open an event
 
-Invite-only events are visible only to the organizer, existing participants, invited people using
-their emailed link, and signed-in accounts whose verified email matches an invitation. Open-link
-events let anyone join with the event code, up to the 1,000-person limit.
+Invite-only events are visible only to the organizer, existing participants, invited people opening
+their emailed private link (see [Fill in availability](#fill-in-availability)), and signed-in
+accounts whose verified email matches an invitation. Open-link events let anyone join with the
+event code, up to the 1,000-person limit.
 
 ## Fill in availability
 
@@ -278,6 +280,17 @@ Each participant:
 
 If the organizer already added them, they skip **Join as** and see any schedule the organizer
 entered. Their first save or submit makes the response theirs.
+
+People without a Releviz account don't sign in at all. The invitation email carries a private link
+that opens their own schedule directly: no account, no password, and no code to type or wait for.
+The link is personal and grants access to that one event only, but anyone who has it can see the
+event and change and submit that person's schedule, so it should not be forwarded. It works again
+whenever it is opened, on the same device or another. It stops working, and shows **This invitation
+link isn't active**, when the organizer changes the person's email address or replaces the whole
+participant list (each files a new, unsent invitation with a new link) or when the person upgrades
+to a full account. Resending an invitation sends the same link again. **Upgrade to full access** on
+the schedule page still confirms the address with an emailed verification code. People who already
+have a Releviz account sign in instead and use the event page, as described above.
 
 By default every slot starts **Available**, so participants paint **Busy** over the times that do
 not work. The brush starts on the opposite of the starting state, and **Mark all Available** resets

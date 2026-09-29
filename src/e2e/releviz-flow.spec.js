@@ -12,6 +12,7 @@ const {
   apiJson,
   datetimeLocalHoursFromNow,
   dispatchEmailJobs,
+  emailsSentTo,
   expandAdvancedOptions,
   expectDashboard,
   fillTextbox,
@@ -74,8 +75,8 @@ function emailField(dialog, term) {
 // the envelope, the HTML part in a sandboxed frame (no scripts, inert
 // links), and the plain-text part, both with a stand-in for that person's
 // private link. `expected` lists the summary lines, the envelope, the
-// rendered email's heading and call-to-action link, and text in the
-// plain-text part. Nothing has been sent at this point. Returns the envelope
+// rendered email's heading, call-to-action link, and any notice under it,
+// and text in the plain-text part. Nothing has been sent at this point. Returns the envelope
 // as shown, to compare with the email that is delivered later.
 async function reviewEmail(dialog, expected) {
   await expect(dialog.getByText("Step 1 of 2: Review")).toBeVisible();
@@ -105,6 +106,9 @@ async function reviewEmail(dialog, expected) {
       exact: true,
     });
     await expect(link).toHaveAttribute("href", expected.link.href);
+  }
+  if (expected.notice) {
+    await expect(rendered.getByText(expected.notice)).toBeVisible();
   }
   await dialog.getByRole("tab", { name: "Plain text" }).click();
   const plainText = dialog.locator(".email-preview__text");
@@ -483,7 +487,7 @@ import django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.e2e")
 django.setup()
 
-from apps.authn.models import ContactEmail
+from apps.authn.models import ContactEmail, EmailAuthChallenge
 from apps.mail.models import EmailDeliveryJob
 from apps.scheduling.models import Event, EventInvitation, Participant, TemporaryEventSession, UserEvent, Weight
 
@@ -509,6 +513,13 @@ print(json.dumps({
     "hasUsablePassword": member.has_usable_password(),
     "invitationMemberId": str(invitation.member_id),
     "invitationFirstSent": invitation.first_sent_at is not None,
+    "invitationStatus": invitation.status,
+    "invitationOpened": invitation.opened_at is not None,
+    "invitationAccepted": invitation.accepted_at is not None,
+    "tempAccessChallengeCount": EmailAuthChallenge.objects.filter(
+        member=member,
+        purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
+    ).count(),
     "invitationJobCount": EmailDeliveryJob.objects.filter(
         event=event,
         invitation=invitation,
@@ -696,11 +707,15 @@ test.describe("Releviz account and scheduling flow", () => {
       subject: `Share your availability for ${eventName}`,
       heading: "You're invited",
       link: { name: "Share your availability", href: previewLink },
+      notice:
+        "This private link is only for you and only grants access to this event. Please do not forward it.",
       text: [
         `Link: ${previewLink}`,
-        "Open the link and enter the six-digit code sent to this email address.",
+        "Open the link to share your availability. It is private to you and only grants access to this event, so please do not forward it.",
       ],
     });
+    // The link alone opens the schedule, so the email promises no code.
+    expect(invitationEnvelope.text).not.toMatch(/six-digit|verification code/i);
     await expect(
       importInviteDialog.getByText(
         "Shown for Temporary Taylor. Each person gets their own private link.",
@@ -803,6 +818,10 @@ test.describe("Releviz account and scheduling flow", () => {
       temporaryEmail,
     );
     expect(invitationEmail).not.toContain("invitation=preview");
+    expect(invitationEmail).toContain(
+      "It is private to you and only grants access to this event, so please do not forward it.",
+    );
+    expect(invitationEmail).not.toMatch(/six-digit|verification code/i);
     await expect(eventDeliveryProgress.getByText("1 sent")).toBeVisible({
       timeout: LIVE_SYNC_TIMEOUT_MS,
     });
@@ -834,28 +853,102 @@ test.describe("Releviz account and scheduling flow", () => {
     });
     await expect(organizerDrawer).toBeVisible();
 
+    // A link that matches no invitation opens nothing, and says so without
+    // hinting at why: an unknown token and, further down, a link whose person
+    // has since upgraded look the same.
+    const strangerContext = await browser.newContext();
+    const strangerPage = await strangerContext.newPage();
+    await strangerPage.goto(
+      `/temp-access?code=${eventCode}&invitation=${crypto.randomUUID()}`,
+    );
+    await expect(
+      strangerPage.getByRole("heading", {
+        name: "This invitation link isn't active",
+      }),
+    ).toBeVisible();
+    await expect(
+      strangerPage.getByText(
+        "It may have been replaced by a newer invitation, or the organizer changed the address it was sent to.",
+      ),
+    ).toBeVisible();
+    await expect(
+      strangerPage.getByRole("heading", { name: eventName }),
+    ).toHaveCount(0);
+    await strangerContext.close();
+
+    // The emailed link is the credential: opening it lands straight on
+    // Taylor's schedule, with no code to type and no second email.
     const temporaryContext = await browser.newContext();
     const temporaryPage = await temporaryContext.newPage();
-    const accessCodeStartedAt = Date.now() - 1000;
+    // The first attempt to open the link fails on the way. The page keeps the
+    // link and offers to try again, and the retry opens the schedule.
+    let failNextOpen = true;
+    await temporaryPage.route("**/events/temp-access/open", async (route) => {
+      if (failNextOpen) {
+        failNextOpen = false;
+        await route.fulfill({ status: 503, json: {} });
+        return;
+      }
+      await route.continue();
+    });
+    const openedAt = Date.now();
     await temporaryPage.goto(accessPath);
     await expect(
-      temporaryPage.getByRole("heading", { name: "Check your email" }),
+      temporaryPage.getByText(
+        "We could not open your invitation. Check your connection and try again.",
+      ),
     ).toBeVisible();
-    const accessCode = await latestVerificationCode(
-      temporaryEmail,
-      accessCodeStartedAt,
-      "temp_event_access",
-    );
-    await temporaryPage.getByLabel("Verification code").fill(accessCode);
-    await temporaryPage
-      .getByRole("button", { name: "Verify and open schedule" })
-      .click();
+    await expect(temporaryPage.getByLabel("Verification code")).toHaveCount(0);
+    await temporaryPage.getByRole("button", { name: "Try again" }).click();
     await expect(
       temporaryPage.getByRole("heading", { name: eventName }),
     ).toBeVisible();
     await expect(
       temporaryPage.getByText("You are responding as Temporary Taylor"),
     ).toBeVisible();
+    await expect(temporaryPage.getByLabel("Verification code")).toHaveCount(0);
+    await expect(
+      temporaryPage.getByRole("heading", { name: "Check your email" }),
+    ).toHaveCount(0);
+    await expect(temporaryPage).toHaveURL(
+      new RegExp(`/temp-access\\?code=${eventCode}$`),
+    );
+    expect(await emailsSentTo(temporaryEmail, openedAt)).toEqual([]);
+    // Opening records that the link was opened. It is not accepting the
+    // invitation: that waits for Taylor's own first save or submit.
+    const openedState = temporaryAccountState({
+      code: eventCode,
+      email: temporaryEmail,
+    });
+    expect(openedState).toEqual(
+      expect.objectContaining({
+        invitationStatus: "opened",
+        invitationOpened: true,
+        invitationAccepted: false,
+        tempAccessChallengeCount: 0,
+        tempSessionCount: 1,
+      }),
+    );
+
+    // Opening the same link again in the same browser lands on the schedule
+    // again, still with no code, and keeps the session it has.
+    await temporaryPage.goto(accessPath);
+    await expect(
+      temporaryPage.getByRole("heading", { name: eventName }),
+    ).toBeVisible();
+    await expect(
+      temporaryPage.getByText("You are responding as Temporary Taylor"),
+    ).toBeVisible();
+    await expect(temporaryPage.getByLabel("Verification code")).toHaveCount(0);
+    expect(await emailsSentTo(temporaryEmail, openedAt)).toEqual([]);
+    expect(
+      temporaryAccountState({ code: eventCode, email: temporaryEmail }),
+    ).toEqual(
+      expect.objectContaining({
+        tempSessionCount: 1,
+        activeTempSessionCount: 1,
+      }),
+    );
 
     await expect(participantSummary(page)).toContainText("0 submitted");
     let revisionBeforeResponse = -1;
@@ -953,6 +1046,11 @@ test.describe("Releviz account and scheduling flow", () => {
         accessLevel: "temporary",
         contactVerified: false,
         userEventVisible: true,
+        // Taylor's own first save is what accepted the invitation, and no
+        // emailed code was ever issued along the way.
+        invitationStatus: "submitted",
+        invitationAccepted: true,
+        tempAccessChallengeCount: 0,
         tempSessionCount: 1,
         activeTempSessionCount: 1,
         revokedTempSessionCount: 0,
@@ -1144,6 +1242,20 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(afterUpgrade.availabilityInperson).toEqual(
       beforeUpgrade.availabilityInperson,
     );
+
+    // Taylor answers with the account now, so the old private link opens
+    // nothing, and says no more than any other link that matches nothing.
+    const oldLinkPage = await temporaryContext.newPage();
+    await oldLinkPage.goto(accessPath);
+    await expect(
+      oldLinkPage.getByRole("heading", {
+        name: "This invitation link isn't active",
+      }),
+    ).toBeVisible();
+    await expect(
+      oldLinkPage.getByRole("heading", { name: eventName }),
+    ).toHaveCount(0);
+    await oldLinkPage.close();
 
     // Add and send invitation adds the person without emailing them and
     // opens the invitation review above the panel. Closing the review

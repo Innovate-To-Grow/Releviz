@@ -129,13 +129,16 @@ class RosterInvitationEmailPreviewTests(TestCase):
         self.assertEqual(email["to"], "Ada Lovelace <ada@example.com>")
         self.assertEqual(email["subject"], "Share your availability for Planning day")
         self.assertEqual(email["attachments"], ["releviz-EMAILPV1-availability.ics"])
-        # Ada has a temporary account: the access-code page and its instructions.
+        # Ada has a temporary account: her private link page and its instructions.
         preview_link = f"{FRONTEND}/temp-access?code=EMAILPV1&invitation=preview"
         self.assertIn(f"Link: {preview_link}\n", email["text"])
-        self.assertIn("enter the six-digit code", email["text"])
+        self.assertIn("please do not forward it", email["text"])
+        self.assertNotIn("six-digit", email["text"])
         self.assertIn("Message from organizer:\nBring your calendar & <notes>", email["text"])
         self.assertIn("Bring your calendar &amp; &lt;notes&gt;", email["html"])
         self.assertIn("invitation=preview", email["html"])
+        self.assertIn("This private link is only for you", email["html"])
+        self.assertNotIn("six-digit", email["html"])
         self.assertTrue(email["html"].lstrip().lower().startswith("<!doctype html"))
         for field in ("text", "html"):
             self.assertNotIn(str(ada_invitation.access_token), email[field])
@@ -163,7 +166,7 @@ class RosterInvitationEmailPreviewTests(TestCase):
         self.assertIn(f"Link: {FRONTEND}/event?code=EMAILPV1&invitation=preview\n", email["text"])
         self.assertIn("Log in or create a Releviz account", email["text"])
         self.assertNotIn("Message from organizer", email["text"])
-        self.assertNotIn("six-digit code", email["html"])
+        self.assertNotIn("private link is only for you", email["html"])
 
         self.send([joe])
         self.assert_matches_the_send(
@@ -303,7 +306,7 @@ class ReminderEmailPreviewTests(TestCase):
             f"{FRONTEND}/temp-access?code=REMEMAIL&invitation=preview",
             reminded["email"]["text"],
         )
-        self.assertIn("six-digit code", reminded["email"]["text"])
+        self.assertIn("please do not forward it", reminded["email"]["text"])
 
         # With everyone reminded the preview still shows what a run would send.
         enqueue_reminder_job(self.bea)

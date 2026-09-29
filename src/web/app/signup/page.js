@@ -114,6 +114,13 @@ function TemporaryUpgradeSignupContent({ searchParams, next }) {
   const setField = (field, value) =>
     setForm((current) => ({ ...current, [field]: value }));
 
+  const registrationDetails = () => ({
+    password: form.password,
+    password_confirm: form.passwordConfirm,
+    first_name: form.firstName,
+    last_name: form.lastName,
+  });
+
   const submitDetails = async (event) => {
     event.preventDefault();
     if (authLoading) return;
@@ -130,13 +137,10 @@ function TemporaryUpgradeSignupContent({ searchParams, next }) {
     }
     setLoading(true);
     try {
-      const registration = {
-        password: form.password,
-        password_confirm: form.passwordConfirm,
-        first_name: form.firstName,
-        last_name: form.lastName,
-      };
-      await startTemporaryUpgradeRegistration(upgradeEventCode, registration);
+      await startTemporaryUpgradeRegistration(
+        upgradeEventCode,
+        registrationDetails(),
+      );
       setStep("code");
     } catch (err) {
       setError(err.message || "Unable to start registration.");
@@ -154,7 +158,7 @@ function TemporaryUpgradeSignupContent({ searchParams, next }) {
       const verification = {
         email: registrationEmail,
         code: form.code,
-        temporaryUpgrade: upgradeMode,
+        registration: registrationDetails(),
       };
       const data = await verifySignup(verification);
       if (

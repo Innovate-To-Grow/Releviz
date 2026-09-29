@@ -587,10 +587,10 @@ class RegistrationServiceBranchTests(TestCase):
                     {"password": "short", "password_confirm": "short", "key_id": ""}
                 )
             with self.assertRaises(serializers.ValidationError):
-                register._validated_registration_details(self._data(first_name="", firstName=""))
+                register.validated_registration_details(self._data(first_name="", firstName=""))
             with self.assertRaises(serializers.ValidationError):
-                register._validated_registration_details(self._data(last_name="", lastName=""))
-            details = register._validated_registration_details(
+                register.validated_registration_details(self._data(last_name="", lastName=""))
+            details = register.validated_registration_details(
                 self._data(first_name="", firstName="Camel", last_name="", lastName="Case")
             )
         self.assertEqual(details["first_name"], "Camel")
@@ -650,6 +650,7 @@ class RegistrationServiceBranchTests(TestCase):
             verified=False,
             is_active=True,
             access_level="temporary",
+            first_name="Temp",
         )
         with patch.object(register, "decrypt_password", side_effect=lambda value, _key: value):
             with self.assertRaises(serializers.ValidationError):
@@ -677,6 +678,10 @@ class RegistrationServiceBranchTests(TestCase):
         self.assertEqual(
             issue.call_args.kwargs["scope_key"], register.TEMP_SESSION_REGISTRATION_SCOPE
         )
+        # The details are held back until the emailed code is verified.
+        member.refresh_from_db()
+        self.assertEqual(member.first_name, "Temp")
+        self.assertTrue(member.check_password("StrongPass123!"))
 
         full_member = _member(
             email="not-temporary@example.com",

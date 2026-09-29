@@ -184,12 +184,7 @@ class ClassroomEmailRateLimitTests(TestCase):
         request = RequestFactory().post(
             "/authn/email-auth/request-code/", REMOTE_ADDR="198.51.100.50"
         )
-        for scope in (
-            "code_request",
-            "temp_access_code_request",
-            "code_verify",
-            "temp_access_code_verify",
-        ):
+        for scope in ("code_request", "code_verify", "temp_access_open"):
             with self.subTest(scope=scope):
                 for index in range(1000):
                     decision = consume_request_rate_limit(
@@ -200,9 +195,8 @@ class ClassroomEmailRateLimitTests(TestCase):
     def test_one_student_cannot_bypass_identity_limits_by_switching_networks(self):
         for scope, allowed_attempts in (
             ("code_request", 5),
-            ("temp_access_code_request", 5),
             ("code_verify", 10),
-            ("temp_access_code_verify", 10),
+            ("temp_access_open", 20),
         ):
             with self.subTest(scope=scope):
                 for index in range(allowed_attempts + 1):
@@ -213,12 +207,7 @@ class ClassroomEmailRateLimitTests(TestCase):
 
     def test_shared_network_ceiling_still_blocks_excess_requests(self):
         request = RequestFactory().post("/", REMOTE_ADDR="198.51.100.60")
-        for scope in (
-            "code_request",
-            "temp_access_code_request",
-            "code_verify",
-            "temp_access_code_verify",
-        ):
+        for scope in ("code_request", "code_verify", "temp_access_open"):
             with self.subTest(scope=scope):
                 self.assertTrue(
                     consume_request_rate_limit(scope, request, "first@example.com").allowed

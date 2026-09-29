@@ -35,17 +35,10 @@ async function tempAccessFetch(path, options = {}) {
   return response.json();
 }
 
-export function requestTempAccessCode({ code, invitationToken }) {
-  return tempAccessFetch("/events/temp-access/request-code", {
+export function openTempAccess({ code, invitationToken }) {
+  return tempAccessFetch("/events/temp-access/open", {
     method: "POST",
     body: JSON.stringify({ code, invitationToken }),
-  });
-}
-
-export function verifyTempAccess({ code, invitationToken, verificationCode }) {
-  return tempAccessFetch("/events/temp-access/verify", {
-    method: "POST",
-    body: JSON.stringify({ code, invitationToken, verificationCode }),
   });
 }
 

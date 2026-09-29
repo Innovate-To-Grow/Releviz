@@ -12,6 +12,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
+import { StrictMode } from "react";
 
 let searchParams = new URLSearchParams();
 
@@ -63,9 +64,8 @@ jest.mock("@/components/schedule/ScheduleGrid", () => ({
 jest.mock("@/lib/api/tempAccess", () => ({
   fetchTempAccessSession: jest.fn(),
   logoutTempAccess: jest.fn(),
-  requestTempAccessCode: jest.fn(),
+  openTempAccess: jest.fn(),
   updateTempAccessParticipant: jest.fn(),
-  verifyTempAccess: jest.fn(),
 }));
 
 jest.mock("@/lib/navigation", () => ({
@@ -77,9 +77,8 @@ import TempAccessClient from "@/app/temp-access/TempAccessClient";
 import {
   fetchTempAccessSession,
   logoutTempAccess,
-  requestTempAccessCode,
+  openTempAccess,
   updateTempAccessParticipant,
-  verifyTempAccess,
 } from "@/lib/api/tempAccess";
 import { navigateTo } from "@/lib/navigation";
 
@@ -153,25 +152,53 @@ function session(overrides = {}) {
   };
 }
 
+function deferred() {
+  const handle = {};
+  handle.promise = new Promise((resolve, reject) => {
+    handle.resolve = resolve;
+    handle.reject = reject;
+  });
+  return handle;
+}
+
+function failure(message, status) {
+  return Object.assign(new Error(message), status ? { status } : {});
+}
+
+const STORED_TOKEN_KEY = "releviz.temp-access.invitation:ABC123";
+const OPENING_TEXT = "Opening your invitation…";
+const INACTIVE_TITLE = "This invitation link isn't active";
+const INACTIVE_BODY =
+  "It may have been replaced by a newer invitation, or the organizer changed the address it was sent to. Ask the organizer to send it again, or sign in if you have a Releviz account.";
+const THROTTLED_TEXT = "Too many attempts. Wait a moment and try again.";
+const OPEN_FAILED_TEXT =
+  "We could not open your invitation. Check your connection and try again.";
+const SESSION_EXPIRED_TEXT =
+  "This temporary session has expired. Open the link in your invitation email again to continue.";
+
+function useInvitationLink(token = "tok") {
+  searchParams = new URLSearchParams(`code=ABC123&invitation=${token}`);
+  window.history.replaceState(
+    {},
+    "",
+    `/temp-access?code=ABC123&invitation=${token}`,
+  );
+}
+
 describe("temporary event access page", () => {
   beforeEach(() => {
     jest.useRealTimers();
     jest.clearAllMocks();
     fetchTempAccessSession.mockReset();
     logoutTempAccess.mockReset();
-    requestTempAccessCode.mockReset();
+    openTempAccess.mockReset();
     updateTempAccessParticipant.mockReset();
-    verifyTempAccess.mockReset();
     navigateTo.mockReset();
     window.sessionStorage.clear();
     window.history.replaceState({}, "", "/temp-access");
     searchParams = new URLSearchParams("code=ABC123");
     fetchTempAccessSession.mockResolvedValue(session());
-    requestTempAccessCode.mockResolvedValue({
-      accepted: true,
-      resend_after: 0,
-    });
-    verifyTempAccess.mockResolvedValue(session());
+    openTempAccess.mockResolvedValue(session());
     logoutTempAccess.mockResolvedValue({});
     updateTempAccessParticipant.mockImplementation(async (_code, payload) => ({
       participant: participant({
@@ -187,195 +214,258 @@ describe("temporary event access page", () => {
     jest.useRealTimers();
   });
 
-  test("honors the request wait while allowing an existing code to be verified", async () => {
-    jest.useFakeTimers();
-    searchParams = new URLSearchParams("code=ABC123&invitation=tok");
-    requestTempAccessCode.mockRejectedValueOnce(
-      Object.assign(new Error("throttled"), {
-        status: 429,
-        retryAfterSeconds: 90,
-      }),
+  test("opens the private invitation link once, even under Strict Mode, and strips it from the address", async () => {
+    useInvitationLink("secret-link-token");
+    const opening = deferred();
+    openTempAccess.mockReturnValueOnce(opening.promise);
+
+    render(
+      <StrictMode>
+        <TempAccessClient />
+      </StrictMode>,
     );
-    await act(async () => render(<TempAccessClient />));
+
+    expect(screen.getByRole("status")).toHaveTextContent(OPENING_TEXT);
     expect(
-      screen.getByRole("button", { name: "Send a new code in 90s" }),
-    ).toBeDisabled();
+      screen.queryByLabelText(/verification code/i),
+    ).not.toBeInTheDocument();
+    expect(window.location.search).toBe("?code=ABC123");
+    expect(window.sessionStorage.getItem(STORED_TOKEN_KEY)).toBe(
+      "secret-link-token",
+    );
+
+    await act(async () => opening.resolve(session()));
+
     expect(
-      screen.getByText(/Check your spam or junk folder too/),
+      await screen.findByRole("heading", { name: "Design review" }),
     ).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Verification code"), {
-      target: { value: "123456" },
-    });
     expect(
-      screen.getByRole("button", { name: "Verify and open schedule" }),
-    ).toBeEnabled();
-    act(() => jest.advanceTimersByTime(89000));
-    expect(
-      screen.getByRole("button", { name: "Send a new code in 1s" }),
-    ).toBeDisabled();
-    act(() => jest.advanceTimersByTime(1000));
-    requestTempAccessCode.mockResolvedValueOnce({
-      accepted: true,
-      resend_after: 60,
-    });
-    await act(async () =>
-      fireEvent.click(screen.getByRole("button", { name: "Send a new code" })),
-    );
-    expect(
-      screen.getByRole("button", { name: "Send a new code in 60s" }),
-    ).toBeDisabled();
-    await act(async () =>
-      fireEvent.click(
-        screen.getByRole("button", { name: "Verify and open schedule" }),
-      ),
-    );
-    expect(verifyTempAccess).toHaveBeenCalledWith({
+      screen.getByText("You are responding as Temporary Taylor"),
+    ).toBeInTheDocument();
+    expect(openTempAccess).toHaveBeenCalledTimes(1);
+    expect(openTempAccess).toHaveBeenCalledWith({
       code: "ABC123",
-      invitationToken: "tok",
-      verificationCode: "123456",
+      invitationToken: "secret-link-token",
     });
+    expect(fetchTempAccessSession).not.toHaveBeenCalled();
+    expect(window.sessionStorage.getItem(STORED_TOKEN_KEY)).toBeNull();
   });
 
-  test.each(["success", "failure"])(
-    "resets the code and ignores late request %s when changing invitations",
-    async (outcome) => {
-      jest.useFakeTimers();
-      searchParams = new URLSearchParams("code=ABC123&invitation=first");
-      let rejectFirst;
-      let resolveFirst;
-      requestTempAccessCode.mockImplementationOnce(
-        () =>
-          new Promise((resolve, reject) => {
-            rejectFirst = reject;
-            resolveFirst = resolve;
-          }),
+  test("reopens an invitation kept in session storage after a reload", async () => {
+    window.sessionStorage.setItem(STORED_TOKEN_KEY, "kept-token");
+
+    render(<TempAccessClient />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Design review" }),
+    ).toBeInTheDocument();
+    expect(openTempAccess).toHaveBeenCalledTimes(1);
+    expect(openTempAccess).toHaveBeenCalledWith({
+      code: "ABC123",
+      invitationToken: "kept-token",
+    });
+    expect(fetchTempAccessSession).not.toHaveBeenCalled();
+    expect(window.sessionStorage.getItem(STORED_TOKEN_KEY)).toBeNull();
+  });
+
+  test.each([
+    ["404", failure("This invitation link is not active.", 404)],
+    ["429", failure("throttled", 429)],
+    ["network", failure("Failed to fetch")],
+  ])(
+    "keeps the invitation for a reload after a %s failure",
+    async (_name, error) => {
+      useInvitationLink();
+      openTempAccess.mockRejectedValueOnce(error);
+      const { unmount } = render(<TempAccessClient />);
+      await waitFor(() =>
+        expect(screen.queryByText(OPENING_TEXT)).not.toBeInTheDocument(),
       );
-      const view = render(<TempAccessClient />);
-      fireEvent.change(screen.getByLabelText("Verification code"), {
-        target: { value: "123456" },
+      expect(window.sessionStorage.getItem(STORED_TOKEN_KEY)).toBe("tok");
+      unmount();
+
+      searchParams = new URLSearchParams("code=ABC123");
+      window.history.replaceState({}, "", "/temp-access?code=ABC123");
+      render(<TempAccessClient />);
+      expect(
+        await screen.findByRole("heading", { name: "Design review" }),
+      ).toBeInTheDocument();
+      expect(openTempAccess).toHaveBeenLastCalledWith({
+        code: "ABC123",
+        invitationToken: "tok",
       });
-      searchParams = new URLSearchParams("code=ABC123&invitation=second");
-      requestTempAccessCode.mockResolvedValueOnce({
-        accepted: true,
-        resend_after: 15,
-      });
-      await act(async () => view.rerender(<TempAccessClient />));
-      expect(screen.getByLabelText("Verification code")).toHaveValue("");
-      expect(
-        screen.getByRole("button", { name: "Send a new code in 15s" }),
-      ).toBeDisabled();
-      await act(async () =>
-        outcome === "success"
-          ? resolveFirst({ accepted: true, resend_after: 300 })
-          : rejectFirst(
-              Object.assign(new Error("old wait"), {
-                status: 429,
-                retryAfterSeconds: 300,
-              }),
-            ),
-      );
-      expect(
-        screen.getByRole("button", { name: "Send a new code in 15s" }),
-      ).toBeDisabled();
-      expect(screen.queryByText("old wait")).not.toBeInTheDocument();
-      act(() => jest.advanceTimersByTime(15000));
-      expect(
-        screen.getByRole("button", { name: "Send a new code" }),
-      ).toBeEnabled();
-      searchParams = new URLSearchParams("code=ABC123&invitation=first");
-      await act(async () => view.rerender(<TempAccessClient />));
-      act(() => jest.advanceTimersByTime(0));
-      expect(requestTempAccessCode).toHaveBeenCalledTimes(2);
-      expect(
-        screen.getByRole("button", { name: "Send a new code in 285s" }),
-      ).toBeDisabled();
+      expect(fetchTempAccessSession).not.toHaveBeenCalled();
+      expect(window.sessionStorage.getItem(STORED_TOKEN_KEY)).toBeNull();
     },
   );
 
-  test("returning to an invitation honors its original wait without another automatic request", async () => {
-    jest.useFakeTimers();
-    searchParams = new URLSearchParams("code=ABC123&invitation=first");
-    requestTempAccessCode.mockResolvedValueOnce({
-      accepted: true,
-      resend_after: 60,
-    });
-    let view;
-    await act(async () => {
-      view = render(<TempAccessClient />);
-    });
-    expect(
-      screen.getByRole("button", { name: "Send a new code in 60s" }),
-    ).toBeDisabled();
-    searchParams = new URLSearchParams("code=ABC123&invitation=second");
-    requestTempAccessCode.mockResolvedValueOnce({
-      accepted: true,
-      resend_after: 15,
-    });
-    await act(async () => view.rerender(<TempAccessClient />));
-    act(() => jest.advanceTimersByTime(20000));
-    searchParams = new URLSearchParams("code=ABC123&invitation=first");
-    await act(async () => view.rerender(<TempAccessClient />));
-    act(() => jest.advanceTimersByTime(0));
-    expect(requestTempAccessCode).toHaveBeenCalledTimes(2);
-    expect(
-      screen.getByRole("button", { name: "Send a new code in 40s" }),
-    ).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: "Verify and open schedule" }),
-    ).toBeEnabled();
-    act(() => jest.advanceTimersByTime(40000));
-    await act(async () =>
-      fireEvent.click(screen.getByRole("button", { name: "Send a new code" })),
+  test("explains an inactive invitation link without offering a retry", async () => {
+    useInvitationLink();
+    openTempAccess.mockRejectedValueOnce(
+      Object.assign(new Error("This invitation link is not active."), {
+        status: 404,
+        errorCode: "temp_invitation_inactive",
+      }),
     );
-    expect(requestTempAccessCode).toHaveBeenCalledTimes(3);
-    expect(requestTempAccessCode).toHaveBeenLastCalledWith({
-      code: "ABC123",
-      invitationToken: "first",
-    });
+
+    render(<TempAccessClient />);
+
+    expect(
+      await screen.findByRole("heading", { name: INACTIVE_TITLE }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(INACTIVE_BODY)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Try again" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(openTempAccess).toHaveBeenCalledTimes(1);
+    expect(fetchTempAccessSession).not.toHaveBeenCalled();
   });
 
-  test("keeps verification throttling separate and displays invalid-code details", async () => {
-    jest.useFakeTimers();
-    searchParams = new URLSearchParams("code=ABC123&invitation=tok");
-    await act(async () => render(<TempAccessClient />));
-    fireEvent.change(screen.getByLabelText("Verification code"), {
-      target: { value: "123456" },
-    });
-    verifyTempAccess.mockRejectedValueOnce(
+  test("offers a retry when the invitation is throttled and never loses the token", async () => {
+    useInvitationLink();
+    openTempAccess.mockRejectedValueOnce(
       Object.assign(new Error("throttled"), {
         status: 429,
-        retryAfterSeconds: 10,
+        retryAfterSeconds: 30,
       }),
     );
-    await act(async () =>
-      fireEvent.click(
-        screen.getByRole("button", { name: "Verify and open schedule" }),
-      ),
-    );
+
+    render(<TempAccessClient />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(THROTTLED_TEXT);
+    const retry = screen.getByRole("button", { name: "Try again" });
+    expect(retry).toHaveFocus();
+    expect(window.sessionStorage.getItem(STORED_TOKEN_KEY)).toBe("tok");
+
+    await userEvent.click(retry);
+
     expect(
-      screen.getByRole("button", { name: "Try verification in 10s" }),
-    ).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: "Send a new code" }),
-    ).toBeEnabled();
-    fireEvent.submit(
-      screen.getByLabelText("Verification code").closest("form"),
-    );
-    expect(verifyTempAccess).toHaveBeenCalledTimes(1);
-    act(() => jest.advanceTimersByTime(10000));
-    verifyTempAccess.mockRejectedValueOnce(
-      Object.assign(new Error("The verification code has expired."), {
-        status: 400,
-      }),
-    );
-    await act(async () =>
-      fireEvent.click(
-        screen.getByRole("button", { name: "Verify and open schedule" }),
-      ),
-    );
-    expect(
-      screen.getByText("The verification code has expired."),
+      await screen.findByRole("heading", { name: "Design review" }),
     ).toBeInTheDocument();
+    expect(openTempAccess).toHaveBeenCalledTimes(2);
+    expect(openTempAccess).toHaveBeenLastCalledWith({
+      code: "ABC123",
+      invitationToken: "tok",
+    });
+    expect(window.sessionStorage.getItem(STORED_TOKEN_KEY)).toBeNull();
+  });
+
+  test("offers a retry after a network or server failure until the invitation opens", async () => {
+    useInvitationLink();
+    const retrying = deferred();
+    openTempAccess
+      .mockRejectedValueOnce(failure("Failed to fetch"))
+      .mockRejectedValueOnce(failure("Server error", 500))
+      .mockReturnValueOnce(retrying.promise);
+
+    render(<TempAccessClient />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      OPEN_FAILED_TEXT,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(openTempAccess).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      OPEN_FAILED_TEXT,
+    );
+    expect(window.sessionStorage.getItem(STORED_TOKEN_KEY)).toBe("tok");
+
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(screen.getByRole("status")).toHaveTextContent(OPENING_TEXT);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await act(async () => retrying.resolve(session()));
+    expect(
+      await screen.findByRole("heading", { name: "Design review" }),
+    ).toBeInTheDocument();
+    expect(openTempAccess).toHaveBeenCalledTimes(3);
+  });
+
+  test("treats an incomplete open response as a retryable failure", async () => {
+    useInvitationLink();
+    openTempAccess.mockResolvedValueOnce({});
+
+    render(<TempAccessClient />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      OPEN_FAILED_TEXT,
+    );
+    expect(window.sessionStorage.getItem(STORED_TOKEN_KEY)).toBe("tok");
+    expect(
+      screen.queryByRole("heading", { name: "Design review" }),
+    ).not.toBeInTheDocument();
+  });
+
+  test.each(["success", "failure"])(
+    "ignores a late %s from a previous invitation after the link changes",
+    async (outcome) => {
+      useInvitationLink("first");
+      const first = deferred();
+      openTempAccess.mockReturnValueOnce(first.promise);
+      const view = render(<TempAccessClient />);
+      expect(openTempAccess).toHaveBeenCalledTimes(1);
+
+      searchParams = new URLSearchParams("code=ABC123&invitation=second");
+      openTempAccess.mockResolvedValueOnce(
+        session({ participant: participant({ name: "Second Sam" }) }),
+      );
+      await act(async () => view.rerender(<TempAccessClient />));
+      expect(
+        await screen.findByText("You are responding as Second Sam"),
+      ).toBeInTheDocument();
+      expect(openTempAccess).toHaveBeenLastCalledWith({
+        code: "ABC123",
+        invitationToken: "second",
+      });
+
+      await act(async () =>
+        outcome === "success"
+          ? first.resolve(
+              session({ participant: participant({ name: "First Fran" }) }),
+            )
+          : first.reject(failure("old failure", 429)),
+      );
+
+      expect(
+        screen.getByText("You are responding as Second Sam"),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/First Fran/)).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(window.sessionStorage.getItem(STORED_TOKEN_KEY)).toBeNull();
+    },
+  );
+
+  test("keeps the invitation in memory when session storage is unavailable", async () => {
+    const blocked = () => {
+      throw new Error("storage blocked");
+    };
+    const spies = ["getItem", "setItem", "removeItem"].map((method) =>
+      jest.spyOn(window.Storage.prototype, method).mockImplementation(blocked),
+    );
+    try {
+      useInvitationLink();
+      openTempAccess.mockRejectedValueOnce(failure("throttled", 429));
+      render(<TempAccessClient />);
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        THROTTLED_TEXT,
+      );
+
+      // The address no longer carries the token once it has been stripped.
+      searchParams = new URLSearchParams("code=ABC123");
+      await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+      expect(
+        await screen.findByRole("heading", { name: "Design review" }),
+      ).toBeInTheDocument();
+      expect(openTempAccess).toHaveBeenCalledTimes(2);
+      expect(openTempAccess).toHaveBeenLastCalledWith({
+        code: "ABC123",
+        invitationToken: "tok",
+      });
+      expect(fetchTempAccessSession).not.toHaveBeenCalled();
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+    }
   });
 
   test("restores a restricted session and builds an email-free server-bound upgrade link", async () => {
@@ -406,76 +496,27 @@ describe("temporary event access page", () => {
       false,
     );
     expect(upgradeHref).not.toContain("lockedEmail");
-    expect(requestTempAccessCode).not.toHaveBeenCalled();
-  });
-
-  test("strips the invitation token, requests a code, and verifies access", async () => {
-    searchParams = new URLSearchParams(
-      "code=ABC123&invitation=secret-link-token",
-    );
-    window.history.replaceState(
-      {},
-      "",
-      "/temp-access?code=ABC123&invitation=secret-link-token",
-    );
-
-    render(<TempAccessClient />);
-
-    expect(
-      await screen.findByRole("heading", { name: "Check your email" }),
-    ).toBeInTheDocument();
-    await waitFor(() =>
-      expect(requestTempAccessCode).toHaveBeenCalledWith({
-        code: "ABC123",
-        invitationToken: "secret-link-token",
-      }),
-    );
-    expect(window.location.search).toBe("?code=ABC123");
-
-    await userEvent.type(screen.getByLabelText("Verification code"), "123456");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and open schedule" }),
-    );
-
-    await waitFor(() =>
-      expect(verifyTempAccess).toHaveBeenCalledWith({
-        code: "ABC123",
-        invitationToken: "secret-link-token",
-        verificationCode: "123456",
-      }),
-    );
-    expect(
-      await screen.findByRole("heading", { name: "Design review" }),
-    ).toBeInTheDocument();
-    expect(
-      window.sessionStorage.getItem("releviz.temp-access.invitation:ABC123"),
-    ).toBeNull();
+    expect(openTempAccess).not.toHaveBeenCalled();
   });
 
   test("lets an explicit invitation override an existing same-event cookie session", async () => {
-    searchParams = new URLSearchParams(
-      "code=ABC123&invitation=invite-for-a-different-person",
-    );
-    window.history.replaceState(
-      {},
-      "",
-      "/temp-access?code=ABC123&invitation=invite-for-a-different-person",
-    );
+    useInvitationLink("invite-for-a-different-person");
     fetchTempAccessSession.mockResolvedValue(
       session({ participant: participant({ name: "Previous browser user" }) }),
+    );
+    openTempAccess.mockResolvedValue(
+      session({ participant: participant({ name: "Invited Ingrid" }) }),
     );
 
     render(<TempAccessClient />);
 
     expect(
-      await screen.findByRole("heading", { name: "Check your email" }),
+      await screen.findByText("You are responding as Invited Ingrid"),
     ).toBeInTheDocument();
-    await waitFor(() =>
-      expect(requestTempAccessCode).toHaveBeenCalledWith({
-        code: "ABC123",
-        invitationToken: "invite-for-a-different-person",
-      }),
-    );
+    expect(openTempAccess).toHaveBeenCalledWith({
+      code: "ABC123",
+      invitationToken: "invite-for-a-different-person",
+    });
     expect(fetchTempAccessSession).not.toHaveBeenCalled();
     expect(
       screen.queryByText("You are responding as Previous browser user"),
@@ -723,6 +764,11 @@ describe("temporary event access page", () => {
     expect(
       await screen.findByRole("heading", { name: "You are signed out" }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Open the link in your invitation email whenever you need to access this event again.",
+      ),
+    ).toBeInTheDocument();
   });
 
   test("does not claim sign-out when the server cannot revoke the temporary session", async () => {
@@ -826,80 +872,7 @@ describe("temporary event access page", () => {
     jest.useRealTimers();
   });
 
-  test("rejects malformed and throttled verification codes and reports resend failures", async () => {
-    searchParams = new URLSearchParams("code=ABC123&invitation=tok");
-    window.history.replaceState(
-      {},
-      "",
-      "/temp-access?code=ABC123&invitation=tok",
-    );
-    render(<TempAccessClient />);
-    expect(
-      await screen.findByRole("heading", { name: "Check your email" }),
-    ).toBeInTheDocument();
-    await waitFor(() => expect(requestTempAccessCode).toHaveBeenCalled());
-
-    const verify = screen.getByRole("button", {
-      name: "Verify and open schedule",
-    });
-    const codeInput = screen.getByLabelText("Verification code");
-    await userEvent.type(codeInput, "12");
-    // The browser's own pattern check would stop a click, so submit directly.
-    fireEvent.submit(codeInput.closest("form"));
-    expect(
-      screen.getByText("Enter the six-digit code from your email."),
-    ).toBeInTheDocument();
-    expect(verifyTempAccess).not.toHaveBeenCalled();
-
-    verifyTempAccess.mockRejectedValueOnce(
-      Object.assign(new Error("throttled"), { status: 429 }),
-    );
-    await userEvent.type(screen.getByLabelText("Verification code"), "3456");
-    await userEvent.click(verify);
-    expect(
-      await screen.findByText(
-        "Too many verification attempts. Please wait before trying the code from your latest email again.",
-      ),
-    ).toBeInTheDocument();
-
-    verifyTempAccess.mockRejectedValueOnce(new Error("nope"));
-    await userEvent.click(verify);
-    expect(
-      await screen.findByText(
-        "That code could not be verified. Check the code or request a new one.",
-      ),
-    ).toBeInTheDocument();
-
-    requestTempAccessCode.mockRejectedValueOnce(new Error("mail down"));
-    await userEvent.click(
-      screen.getByRole("button", { name: "Send a new code" }),
-    );
-    expect(
-      await screen.findByText(
-        "We could not send a new code. Wait a moment and try again.",
-      ),
-    ).toBeInTheDocument();
-  });
-
-  test("explains when the automatic code request fails and when no session exists", async () => {
-    searchParams = new URLSearchParams("code=ABC123&invitation=tok");
-    window.history.replaceState(
-      {},
-      "",
-      "/temp-access?code=ABC123&invitation=tok",
-    );
-    requestTempAccessCode.mockRejectedValueOnce(new Error("mail down"));
-    const { unmount } = render(<TempAccessClient />);
-    expect(
-      await screen.findByText(
-        "We could not start verification. Try sending the code again.",
-      ),
-    ).toBeInTheDocument();
-    unmount();
-
-    window.sessionStorage.clear();
-    searchParams = new URLSearchParams("code=ABC123");
-    window.history.replaceState({}, "", "/temp-access?code=ABC123");
+  test("asks for the invitation link when there is no session and no link", async () => {
     fetchTempAccessSession.mockRejectedValueOnce(
       Object.assign(new Error("gone"), { status: 401 }),
     );
@@ -908,6 +881,70 @@ describe("temporary event access page", () => {
       await screen.findByRole("heading", { name: "Access link required" }),
     ).toBeInTheDocument();
     expect(fetchTempAccessSession).toHaveBeenCalledTimes(1);
+    expect(openTempAccess).not.toHaveBeenCalled();
+  });
+
+  test("asks for the invitation link when the address has no event code", async () => {
+    searchParams = new URLSearchParams();
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Access link required" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Open the temporary access link in your invitation email.",
+      ),
+    ).toBeInTheDocument();
+    expect(fetchTempAccessSession).not.toHaveBeenCalled();
+    expect(openTempAccess).not.toHaveBeenCalled();
+  });
+
+  test("tells people to open the link again when the temporary session expires", async () => {
+    jest.useFakeTimers();
+    updateTempAccessParticipant.mockRejectedValueOnce(
+      failure("Session expired", 401),
+    );
+
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Design review" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Paint in-person" }));
+    await act(async () => {
+      jest.advanceTimersByTime(701);
+      await Promise.resolve();
+    });
+
+    expect(
+      await screen.findByRole("heading", { name: "Temporary access ended" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(SESSION_EXPIRED_TEXT)).toBeInTheDocument();
+    expect(screen.queryByText(/verify again/i)).not.toBeInTheDocument();
+  });
+
+  test("tells people to open the link again when the session is gone while re-reading a rejected write", async () => {
+    jest.useFakeTimers();
+    fetchTempAccessSession
+      .mockResolvedValueOnce(session())
+      .mockRejectedValueOnce(failure("Session expired", 401));
+    updateTempAccessParticipant.mockRejectedValueOnce(
+      failure("Version conflict", 409),
+    );
+
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Design review" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Paint in-person" }));
+    await act(async () => {
+      jest.advanceTimersByTime(701);
+      await Promise.resolve();
+    });
+
+    expect(
+      await screen.findByRole("heading", { name: "Temporary access ended" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(SESSION_EXPIRED_TEXT)).toBeInTheDocument();
   });
 
   test("locks a response after the deadline and while the event is not active", async () => {

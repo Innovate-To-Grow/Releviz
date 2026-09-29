@@ -201,11 +201,19 @@ export function startTemporaryUpgradeRegistration(code, payload) {
   );
 }
 
-export async function verifyRegistration({ email, code }) {
+// A temporary member's upgrade sends its password and names here, together
+// with the emailed code, so only the mailbox holder can choose them.
+export async function verifyRegistration({ email, code, registration }) {
+  const payload = registration
+    ? await securePasswordPayload({ email, code, ...registration }, [
+        "password",
+        "password_confirm",
+      ])
+    : { email, code };
   const res = await fetch(`${API_BASE}/authn/register/verify-code/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, code }),
+    body: JSON.stringify(payload),
     credentials: "include",
   });
   return parseAuthResponse(res);

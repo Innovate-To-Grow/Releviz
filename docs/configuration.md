@@ -77,11 +77,18 @@ Email-code requests allow 2,000 attempts per shared IP per hour, and verificatio
 3,000 attempts per shared IP per ten minutes. This accommodates a 1,000-participant event
 behind one campus network, including one resend and up to three verification attempts each.
 The per-identity limits remain five requests per hour and ten verification attempts per ten
-minutes; temporary invitation access uses the same limits. Successful code-request responses
-include `resend_after` (60 seconds). A rejected authentication resend includes its remaining
-wait in `Retry-After` and `retry_after`; durable request-limit rejections use `Retry-After`.
-Temporary invitation responses remain generic to avoid revealing whether an invitation exists.
-Request attempts, including rejected premature resends, count toward the durable limits.
+minutes. Successful code-request responses include `resend_after` (60 seconds). A rejected
+authentication resend includes its remaining wait in `Retry-After` and `retry_after`; durable
+request-limit rejections use `Retry-After`. Request attempts, including rejected premature
+resends, count toward the durable limits.
+
+Invitees without an account use no emailed code: the private link in their invitation email is
+the credential. Opening it (`POST /events/temp-access/open`) is limited separately, to 3,000
+attempts per shared IP and 20 per link (event code and token) per ten minutes, with a fifteen-minute
+block after that. Every link that identifies no live temporary invitation (an unknown event or
+token, an unsent invitation, or a person who has since upgraded or been deactivated) gets the same
+404, so it does not reveal whether an invitation exists. Opening records that the link was opened;
+it does not mark the invitation accepted.
 
 **Response ownership.** The organizer may enter a full account's response only until that person
 claims it by joining, saving or submitting their own response, or upgrading from a temporary

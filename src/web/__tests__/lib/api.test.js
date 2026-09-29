@@ -366,21 +366,44 @@ describe("auth API helpers", () => {
     );
   });
 
-  test("verify registration sends only email and code", async () => {
+  test("verify registration sends only email and code by default", async () => {
     global.fetch.mockResolvedValueOnce(
       jsonResponse({ access: "verified", user: { id: "member" } }),
     );
 
+    await verifyRegistration({ email: "a@b.com", code: "123456" });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/authn/register/verify-code/",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({ email: "a@b.com", code: "123456" }),
+      }),
+    );
+  });
+
+  test("verify registration sends a temporary upgrade's details with the code", async () => {
+    global.fetch
+      .mockResolvedValueOnce(passwordKeyResponse())
+      .mockResolvedValueOnce(
+        jsonResponse({ access: "verified", user: { id: "member" } }),
+      );
+
     await verifyRegistration({
       email: "temporary@example.com",
       code: "123456",
-      password: "password123",
-      password_confirm: "password123",
-      first_name: "Taylor",
-      last_name: "Temp",
+      registration: {
+        password: "password123",
+        password_confirm: "password123",
+        first_name: "Taylor",
+        last_name: "Temp",
+      },
     });
 
-    expect(global.fetch).toHaveBeenCalledWith(
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
       "/authn/register/verify-code/",
       expect.objectContaining({
         method: "POST",
@@ -388,6 +411,10 @@ describe("auth API helpers", () => {
         body: JSON.stringify({
           email: "temporary@example.com",
           code: "123456",
+          password: "password123",
+          password_confirm: "password123",
+          first_name: "Taylor",
+          last_name: "Temp",
         }),
       }),
     );
