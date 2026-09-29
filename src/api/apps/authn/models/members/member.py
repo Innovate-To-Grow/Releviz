@@ -1,5 +1,5 @@
 from django.contrib.auth.models import AbstractUser
-from django.db import models
+from django.db import models, router
 
 from apps.core.models import ProjectControlModel
 from apps.core.utils.access import user_can_access_app
@@ -19,17 +19,64 @@ class Member(AbstractUser, ProjectControlModel):
 
     objects = MemberManager()
 
-    # Per-Django-app admin access. A staff member may manage every model in any app
-    # listed here (e.g. ["cms", "event"]). Superusers (Releviz Master) ignore this list.
-    # See apps.core.utils.access.user_can_access_app — the single enforcement predicate.
+    is_staff = models.BooleanField(
+        default=False,
+        verbose_name="Administrator",
+        help_text="Allows full access to all administration modules and administrator management.",
+    )
+    # Django's permission machinery expects this flag. It mirrors is_staff and
+    # does not represent a separate role or an independently editable permission.
+    is_superuser = models.BooleanField(default=False, editable=False)
+
+    # Retain old grants for compatibility with existing records and imports.
+    # They no longer participate in authorization or appear in admin forms.
     admin_apps = models.JSONField(
         default=list,
         blank=True,
-        help_text=(
-            'Django apps this admin may manage (e.g. ["cms", "event"]). Superusers ignore this.'
-        ),
-        verbose_name="Admin apps",
+        editable=False,
+        help_text="Legacy app grants; administrators now have access to every app.",
+        verbose_name="Legacy admin apps",
     )
+
+    def save(self, *, force_insert=False, force_update=False, using=None, update_fields=None):
+        """Keep Django's compatibility flag in step with the administrator role."""
+        if update_fields is not None:
+            update_fields = frozenset(update_fields)
+
+        if self._state.adding:
+            # Accept either legacy flag when creating an administrator.
+            self.is_staff = self.is_staff or self.is_superuser
+
+        if update_fields is None:
+            # A deferred profile-only save must not fetch and write role fields.
+            if "is_staff" in self.__dict__:
+                self.is_superuser = self.is_staff
+            elif "is_superuser" in self.__dict__:
+                self.is_superuser = models.F("is_staff")
+        elif "is_staff" in update_fields:
+            self.is_superuser = self.is_staff
+            update_fields |= {"is_superuser"}
+        elif "is_superuser" in update_fields:
+            # A compatibility-only write cannot change the role, even from a
+            # stale instance. Copy the current database value atomically.
+            self.is_superuser = models.F("is_staff")
+
+        refresh_role = isinstance(self.__dict__.get("is_superuser"), models.F)
+        super().save(
+            force_insert=force_insert,
+            force_update=force_update,
+            using=using,
+            update_fields=update_fields,
+        )
+        if refresh_role:
+            self.refresh_from_db(
+                using=using or router.db_for_write(type(self), instance=self),
+                fields=["is_staff", "is_superuser"],
+            )
+        if update_fields is None or {"is_staff", "is_superuser"}.intersection(update_fields):
+            # Cached Django permissions must not survive an administrator's demotion.
+            for cache_name in ("_perm_cache", "_user_perm_cache", "_group_perm_cache"):
+                self.__dict__.pop(cache_name, None)
 
     def can_access_app(self, app_label: str) -> bool:
         """Whether this member may manage records in the Django app ``app_label``."""

@@ -14,8 +14,7 @@ from apps.core.tests.helpers import make_superuser
 
 
 class BaseModelAdminPermissionTest(TestCase):
-    """Per-app access: BaseModelAdmin grants a model only when the member's admin_apps
-    includes that model's app label (superusers bypass). LogEntry's app label is "admin"."""
+    """All active admins share full model access, independent of old app grants."""
 
     def setUp(self):
         self.admin = BaseModelAdmin(LogEntry, AdminSite())
@@ -34,13 +33,13 @@ class BaseModelAdminPermissionTest(TestCase):
             self.admin.has_delete_permission(self.request),
         ]
 
-    def test_staff_without_app_grant_is_denied(self):
+    def test_staff_without_app_grant_is_allowed(self):
         self.request.user = self._member(is_staff=True, admin_apps=[])
-        self.assertEqual(self._all_checks(), [False] * 5)
+        self.assertEqual(self._all_checks(), [True] * 5)
 
-    def test_staff_with_other_app_grant_is_denied(self):
+    def test_staff_with_other_app_grant_is_allowed(self):
         self.request.user = self._member(is_staff=True, admin_apps=["cms"])
-        self.assertEqual(self._all_checks(), [False] * 5)
+        self.assertEqual(self._all_checks(), [True] * 5)
 
     def test_staff_with_app_grant_is_allowed(self):
         self.request.user = self._member(is_staff=True, admin_apps=[self.app_label])
@@ -52,6 +51,10 @@ class BaseModelAdminPermissionTest(TestCase):
 
     def test_non_staff_is_denied_even_with_app_grant(self):
         self.request.user = self._member(is_staff=False, admin_apps=[self.app_label])
+        self.assertEqual(self._all_checks(), [False] * 5)
+
+    def test_inactive_staff_is_denied(self):
+        self.request.user = self._member(is_staff=True, is_active=False)
         self.assertEqual(self._all_checks(), [False] * 5)
 
 

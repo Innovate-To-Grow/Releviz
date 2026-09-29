@@ -1,8 +1,9 @@
 from django.conf import settings
 from django.contrib import admin
-from django.test import SimpleTestCase
+from django.test import RequestFactory, SimpleTestCase
 from unfold.sites import UnfoldAdminSite
 
+from apps.authn.models import Member
 from apps.core.models import AWSCredentialConfig
 
 
@@ -46,3 +47,24 @@ class UnfoldAdminSiteConfigurationTests(SimpleTestCase):
             exposed_links = sidebar_links & {item["link"] for item in tab["items"]}
             with self.subTest(models=tab.get("models")):
                 self.assertLessEqual(len(exposed_links), 1)
+
+    def test_active_administrators_see_all_sidebar_items_without_app_grants(self):
+        request = RequestFactory().get("/admin/")
+        request.user = Member(is_active=True, is_staff=True, is_superuser=False, admin_apps=[])
+        items = [
+            item for section in admin.site.get_sidebar_list(request) for item in section["items"]
+        ]
+        self.assertTrue(items)
+        self.assertTrue(all(item["has_permission"] for item in items))
+
+    def test_regular_and_inactive_accounts_see_no_sidebar_items(self):
+        for is_active, is_staff in ((True, False), (False, True)):
+            request = RequestFactory().get("/admin/")
+            request.user = Member(is_active=is_active, is_staff=is_staff)
+            items = [
+                item
+                for section in admin.site.get_sidebar_list(request)
+                for item in section["items"]
+            ]
+            with self.subTest(is_active=is_active, is_staff=is_staff):
+                self.assertFalse(any(item["has_permission"] for item in items))

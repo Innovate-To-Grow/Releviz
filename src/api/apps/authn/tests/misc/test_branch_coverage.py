@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from django import forms
-from django.contrib import admin
 from django.contrib.admin.sites import AdminSite
 from django.contrib.auth import get_user_model
 from django.contrib.messages.storage.fallback import FallbackStorage
@@ -279,19 +278,6 @@ class ContactEmailAdminBranchTests(TestCase):
 
 
 class AdminFormsAndHelpersBranchTests(TestCase):
-    def test_admin_app_choices_falls_back_to_label(self):
-        from apps.authn.admin.members.forms import admin_app_choices
-
-        fake_model = type("FakeModel", (), {"_meta": SimpleNamespace(app_label="missing_app")})
-        with (
-            patch.object(admin.site, "_registry", {fake_model: object()}),
-            patch(
-                "apps.authn.admin.members.forms.django_apps.get_app_config",
-                side_effect=LookupError,
-            ),
-        ):
-            self.assertEqual(admin_app_choices(), [("missing_app", "missing_app (missing_app)")])
-
     def test_member_creation_init_tolerates_parent_without_usable_password(self):
         from apps.authn.admin.members.forms import MemberCreationForm, UserCreationForm
 
@@ -456,17 +442,6 @@ class InlineAndAdminLoopBranchTests(TestCase):
             )
         ]
         formset_class.clean(nested)
-
-    def test_member_readonly_loop_skips_field_already_readonly(self):
-        from apps.authn.admin.members.member import MemberAdmin
-        from apps.core.admin import BaseModelAdmin
-
-        user = _member(is_staff=True, is_superuser=False, admin_apps=["authn"])
-        model_admin = MemberAdmin(Member, AdminSite())
-        with patch.object(BaseModelAdmin, "get_readonly_fields", return_value=["is_staff"]):
-            readonly = model_admin.get_readonly_fields(_request(user))
-        self.assertEqual(readonly.count("is_staff"), 1)
-        self.assertIn("admin_apps", readonly)
 
     def test_rsa_regenerate_skips_inactive_key(self):
         from apps.authn.admin.security import RSAKeypairAdmin
