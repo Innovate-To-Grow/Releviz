@@ -559,24 +559,12 @@ function temporaryAccessPathFromEmail(body) {
   return `${link.pathname}${link.search}`;
 }
 
-// Clicks "Review attendance" until the preview lands. The Finalize step
-// re-keys when a pick changes, so a click made right after can be dropped by
-// slower engines (seen on WebKit); the preview is read-only, so retrying is
-// safe.
-async function reviewAttendance(page) {
-  const notice = page.getByText(
-    "Attendance review is current for this candidate.",
-  );
-  await expect
-    .poll(
-      async () => {
-        if (await notice.isVisible()) return true;
-        await page.getByRole("button", { name: "Review attendance" }).click();
-        return notice.isVisible();
-      },
-      { timeout: 20_000, intervals: [500, 1000, 2000] },
-    )
-    .toBe(true);
+// The Finalize step reads a picked time's attendance on its own; its
+// Finalize button stays disabled until that reading is current.
+async function waitForAttendanceReview(page) {
+  await expect(
+    page.getByText("Attendance review is current for this candidate."),
+  ).toBeVisible({ timeout: 20_000 });
 }
 
 test.describe("Releviz account and scheduling flow", () => {
@@ -2874,7 +2862,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(page.locator(".final-candidate")).toContainText(
       "Recommended #1",
     );
-    await reviewAttendance(page);
+    await waitForAttendanceReview(page);
     await expect(page.getByText("Available", { exact: true })).toBeVisible();
     // The count tiles are backed by a per-person breakdown: a header row plus
     // one row for each roster entry.
@@ -3127,7 +3115,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(page.locator("#organizer-finalize")).toContainText(
       "Recommended #2",
     );
-    await reviewAttendance(page);
+    await waitForAttendanceReview(page);
     // The review follows the new pick: its confirmation is for Recommended #2.
     await page
       .locator("#organizer-finalize")

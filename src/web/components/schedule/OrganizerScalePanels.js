@@ -2580,7 +2580,9 @@ function finalizeHint(event, selection, recommendedCount = 0) {
  * The disclosure lives outside the keyed content, so a re-pick resets the
  * step's own state without closing it. `picker` (the Recommended times)
  * sits outside the keyed content too: choosing one of them re-keys the
- * content but keeps the list open and the chosen chip focused.
+ * content but keeps the list open and the chosen chip focused. So does the
+ * location the organizer types, which belongs to the meeting rather than to
+ * one candidate time: comparing times must not cost them what they typed.
  */
 export function FinalizeScalePanel(props) {
   const { event, headingRef, picker = null, onOpenChange } = props;
@@ -2588,6 +2590,8 @@ export function FinalizeScalePanel(props) {
   const finalized = isFinalized(event);
   const [open, setOpen] = useState(() => Boolean(selection));
   const [seen, setSeen] = useState(props.selection);
+  // Until something is typed, the field shows the event's own location.
+  const [typedLocation, setTypedLocation] = useState(null);
   if (props.selection !== seen) {
     setSeen(props.selection);
     if (props.selection) setOpen(true);
@@ -2618,14 +2622,15 @@ export function FinalizeScalePanel(props) {
         key={selectionKey(selection) || "no-selection"}
         {...props}
         selection={selection}
+        location={typedLocation ?? (event.location || "")}
+        onLocationChange={setTypedLocation}
       />
     </TimeTableSection>
   );
 }
 
-function FinalizeStepIndicator({ selection, review, finalized }) {
+function FinalizeStepIndicator({ selection, reviewed, finalized }) {
   const hasSelection = Boolean(selection);
-  const hasReview = Boolean(review);
   const steps = [
     {
       label: "Select a time",
@@ -2634,13 +2639,13 @@ function FinalizeStepIndicator({ selection, review, finalized }) {
     },
     {
       label: "Review attendance",
-      done: finalized || hasReview,
-      active: !finalized && hasSelection && !hasReview,
+      done: finalized || reviewed,
+      active: !finalized && hasSelection && !reviewed,
     },
     {
       label: "Finalize meeting",
       done: finalized,
-      active: !finalized && hasReview,
+      active: !finalized && reviewed,
     },
   ];
   return (
@@ -2686,17 +2691,21 @@ function SelectionMetrics({ metrics }) {
     <p className="final-candidate__metrics mb-0">
       Up to {percentOf(metrics.weighted)}% weighted ·{" "}
       {percentOf(metrics.unweighted)}% unweighted across this window (its lowest
-      slot; people must be free for all of it). Exact attendance counts appear
-      after Review attendance.
+      slot; people must be free for all of it).
     </p>
   );
 }
 
-const ATTENDANCE_STATUS_LABELS = {
-  available: "Fully available",
-  partial: "Partly available",
-  unavailable: "Not available",
-};
+// What one counted person's answers mean for the window as a whole. A
+// "partial" is either free for all of it but only if needed somewhere (their
+// lowest slot is 0.5), or free for only some of it (their lowest slot is 0).
+function attendanceAvailability({ status, minimumAvailability }) {
+  if (status === "available") return "Fully available";
+  if (status === "unavailable") return "Not available";
+  return minimumAvailability > 0
+    ? "Available if needed"
+    : "Available for part of it";
+}
 
 const EXCLUSION_REASON_LABELS = {
   organizerExcluded: "Excluded by organizer",
@@ -2704,15 +2713,40 @@ const EXCLUSION_REASON_LABELS = {
   invalidResponse: "Invalid response",
 };
 
+function AttendanceTiles({ review, className = "" }) {
+  return (
+    <div
+      role="group"
+      className={`metric-tiles attendance-review ${className}`.trim()}
+      aria-label="Attendance review"
+    >
+      {[
+        ["Available", review.availableParticipantTotal],
+        ["Partial", review.partialParticipantTotal],
+        ["Unavailable", review.unavailableParticipantTotal],
+        ["Unanswered", review.unansweredParticipantTotal],
+        ["Excluded", review.excludedParticipantTotal],
+      ].map(([label, value]) => (
+        <div key={label} className="metric-tile attendance-review__item">
+          <span className="metric-tile__label">{label}</span>
+          <strong className="metric-tile__value attendance-review__value">
+            {value || 0}
+          </strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // Per-person breakdown behind the attendance count tiles: counted responses
 // first, then people who never answered, then anyone left out of results.
-function AttendanceReviewTable({ review }) {
+function AttendanceReviewTable({ review, className = "" }) {
   const rows = [
     ...(review.participants || []).map((participant) => ({
       key: `counted:${participant.participantId}`,
       name: participant.name,
       response: "Submitted",
-      availability: `${ATTENDANCE_STATUS_LABELS[participant.status]} · ${Math.round(participant.minimumAvailability * 100)}%`,
+      availability: attendanceAvailability(participant),
     })),
     ...(review.unansweredParticipants || []).map((participant) => ({
       key: `unanswered:${participant.participantId}`,
@@ -2731,7 +2765,7 @@ function AttendanceReviewTable({ review }) {
   if (rows.length === 0) return null;
   return (
     <div
-      className="table-responsive attendance-table mt-3"
+      className={`table-responsive attendance-table ${className}`.trim()}
       role="region"
       aria-label="Attendance by person"
       tabIndex={0}
@@ -2770,24 +2804,23 @@ function FinalizeScalePanelContent({
   setEvent,
   getToken,
   selection,
+  location,
+  onLocationChange,
   onDeliveryRequest,
   emptyPrompt = "Pick a time on the calendar.",
 }) {
-  const [location, setLocation] = useState(event.location || "");
-  const [review, setReview] = useState(null);
-  // The confirmation email the reviewed meeting would send, from the same
-  // reply as `review`: { payload, recipientCount, email, sample }, where
-  // `payload` is the meeting reviewed and the one Finalize sends. A new
-  // selection mounts this step afresh, and a location edit clears the
-  // review and drops any reply still on its way, so Finalize is only
-  // offered with a preview of the meeting being finalized.
-  const [confirmationPreview, setConfirmationPreview] = useState(null);
-  // Counts reviews asked for and location edits; a reply is applied only
-  // while its number is still the latest.
-  const reviewRequestRef = useRef(0);
-  // { error } while the confirmation email is reviewed before finalizing.
+  // The attendance for the picked time: read as soon as it is picked, and
+  // again when the results move on or the organizer asks. `key` says which
+  // request an outcome answers, so a reply (or a failure) for a time or a
+  // revision of the results that has since gone is never shown as current.
+  const [attendance, setAttendance] = useState(null);
+  const [attendanceFailure, setAttendanceFailure] = useState(null);
+  const [retries, setRetries] = useState(0);
+  // { error, proposed, recipientCount, email, sample } while the confirmation
+  // email is reviewed before finalizing: `proposed` is the meeting the email
+  // was asked for, and the one Finalize sends.
   const [finalizeDialog, setFinalizeDialog] = useState(null);
-  const [reviewing, setReviewing] = useState(false);
+  const [preparing, setPreparing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
@@ -2797,28 +2830,69 @@ function FinalizeScalePanelContent({
   const handOffFocus = useRef(false);
   const downloadRef = useRef(null);
 
-  const payload = useMemo(() => {
-    if (!selection) return null;
-    return {
-      startsAt: selection.startsAt,
-      endsAt: selection.endsAt,
-      channel: selection.channel,
-      location: location.trim(),
-    };
-  }, [location, selection]);
+  const code = event.code;
+  const { startsAt, endsAt, channel } = selection || {};
+  const meeting = event.finalMeeting;
+  const canFinalize = ["active", "closed"].includes(event.status);
+  const finalized = isFinalized(event);
+  const reviewable = canFinalize && !finalized && Boolean(startsAt && endsAt);
+  const attendanceKey = `${channel}|${startsAt}|${endsAt}|${event.resultsRevision ?? ""}|${retries}`;
+  const attendanceReady = attendance?.key === attendanceKey;
+  const attendanceError =
+    attendanceFailure?.key === attendanceKey ? attendanceFailure.message : "";
+  const reviewing = reviewable && !attendanceReady && !attendanceError;
 
-  const preview = async () => {
-    if (!payload?.startsAt || !payload?.endsAt) return;
-    const reviewed = payload;
-    reviewRequestRef.current += 1;
-    const request = reviewRequestRef.current;
-    const current = () => request === reviewRequestRef.current;
-    setReviewing(true);
+  useEffect(() => {
+    if (!reviewable || attendanceReady || attendanceError) return undefined;
+    let stale = false;
+    const timer = setTimeout(async () => {
+      try {
+        const token = await getToken();
+        const data = await previewFinalMeeting(
+          code,
+          { startsAt, endsAt, channel },
+          token,
+        );
+        if (stale) return;
+        setAttendance({
+          key: attendanceKey,
+          review: data?.attendance || data?.finalMeeting?.attendance || null,
+        });
+      } catch (requestError) {
+        if (stale) return;
+        setAttendanceFailure({
+          key: attendanceKey,
+          message:
+            requestError.message || "Unable to review this meeting time.",
+        });
+      }
+    }, 0);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+  }, [
+    reviewable,
+    attendanceReady,
+    attendanceError,
+    attendanceKey,
+    getToken,
+    code,
+    startsAt,
+    endsAt,
+    channel,
+  ]);
+
+  // Finalize meeting: asks what the confirmation would say for the meeting as
+  // it stands, the location typed included, and opens the review of that
+  // email. The dialog finalizes exactly the meeting it was asked about.
+  const openFinalize = async () => {
+    const proposed = { startsAt, endsAt, channel, location: location.trim() };
+    setPreparing(true);
     setError("");
     try {
       const token = await getToken();
-      const data = await previewFinalMeeting(event.code, reviewed, token);
-      if (!current()) return;
+      const data = await previewFinalMeeting(code, proposed, token);
       // A reply without the count (an older server) doesn't say who the
       // confirmation goes to, so it can't stand for "nobody".
       if (!isCount(data?.recipientCount)) {
@@ -2826,50 +2900,38 @@ function FinalizeScalePanelContent({
           "Unable to check who would get the confirmation email. Try again.",
         );
       }
-      setReview(data.attendance || data.finalMeeting?.attendance || null);
-      setConfirmationPreview({
-        payload: reviewed,
+      setFinalizeDialog({
+        error: "",
+        proposed,
         recipientCount: data.recipientCount,
         email: data.email ?? null,
         sample: data.sample ?? null,
       });
-      setStatus("Attendance review is current for this candidate.");
     } catch (requestError) {
-      if (!current()) return;
       setError(requestError.message || "Unable to review this meeting time.");
     } finally {
-      setReviewing(false);
+      setPreparing(false);
     }
   };
 
-  // A location edit makes any review, and any reply still on its way, out of
-  // date.
-  const changeLocation = (value) => {
-    reviewRequestRef.current += 1;
-    setLocation(value);
-    setReview(null);
-    setConfirmationPreview(null);
-    setStatus("");
-  };
-
-  const confirmationRecipients = confirmationPreview?.recipientCount ?? 0;
+  const confirmationRecipients = finalizeDialog?.recipientCount ?? 0;
 
   // Runs once the confirmation email was reviewed and confirmed; a failure
   // stays on the dialog's confirmation step, and trying again reuses the
   // same idempotency key. It finalizes the meeting that was reviewed.
   const confirm = async () => {
-    const reviewed = confirmationPreview?.payload;
-    if (!review || !reviewed) return;
+    const proposed = finalizeDialog?.proposed;
+    if (!proposed) return;
     if (!confirmationKey.current) confirmationKey.current = crypto.randomUUID();
     setConfirming(true);
     setError("");
-    setFinalizeDialog({ error: "" });
+    setFinalizeDialog((dialog) => dialog && { ...dialog, error: "" });
     try {
       const token = await getToken();
       const data = await confirmFinalMeeting(
-        event.code,
+        code,
         {
-          ...reviewed,
+          ...proposed,
           expectedVersion: event.version,
           idempotencyKey: confirmationKey.current,
         },
@@ -2877,7 +2939,12 @@ function FinalizeScalePanelContent({
       );
       handOffFocus.current = isFinalized(data.event);
       setEvent(data.event);
-      setReview(data.finalMeeting?.attendance || review);
+      if (data.finalMeeting?.attendance) {
+        setAttendance({
+          key: attendanceKey,
+          review: data.finalMeeting.attendance,
+        });
+      }
       // Invitation delivery is tracked in the workspace banner with every
       // other email run, so it survives re-picks and refreshes.
       const delivery =
@@ -2898,9 +2965,13 @@ function FinalizeScalePanelContent({
       confirmationKey.current = "";
       setFinalizeDialog(null);
     } catch (requestError) {
-      setFinalizeDialog({
-        error: requestError.message || "Unable to finalize this meeting.",
-      });
+      setFinalizeDialog(
+        (dialog) =>
+          dialog && {
+            ...dialog,
+            error: requestError.message || "Unable to finalize this meeting.",
+          },
+      );
     } finally {
       setConfirming(false);
     }
@@ -2911,7 +2982,7 @@ function FinalizeScalePanelContent({
     setError("");
     try {
       const token = await getToken();
-      const { blob, filename } = await downloadFinalCalendar(event.code, token);
+      const { blob, filename } = await downloadFinalCalendar(code, token);
       const href = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = href;
@@ -2929,9 +3000,6 @@ function FinalizeScalePanelContent({
     }
   };
 
-  const meeting = event.finalMeeting;
-  const canFinalize = ["active", "closed"].includes(event.status);
-  const finalized = isFinalized(event);
   // Finalizing swaps the review workspace (and, above it, the Recommended
   // and Other times lists) for the confirmed meeting. Focus that was in
   // Finalize when that happened (this tab's Finalize meeting, or a chip when
@@ -2956,40 +3024,68 @@ function FinalizeScalePanelContent({
     if (!active || active === document.body) downloadRef.current?.focus();
   }, [finalized, focusWasInside]);
 
+  const notices = (status || error) && (
+    <div className="d-flex flex-column gap-2">
+      {status && (
+        <Alert variant="success" role="status">
+          {status}
+        </Alert>
+      )}
+      {error && (
+        <Alert variant="danger" role="alert">
+          {error}
+        </Alert>
+      )}
+    </div>
+  );
+  const attendanceReview = attendance?.review ?? null;
+
   return (
     <div className="finalize-block__body">
       <FinalizeStepIndicator
         selection={selection}
-        review={review}
+        reviewed={reviewable && attendanceReady}
         finalized={finalized}
       />
       {finalized ? (
-        <div className="finalized-meeting">
-          <div className="finalized-meeting__summary">
-            <strong className="finalized-meeting__time">
-              {formatInTimezone(meeting.startsAt, event.timezone)} –{" "}
-              {formatInTimezone(meeting.endsAt, event.timezone)}
-            </strong>
-            <span className="finalized-meeting__meta">
-              <span className="icon-inline me-1" aria-hidden="true">
-                <CalendarCheckIcon />
+        <>
+          <div className="finalized-meeting">
+            <div className="finalized-meeting__summary">
+              <strong className="finalized-meeting__time">
+                {formatInTimezone(meeting.startsAt, event.timezone)} –{" "}
+                {formatInTimezone(meeting.endsAt, event.timezone)}
+              </strong>
+              <span className="finalized-meeting__meta">
+                <span className="icon-inline me-1" aria-hidden="true">
+                  <CalendarCheckIcon />
+                </span>
+                {meeting.channel === "virtual" ? "Virtual" : "In person"} ·{" "}
+                {meeting.location || "Location TBD"}
               </span>
-              {meeting.channel === "virtual" ? "Virtual" : "In person"} ·{" "}
-              {meeting.location || "Location TBD"}
-            </span>
+            </div>
+            <div className="finalized-meeting__actions">
+              <AppButton
+                ref={downloadRef}
+                variant="outlined"
+                icon={<DownloadIcon />}
+                onClick={download}
+                disabled={downloading}
+              >
+                {downloading ? "Preparing…" : "Download calendar (.ics)"}
+              </AppButton>
+            </div>
           </div>
-          <div className="finalized-meeting__actions">
-            <AppButton
-              ref={downloadRef}
-              variant="outlined"
-              icon={<DownloadIcon />}
-              onClick={download}
-              disabled={downloading}
-            >
-              {downloading ? "Preparing…" : "Download calendar (.ics)"}
-            </AppButton>
-          </div>
-        </div>
+          {notices && <div className="mt-3">{notices}</div>}
+          {attendanceReview && (
+            <>
+              <AttendanceTiles review={attendanceReview} className="mt-3" />
+              <AttendanceReviewTable
+                review={attendanceReview}
+                className="mt-3"
+              />
+            </>
+          )}
+        </>
       ) : selection ? (
         <div className="finalize-block__workspace d-flex flex-column gap-3">
           <div className="final-candidate">
@@ -3025,39 +3121,69 @@ function FinalizeScalePanelContent({
               </p>
             )}
           </div>
+          {reviewable &&
+            (attendanceError ? (
+              <Alert variant="danger" role="alert">
+                <div className="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                  <span>{attendanceError}</span>
+                  <AppButton
+                    variant="outlined"
+                    size="sm"
+                    onClick={() => setRetries((count) => count + 1)}
+                  >
+                    Try again
+                  </AppButton>
+                </div>
+              </Alert>
+            ) : (
+              <div className="d-flex flex-column gap-2">
+                {attendanceReview && (
+                  <AttendanceTiles review={attendanceReview} />
+                )}
+                <p className="text-secondary small mb-0" role="status">
+                  {reviewing
+                    ? "Reviewing attendance…"
+                    : "Attendance review is current for this candidate."}
+                </p>
+              </div>
+            ))}
           <FormField label="Location or meeting link">
             <input
               type="text"
               className="form-control"
               value={location}
               maxLength={500}
+              disabled={preparing || confirming}
               onChange={(changeEvent) =>
-                changeLocation(changeEvent.target.value)
+                onLocationChange(changeEvent.target.value)
               }
             />
           </FormField>
           <div className="finalize-block__actions d-flex flex-wrap gap-2">
             <AppButton
-              variant="outlined"
-              onClick={preview}
-              disabled={!canFinalize || reviewing || confirming}
-            >
-              {reviewing ? "Reviewing…" : "Review attendance"}
-            </AppButton>
-            <AppButton
               variant="filled"
               icon={<FinalizeIcon />}
-              onClick={() => setFinalizeDialog({ error: "" })}
-              disabled={!canFinalize || !review || reviewing || confirming}
+              busy={preparing}
+              onClick={openFinalize}
+              disabled={
+                !canFinalize || !attendanceReady || preparing || confirming
+              }
             >
-              {confirming ? "Finalizing…" : "Finalize meeting"}
+              {confirming
+                ? "Finalizing…"
+                : preparing
+                  ? "Preparing…"
+                  : "Finalize meeting"}
             </AppButton>
           </div>
           {!canFinalize && (
             <Alert variant="warning" role="note">
-              Reactivate this event before reviewing and finalizing a meeting
-              time.
+              Reactivate this event before finalizing a meeting time.
             </Alert>
+          )}
+          {notices}
+          {attendanceReview && !attendanceError && (
+            <AttendanceReviewTable review={attendanceReview} />
           )}
         </div>
       ) : (
@@ -3069,46 +3195,6 @@ function FinalizeScalePanelContent({
         >
           <p className="mb-0">{emptyPrompt}</p>
         </EmptyState>
-      )}
-
-      {review && (
-        <>
-          <div
-            role="group"
-            className="metric-tiles attendance-review mt-3"
-            aria-label="Attendance review"
-          >
-            {[
-              ["Available", review.availableParticipantTotal],
-              ["Partial", review.partialParticipantTotal],
-              ["Unavailable", review.unavailableParticipantTotal],
-              ["Unanswered", review.unansweredParticipantTotal],
-              ["Excluded", review.excludedParticipantTotal],
-            ].map(([label, value]) => (
-              <div key={label} className="metric-tile attendance-review__item">
-                <span className="metric-tile__label">{label}</span>
-                <strong className="metric-tile__value attendance-review__value">
-                  {value || 0}
-                </strong>
-              </div>
-            ))}
-          </div>
-          <AttendanceReviewTable review={review} />
-        </>
-      )}
-      {(status || error) && (
-        <div className="d-flex flex-column gap-2 mt-3">
-          {status && (
-            <Alert variant="success" role="status">
-              {status}
-            </Alert>
-          )}
-          {error && (
-            <Alert variant="danger" role="alert">
-              {error}
-            </Alert>
-          )}
-        </div>
       )}
 
       {finalizeDialog && (
@@ -3126,8 +3212,8 @@ function FinalizeScalePanelContent({
               </p>
             )
           }
-          email={confirmationPreview?.email ?? null}
-          emailNote={shownFor(confirmationPreview?.sample)}
+          email={finalizeDialog.email}
+          emailNote={shownFor(finalizeDialog.sample)}
           error={finalizeDialog.error}
           busy={confirming}
           allowEmpty

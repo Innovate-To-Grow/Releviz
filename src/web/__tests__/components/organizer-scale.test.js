@@ -445,10 +445,18 @@ function calendarCell(index) {
 // Finalizes through the email review: Finalize meeting opens it, Continue
 // reaches the second confirmation, and `sendLabel` confirms.
 async function finalizeThroughReview(sendLabel = "Finalize meeting") {
+  // The attendance is read as soon as a time is picked; Finalize waits for it.
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Finalize meeting" }),
+    ).toBeEnabled(),
+  );
   await userEvent.click(
     screen.getByRole("button", { name: "Finalize meeting" }),
   );
-  const review = screen.getByRole("dialog", { name: "Finalize meeting" });
+  const review = await screen.findByRole("dialog", {
+    name: "Finalize meeting",
+  });
   await userEvent.click(
     within(review).getByRole("button", { name: "Continue" }),
   );
@@ -2306,15 +2314,15 @@ describe("scaled organizer workspace", () => {
     const chosen = screen.getByRole("button", { name: /selected time/i });
     expect(chosen).toBeVisible();
     expect(chosen).toHaveFocus();
-    await userEvent.click(
-      screen.getByRole("button", { name: "Review attendance" }),
-    );
+    // The attendance is read as soon as the time is picked.
     expect(await screen.findByText("700")).toBeInTheDocument();
     await userEvent.click(
-      screen.getByRole("button", { name: "Finalize meeting" }),
+      await screen.findByRole("button", { name: "Finalize meeting" }),
     );
     // The confirmation email is reviewed before anything is finalized.
-    const review = screen.getByRole("dialog", { name: "Finalize meeting" });
+    const review = await screen.findByRole("dialog", {
+      name: "Finalize meeting",
+    });
     expect(review).toHaveTextContent(
       "2 invited people will receive the confirmation and a calendar invitation.",
     );
@@ -2427,9 +2435,6 @@ describe("scaled organizer workspace", () => {
     });
     expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Review attendance" }),
-    );
     await screen.findByText("Attendance review is current for this candidate.");
     // The attendance tile is the only element whose whole text is "Available":
     // the per-person table spells out "Fully available" instead.
@@ -2438,7 +2443,7 @@ describe("scaled organizer workspace", () => {
       within(screen.getByRole("region", { name: "Attendance by person" }))
         .getByRole("rowheader", { name: "Grace Faculty" })
         .closest("tr"),
-    ).toHaveTextContent("Fully available · 100%");
+    ).toHaveTextContent("Fully available");
     expect(
       screen.getAllByRole("heading", { name: /time table/i }),
     ).toHaveLength(1);
@@ -2647,7 +2652,7 @@ describe("scaled organizer workspace", () => {
       expect(finalizeSection()).toHaveTextContent(/9:30/);
       // The estimate is the lowest per-slot share across slots 1 and 2.
       expect(finalizeSection()).toHaveTextContent(
-        "Up to 50% weighted · 60% unweighted across this window (its lowest slot; people must be free for all of it). Exact attendance counts appear after Review attendance.",
+        "Up to 50% weighted · 60% unweighted across this window (its lowest slot; people must be free for all of it).",
       );
       expect(finalizeSection()).toHaveAttribute("open");
       expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
@@ -2659,9 +2664,7 @@ describe("scaled organizer workspace", () => {
       expect(calendarCell(2)).toHaveAttribute("aria-selected", "true");
       expect(calendarCell(0)).not.toHaveAttribute("aria-selected");
 
-      await userEvent.click(
-        screen.getByRole("button", { name: "Review attendance" }),
-      );
+      // The attendance is read as soon as the window is picked.
       await waitFor(() =>
         expect(previewFinalMeeting).toHaveBeenCalledWith(
           event.code,
@@ -2669,7 +2672,6 @@ describe("scaled organizer workspace", () => {
             startsAt: "2026-08-20T09:30:00Z",
             endsAt: "2026-08-20T10:30:00Z",
             channel: "inperson",
-            location: "Room 1",
           },
           "token",
         ),
@@ -2679,7 +2681,18 @@ describe("scaled organizer workspace", () => {
       ).toBeInTheDocument();
 
       // Nobody was invited by email: finalizing goes ahead without email.
+      // The email is asked for with the location as it stands at the click.
       await finalizeThroughReview();
+      expect(previewFinalMeeting).toHaveBeenLastCalledWith(
+        event.code,
+        {
+          startsAt: "2026-08-20T09:30:00Z",
+          endsAt: "2026-08-20T10:30:00Z",
+          channel: "inperson",
+          location: "Room 1",
+        },
+        "token",
+      );
       await waitFor(() =>
         expect(confirmFinalMeeting).toHaveBeenCalledWith(
           event.code,
@@ -2742,9 +2755,6 @@ describe("scaled organizer workspace", () => {
 
       await userEvent.click(calendarCell(1));
       expect(finalizeSection()).toHaveTextContent("Custom window");
-      await userEvent.click(
-        screen.getByRole("button", { name: "Review attendance" }),
-      );
       await screen.findByRole("group", { name: "Attendance review" });
       await finalizeThroughReview();
       await waitFor(() =>

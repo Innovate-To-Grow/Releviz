@@ -176,7 +176,7 @@ function slotIndex(event, groupKey, localStart) {
 }
 
 async function finalizeCurrentSelection(page, eventCode) {
-  await page.getByRole("button", { name: "Review attendance" }).click();
+  // The attendance is read as soon as the time is picked.
   await expect(
     page.getByText("Attendance review is current for this candidate."),
   ).toBeVisible();
@@ -455,7 +455,7 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(finalizeStep).toHaveAttribute("open", "");
     await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
     await expect(
-      page.getByRole("button", { name: "Review attendance" }),
+      page.getByText("Attendance review is current for this candidate."),
     ).toBeVisible();
     await expectAccessible(page, "organizer finalize step");
     const candidate = page.locator(".final-candidate");

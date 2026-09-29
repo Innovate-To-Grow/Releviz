@@ -391,15 +391,25 @@ An open slot whose meeting window would run into a blocked time shows its percen
 start a meeting.
 
 **Finalize** fixes one continuous meeting time, emails an iCalendar invitation to participants, and
-offers the calendar file for download. Pick a window, click **Review attendance**, then **Finalize
-meeting**: the [review](#review-before-sending) counts the invited people who will receive the
-confirmation and shows the one the first of them gets, for the picked time and with its calendar
-file attached. Nothing is finalized until **Finalize and send N emails** on the confirmation step.
-Only people who were sent an invitation get the confirmation; when nobody was, the review says no
-confirmation emails will be sent, and **Finalize meeting** on the confirmation step finalizes
-without emailing anyone. Once a meeting is finalized, picking is locked until the event is
-reactivated: Finalize shows the confirmed meeting without the two lists, and the calendar draws the
-confirmed meeting alone and ignores clicks.
+offers the calendar file for download. As soon as a window is picked, Finalize counts who could
+attend it (available, partial, unavailable, unanswered and left out of the results) and lists each
+person below the counts: **Fully available**, **Available if needed** (free for all of it, but only
+if needed somewhere), **Available for part of it**, or **Not available** for people who answered,
+and **Not submitted** or the reason someone was left out for the rest. It says when that reading is
+current and reads it again whenever the results change; **Finalize meeting** waits for it, and a
+failed reading offers **Try again**. The **Location or meeting link** you type stays put while you
+compare other times.
+
+Then click **Finalize meeting**: it asks what the confirmation would say for the meeting as it
+stands, location included, and the [review](#review-before-sending) counts the invited people who
+will receive the confirmation and shows the one the first of them gets, for the picked time and with
+its calendar file attached. Nothing is finalized until **Finalize and send N emails** on the
+confirmation step, and it finalizes exactly the meeting that was reviewed. Only people who were sent
+an invitation get the confirmation; when nobody was, the review says no confirmation emails will be
+sent, and **Finalize meeting** on the confirmation step finalizes without emailing anyone. Once a
+meeting is finalized, picking is locked until the event is reactivated: Finalize shows the confirmed
+meeting without the two lists, and the calendar draws the confirmed meeting alone and ignores
+clicks.
 
 Reactivating a finalized event (**Reactivate event**) cancels the meeting and emails a matching
 cancellation to everyone the confirmation reached. That email is reviewed first in the same way,
