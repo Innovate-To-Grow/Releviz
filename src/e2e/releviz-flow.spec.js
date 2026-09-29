@@ -23,6 +23,7 @@ const {
   readSession,
   recomputeEventResults,
   registerAccount,
+  runBackendCommand,
   selectOption,
 } = require("./helpers/releviz");
 
@@ -3211,6 +3212,69 @@ test.describe("Releviz account and scheduling flow", () => {
       calendar_uid: calendarUid,
     });
     await participantContext.close();
+  });
+
+  test("sends a passed response deadline straight to the field that fixes it", async ({
+    page,
+  }) => {
+    const runId = `${Date.now()}-${Math.round(Math.random() * 100_000)}`;
+
+    await registerAccount(page, `deadline-${runId}@example.com`, "Dana", "Due");
+    await page.getByRole("link", { name: "Create New Event" }).click();
+    await fillTextbox(page, "Event Name", `Deadline ${runId}`);
+    await selectOption(page, "Event timezone", "UTC");
+    await page.getByRole("button", { name: "Create Event" }).click();
+    await page.waitForURL(/\/event\?code=/);
+    const eventCode = new URL(page.url()).searchParams.get("code");
+    expect(eventCode).toMatch(/^[A-Z0-9]+$/);
+
+    // The deadline passes while the event is still active. Whole minutes,
+    // like the form's own field, so saving other settings stays possible.
+    runBackendCommand(
+      "shell",
+      "-c",
+      `from datetime import timedelta
+from django.utils import timezone
+from apps.scheduling.models import Event
+past = timezone.now().replace(second=0, microsecond=0) - timedelta(hours=2)
+assert Event.objects.filter(code="${eventCode}").update(response_deadline=past) == 1`,
+    );
+    await page.reload();
+
+    const lifecycle = page
+      .getByRole("status")
+      .filter({ hasText: "so people can no longer respond" });
+    await expect(lifecycle).toBeVisible();
+    await expect(page.locator("#organizer-overview")).toContainText(
+      /Deadline .*UTC/,
+    );
+    const banner = page
+      .locator("#organizer-roster")
+      .getByRole("status")
+      .filter({ hasText: "The response deadline (" });
+    await expect(banner).toContainText(/\(.*UTC\) has passed/);
+
+    // Either notice opens the settings with the deadline field ready, even
+    // though it sits under Advanced options.
+    const deadline = page.getByLabel("Response Deadline");
+    await expect(deadline).toHaveCount(0);
+    await banner.getByRole("button", { name: "Change deadline" }).click();
+    await expect(deadline).toBeFocused();
+    await expect(
+      page.getByText("Uses the event timezone (UTC)."),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(deadline).toHaveCount(0);
+    await lifecycle.getByRole("button", { name: "Change deadline" }).click();
+    await expect(deadline).toBeFocused();
+
+    await deadline.fill(datetimeLocalHoursFromNow(72));
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await expect(
+      page.getByText("This event is active and accepting responses."),
+    ).toBeVisible();
+    await expect(banner).toHaveCount(0);
+    await expect(lifecycle).toHaveCount(0);
   });
 
   test("edits, resets, duplicates, archives, and deletes organizer events", async ({

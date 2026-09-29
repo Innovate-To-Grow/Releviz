@@ -922,6 +922,9 @@ describe("small UI modules", () => {
     ).toBeInTheDocument();
     expect(within(overview).getByText("Mon, Tue")).toBeInTheDocument();
     expect(
+      within(overview).getByText(/^Deadline .*8:00:00\sAM EDT$/),
+    ).toBeInTheDocument();
+    expect(
       within(overview).getByText("Mixed · 60 minutes"),
     ).toBeInTheDocument();
     expect(within(overview).getByText("Anyone with code")).toBeInTheDocument();

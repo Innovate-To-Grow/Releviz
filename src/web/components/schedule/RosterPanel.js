@@ -239,7 +239,7 @@ const RosterPanel = forwardRef(function RosterPanel(
     getToken,
     onResultsInvalidated,
     onDeliveryRequestChange,
-    onEditEvent,
+    onEditDeadline,
   },
   forwardedRef,
 ) {
@@ -1669,7 +1669,8 @@ const RosterPanel = forwardRef(function RosterPanel(
           {deadlinePassed && (
             <DeadlineBanner
               deadline={event.responseDeadline}
-              onEdit={onEditEvent}
+              timezone={event.timezone}
+              onEdit={onEditDeadline}
             />
           )}
           {loaded && excludedCount > 0 && (

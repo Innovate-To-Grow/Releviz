@@ -454,13 +454,13 @@ describe("RosterPanel states", () => {
     jest.useFakeTimers();
     try {
       const deadline = new Date(Date.now() + 30000).toISOString();
-      const onEditEvent = jest.fn();
+      const onEditDeadline = jest.fn();
       render(
         <RosterPanel
           event={{ ...event, responseDeadline: deadline }}
           setEvent={jest.fn()}
           getToken={jest.fn().mockResolvedValue("token")}
-          onEditEvent={onEditEvent}
+          onEditDeadline={onEditDeadline}
         />,
       );
       await act(async () => {
@@ -478,7 +478,7 @@ describe("RosterPanel states", () => {
         screen.getByText(/The response deadline .* has passed/),
       ).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Change deadline" }));
-      expect(onEditEvent).toHaveBeenCalledTimes(1);
+      expect(onEditDeadline).toHaveBeenCalledTimes(1);
       expect(
         screen.queryByRole("button", { name: "Email" }),
       ).not.toBeInTheDocument();

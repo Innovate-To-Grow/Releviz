@@ -16,8 +16,8 @@ import { createRef, useState } from "react";
 
 jest.mock("@/components/event/CreateEventClient", () => ({
   __esModule: true,
-  default: ({ initialEvent, onSaved, onCancel }) => (
-    <div>
+  default: ({ initialEvent, focusRequest, onSaved, onCancel }) => (
+    <div data-testid="event-editor" data-focus-field={focusRequest?.field}>
       <button type="button" onClick={onCancel}>
         Cancel
       </button>
@@ -1299,6 +1299,32 @@ test("the overview opens its inline editor when the workspace asks it to", async
   );
 });
 
+test("the overview opens the editor on the deadline when that is what was asked for", async () => {
+  const ref = createRef();
+  render(
+    <OverviewPanel ref={ref} event={baseEvent} onEventSaved={jest.fn()} />,
+  );
+
+  act(() => ref.current.edit({ field: "deadline" }));
+  const editor = await screen.findByTestId("event-editor");
+  expect(editor).toHaveAttribute("data-focus-field", "deadline");
+  // The field takes the focus, not the editor's heading.
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 5));
+  });
+  expect(screen.getByRole("heading", { name: "Edit event" })).not.toHaveFocus();
+
+  // Closing and opening it again through the button starts from the top.
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await userEvent.click(screen.getByRole("button", { name: "Edit event" }));
+  expect(await screen.findByTestId("event-editor")).not.toHaveAttribute(
+    "data-focus-field",
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("heading", { name: "Edit event" })).toHaveFocus(),
+  );
+});
+
 test("the overview does not open an editor for an event that cannot be edited", () => {
   const ref = createRef();
   render(
@@ -1922,14 +1948,14 @@ test("closing responses does not report a reactivation", async () => {
 });
 
 test("an active event past its deadline says nobody can respond and offers to change the deadline", async () => {
-  const onEditEvent = jest.fn();
+  const onEditDeadline = jest.fn();
   const { rerender } = render(
     <EventControls
       event={{ ...baseEvent, responseDeadline: "2020-01-01T00:00:00Z" }}
       setEvent={jest.fn()}
       getToken={getToken}
       setDeliveryRequest={jest.fn()}
-      onEditEvent={onEditEvent}
+      onEditDeadline={onEditDeadline}
     />,
   );
 
@@ -1944,7 +1970,7 @@ test("an active event past its deadline says nobody can respond and offers to ch
   await userEvent.click(
     within(controls).getByRole("button", { name: "Change deadline" }),
   );
-  expect(onEditEvent).toHaveBeenCalledTimes(1);
+  expect(onEditDeadline).toHaveBeenCalledTimes(1);
 
   // Without a place to change it, the sentence stands on its own.
   rerender(
@@ -1970,7 +1996,7 @@ test("a deadline still ahead keeps the accepting-responses sentence", () => {
       setEvent={jest.fn()}
       getToken={getToken}
       setDeliveryRequest={jest.fn()}
-      onEditEvent={jest.fn()}
+      onEditDeadline={jest.fn()}
     />,
   );
 
@@ -1983,7 +2009,7 @@ test("a deadline still ahead keeps the accepting-responses sentence", () => {
 });
 
 test("reactivating past an old deadline says it was removed, until a new one is set", async () => {
-  const onEditEvent = jest.fn();
+  const onEditDeadline = jest.fn();
   updateEventLifecycle.mockResolvedValueOnce({
     event: {
       ...baseEvent,
@@ -2006,7 +2032,7 @@ test("reactivating past an old deadline says it was removed, until a new one is 
           setEvent={setEvent}
           getToken={getToken}
           setDeliveryRequest={jest.fn()}
-          onEditEvent={onEditEvent}
+          onEditDeadline={onEditDeadline}
         />
         <button
           type="button"
@@ -2040,7 +2066,7 @@ test("reactivating past an old deadline says it was removed, until a new one is 
   await userEvent.click(
     screen.getByRole("button", { name: "Set a new deadline" }),
   );
-  expect(onEditEvent).toHaveBeenCalledTimes(1);
+  expect(onEditDeadline).toHaveBeenCalledTimes(1);
 
   // Once the event has a deadline again, the reminder goes away.
   await userEvent.click(
@@ -2060,7 +2086,7 @@ test("a reactivation that removed no deadline shows no notice", async () => {
       initialEvent={{ ...baseEvent, status: "closed", version: 5 }}
       getToken={getToken}
       setDeliveryRequest={jest.fn()}
-      onEditEvent={jest.fn()}
+      onEditDeadline={jest.fn()}
     />,
   );
 

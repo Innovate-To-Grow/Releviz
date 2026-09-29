@@ -59,7 +59,8 @@ the counts line then reads **Showing n of N people**.
 
 Once an active event's response deadline has passed, a banner says so: people can't be added,
 invited, or changed, and your own schedule is locked, but you can still enter schedules for the
-people you answer for. **Change deadline** opens the event settings in the Overview.
+people you answer for. **Change deadline** opens the event settings in the Overview with **Advanced
+options** expanded and the **Response Deadline** field ready to edit.
 
 ### Add people
 
@@ -305,9 +306,22 @@ page says which in plain words, next to the buttons that change it:
 Closing and archiving ask for confirmation first and say what they do; nobody is emailed about
 either. The **Archive** button on the account dashboard asks the same question. When an active
 event's response deadline passes, the line says people can no longer respond and offers **Change
-deadline**, which opens the event settings in the Overview; the same button is on the Participants
-banner. An active event needs a deadline in the future or none, so reactivating an event whose
-deadline has passed removes it, says so, and offers **Set a new deadline**.
+deadline**, which opens the event settings in the Overview with **Advanced options** expanded and
+the **Response Deadline** field ready to edit; the same button is on the Participants banner. An
+active event needs a deadline in the future or none, so reactivating an event whose deadline has
+passed removes it, says so, and offers **Set a new deadline**.
+
+### Editing the event
+
+**Edit event** in the Overview opens the event settings in place. The **Response Deadline** is
+entered in the event's timezone, which the field says. Changing the days, time window, slot length,
+or timezone gives everyone a fresh schedule for the new grid, because their old marks no longer
+line up. Invitations and membership stay. If anyone has submitted or painted availability, the
+editor first asks you to confirm **Schedule changes require a response reset** and says how many
+people will lose theirs; people who have only joined or left the starting schedule untouched are not
+counted, and when nobody has answered anything the change saves straight away. Every other setting
+(name, location, meeting type, duration, access, deadline, reminders) saves without touching
+anyone's answers.
 
 ### Participants and schedules
 

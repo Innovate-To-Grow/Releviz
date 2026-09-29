@@ -84,14 +84,19 @@ describe("LeftOutBanner", () => {
 });
 
 describe("DeadlineBanner", () => {
-  test("names the deadline and offers to change it", () => {
+  test("names the deadline in the event timezone and offers to change it", () => {
     const onEdit = jest.fn();
-    const deadline = "2026-09-01T12:00:00Z";
-    render(<DeadlineBanner deadline={deadline} onEdit={onEdit} />);
+    render(
+      <DeadlineBanner
+        deadline="2026-09-01T12:00:00Z"
+        timezone="America/New_York"
+        onEdit={onEdit}
+      />,
+    );
     const banner = screen.getByRole("status");
     expect(banner).toHaveClass("alert-warning");
     expect(banner).toHaveTextContent(
-      `The response deadline (${new Date(deadline).toLocaleString([], {})}) has passed, so people can't be added, invited or changed. You can still enter schedules for people you answer for.`,
+      /The response deadline \(.*8:00:00\sAM EDT\) has passed, so people can't be added, invited or changed\. You can still enter schedules for people you answer for\./,
     );
     fireEvent.click(screen.getByRole("button", { name: "Change deadline" }));
     expect(onEdit).toHaveBeenCalledTimes(1);

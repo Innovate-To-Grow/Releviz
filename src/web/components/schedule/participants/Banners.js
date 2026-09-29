@@ -44,7 +44,7 @@ export function LeftOutBanner({
 }
 
 /** Active event whose response deadline is in the past. */
-export function DeadlineBanner({ deadline, onEdit }) {
+export function DeadlineBanner({ deadline, timezone, onEdit }) {
   return (
     <Alert
       variant="warning"
@@ -58,9 +58,10 @@ export function DeadlineBanner({ deadline, onEdit }) {
         ) : null
       }
     >
-      The response deadline ({formatDateTimeInTimezone(deadline)}) has passed,
-      so people can&apos;t be added, invited or changed. You can still enter
-      schedules for people you answer for.
+      The response deadline (
+      {formatDateTimeInTimezone(deadline, timezone, { timeZoneName: "short" })})
+      has passed, so people can&apos;t be added, invited or changed. You can
+      still enter schedules for people you answer for.
     </Alert>
   );
 }

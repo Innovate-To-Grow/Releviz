@@ -538,7 +538,7 @@ export function EventControls({
   getToken,
   setDeliveryRequest,
   onReactivated,
-  onEditEvent,
+  onEditDeadline,
 }) {
   const [changing, setChanging] = useState(false);
   const [error, setError] = useState("");
@@ -712,14 +712,14 @@ export function EventControls({
             role="status"
           >
             {lifecycleSummary}
-            {deadlinePassed && onEditEvent && (
+            {deadlinePassed && onEditDeadline && (
               <>
                 {" "}
                 <AppButton
                   variant="text"
                   size="sm"
                   className="p-0 align-baseline"
-                  onClick={onEditEvent}
+                  onClick={onEditDeadline}
                 >
                   Change deadline
                 </AppButton>
@@ -733,14 +733,14 @@ export function EventControls({
             role="status"
           >
             {notice}
-            {onEditEvent && (
+            {onEditDeadline && (
               <>
                 {" "}
                 <AppButton
                   variant="text"
                   size="sm"
                   className="p-0 align-baseline"
-                  onClick={onEditEvent}
+                  onClick={onEditDeadline}
                 >
                   Set a new deadline
                 </AppButton>
@@ -807,6 +807,7 @@ export const OverviewPanel = forwardRef(function OverviewPanel(
   const [editing, setEditing] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
   const [saveStatus, setSaveStatus] = useState("");
+  const [focusRequest, setFocusRequest] = useState(null);
   const panelRef = useRef(null);
   const editorHeadingRef = useRef(null);
   const { locked: editLocked, reason: editLockReason } = editLockOf(event);
@@ -821,16 +822,24 @@ export const OverviewPanel = forwardRef(function OverviewPanel(
     );
   };
 
-  const openEditor = () => {
+  // `field` names the setting the organizer came for: the editor opens with
+  // that field focused rather than at its heading.
+  const openEditor = (field = null) => {
     setSaveStatus("");
     setEditingEvent(event);
     setEditing(true);
-    window.setTimeout(() => editorHeadingRef.current?.focus(), 0);
+    if (field) {
+      setFocusRequest({ field });
+    } else {
+      setFocusRequest(null);
+      window.setTimeout(() => editorHeadingRef.current?.focus(), 0);
+    }
   };
 
   const closeEditor = () => {
     setEditing(false);
     setEditingEvent(null);
+    setFocusRequest(null);
     focusEditButton();
   };
 
@@ -843,8 +852,8 @@ export const OverviewPanel = forwardRef(function OverviewPanel(
   // Lets the rest of the workspace (a deadline notice, say) open the editor
   // here rather than sending the organizer to another page.
   useImperativeHandle(ref, () => ({
-    edit: () => {
-      if (!editLocked) openEditor();
+    edit: ({ field } = {}) => {
+      if (!editLocked) openEditor(field);
     },
   }));
 
@@ -876,7 +885,7 @@ export const OverviewPanel = forwardRef(function OverviewPanel(
             variant="outlined"
             className="organizer-overview-edit-link"
             icon={<EditIcon />}
-            onClick={openEditor}
+            onClick={() => openEditor()}
             disabled={editing}
             aria-expanded={editing}
             aria-controls="organizer-inline-event-editor"
@@ -939,6 +948,7 @@ export const OverviewPanel = forwardRef(function OverviewPanel(
             operation="edit"
             presentation="inline"
             initialEvent={editingEvent}
+            focusRequest={focusRequest}
             onSaved={handleSaved}
             onCancel={closeEditor}
           />

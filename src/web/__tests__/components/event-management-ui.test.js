@@ -468,11 +468,14 @@ describe("organizer event management UI", () => {
   test("edit form loads values and requires explicit response-reset confirmation", async () => {
     searchParams = new URLSearchParams("code=EVENT123");
     fetchEvent.mockResolvedValue({ event: baseEvent });
+    // The server sends the current event along with the demand, but that is
+    // not a stale version: the form must not offer to "reload" it.
     const resetError = Object.assign(
       new Error("Saved availability would be reset."),
       {
         requiresResponseReset: true,
         participantCount: 2,
+        event: baseEvent,
       },
     );
     updateEvent.mockRejectedValueOnce(resetError).mockResolvedValueOnce({
@@ -503,9 +506,18 @@ describe("organizer event management UI", () => {
         /clear draft and submitted availability for 2 participants/,
       ),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Saved availability would be reset."),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/latest saved version/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Reload latest event" }),
+    ).not.toBeInTheDocument();
     const confirmation = screen.getByLabelText(
       "I understand that participant availability will be reset.",
     );
+    // Saving is off until this is ticked, so the keyboard is sent to it.
+    expect(confirmation).toHaveFocus();
     const saveButton = screen.getByRole("button", { name: "Save changes" });
     expect(saveButton).toBeDisabled();
     await userEvent.click(confirmation);
@@ -582,6 +594,69 @@ describe("organizer event management UI", () => {
     expect(updateEvent.mock.calls[0][1]).not.toHaveProperty("blockedSlots");
     expect(onSaved).toHaveBeenCalledWith(result);
     expect(replace).not.toHaveBeenCalled();
+  });
+
+  test("a request for the deadline opens Advanced options and focuses the field", async () => {
+    const quiet = render(
+      <CreateEvent
+        operation="edit"
+        presentation="inline"
+        initialEvent={baseEvent}
+      />,
+    );
+    // Without a request the inline editor keeps the rarely used settings folded.
+    expect(
+      screen.getByText("Advanced options").closest("details"),
+    ).not.toHaveAttribute("open");
+    expect(screen.getByLabelText("Response Deadline")).not.toHaveFocus();
+    quiet.unmount();
+
+    const view = render(
+      <CreateEvent
+        operation="edit"
+        presentation="inline"
+        initialEvent={baseEvent}
+        focusRequest={{ field: "deadline" }}
+      />,
+    );
+    const advanced = screen.getByText("Advanced options").closest("details");
+    expect(advanced).toHaveAttribute("open");
+    expect(screen.getByLabelText("Response Deadline")).toHaveFocus();
+    // The picker shows the organizer's clock, so say whose clock it means.
+    expect(
+      screen.getByText("Uses the event timezone (UTC)."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Response Deadline"),
+    ).toHaveAccessibleDescription("Uses the event timezone (UTC).");
+
+    // Folded again by hand, a fresh request opens it once more.
+    await userEvent.click(screen.getByText("Advanced options"));
+    await waitFor(() => expect(advanced).not.toHaveAttribute("open"));
+    screen.getByLabelText("Response Deadline").blur();
+    view.rerender(
+      <CreateEvent
+        operation="edit"
+        presentation="inline"
+        initialEvent={baseEvent}
+        focusRequest={{ field: "deadline" }}
+      />,
+    );
+    await waitFor(() => expect(advanced).toHaveAttribute("open"));
+    expect(screen.getByLabelText("Response Deadline")).toHaveFocus();
+
+    // A request for anything else leaves the form as it is.
+    await userEvent.click(screen.getByText("Advanced options"));
+    await waitFor(() => expect(advanced).not.toHaveAttribute("open"));
+    view.rerender(
+      <CreateEvent
+        operation="edit"
+        presentation="inline"
+        initialEvent={baseEvent}
+        focusRequest={{ field: "name" }}
+      />,
+    );
+    expect(advanced).not.toHaveAttribute("open");
   });
 
   test("edit form exposes conflicts, load errors, and authentication recovery", async () => {

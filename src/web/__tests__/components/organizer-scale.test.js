@@ -17,8 +17,8 @@ import { useState } from "react";
 jest.mock("@/components/auth/AuthContext", () => ({ useAuth: jest.fn() }));
 jest.mock("@/components/event/CreateEventClient", () => ({
   __esModule: true,
-  default: ({ initialEvent, onSaved, onCancel }) => (
-    <div>
+  default: ({ initialEvent, focusRequest, onSaved, onCancel }) => (
+    <div data-testid="event-editor" data-focus-field={focusRequest?.field}>
       <button type="button" onClick={onCancel}>
         Cancel
       </button>
@@ -901,6 +901,11 @@ describe("scaled organizer workspace", () => {
         name: "Edit event",
       }),
     ).toBeInTheDocument();
+    // ...with the deadline itself in front of them, not just the editor.
+    expect(within(overviewSection).getByTestId("event-editor")).toHaveAttribute(
+      "data-focus-field",
+      "deadline",
+    );
 
     await userEvent.click(
       within(overviewSection).getByRole("button", { name: "Cancel" }),
@@ -918,6 +923,10 @@ describe("scaled organizer workspace", () => {
         name: "Edit event",
       }),
     ).toBeInTheDocument();
+    expect(within(overviewSection).getByTestId("event-editor")).toHaveAttribute(
+      "data-focus-field",
+      "deadline",
+    );
   });
 
   test("reports when the roster cannot be re-read after a reset", async () => {

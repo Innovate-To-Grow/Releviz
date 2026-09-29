@@ -84,9 +84,11 @@ function OrganizerEventDetails({ event, extraCards }) {
     blockedCount > 0 ? ` · ${blockedCount} slots blocked` : ""
   }`;
   const responseDeadline = event?.responseDeadline
-    ? formatDateTimeInTimezone(event.responseDeadline, event?.timezone, {
-        timeZoneName: "short",
-      })
+    ? `Deadline ${formatDateTimeInTimezone(
+        event.responseDeadline,
+        event?.timezone,
+        { timeZoneName: "short" },
+      )}`
     : "No deadline";
   const extraValue = (label, fallback) =>
     extraCards.find((card) => card.label === label)?.value ?? fallback;

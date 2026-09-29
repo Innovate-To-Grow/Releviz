@@ -318,6 +318,100 @@ class EventManagementApiTests(TestCase):
         )
         self.assertEqual(past_deadline.status_code, 400)
 
+    def test_schedule_changes_ask_for_confirmation_only_when_someone_answered(self):
+        self.authenticate()
+        event = self.event(code="RESETASK")
+        self.assertEqual(event.starting_availability, "available")
+
+        def person(email, name, **fields):
+            values = {
+                "availability_inperson": [1, 1],
+                "availability_virtual": [1, 1],
+                "submitted": False,
+            }
+            values.update(fields)
+            return Participant.objects.create(
+                event=event,
+                member=create_member(email, name, "Person"),
+                participant_name=name,
+                **values,
+            )
+
+        joined = person("joined@example.com", "Joined")
+        # A draft that still equals the starting schedule holds nothing a reset would lose.
+        drafted = person(
+            "drafted@example.com",
+            "Drafted",
+            first_draft_saved_at=timezone.now(),
+        )
+
+        widened = self.edit(event, {"expectedVersion": event.version, "endTime": "10:30"})
+        self.assertEqual(widened.status_code, 200, widened.data)
+        self.assertNotIn("requiresResponseReset", widened.data)
+        self.assertEqual(widened.data["event"]["slotCount"], 3)
+        # Everyone is still re-seeded for the new window, and told so by the count.
+        self.assertEqual(widened.data["responsesReset"], 2)
+        for participant in (joined, drafted):
+            participant.refresh_from_db()
+            self.assertEqual(participant.availability_inperson, [1, 1, 1])
+            self.assertEqual(participant.availability_virtual, [1, 1, 1])
+            self.assertEqual(participant.version, 2)
+
+        painted = person(
+            "painted@example.com",
+            "Painted",
+            availability_inperson=[1, 0, 1],
+            availability_virtual=[1, 1, 1],
+        )
+        # A submitted response counts even when it equals the starting schedule.
+        person(
+            "submitted@example.com",
+            "Submitted",
+            availability_inperson=[1, 1, 1],
+            availability_virtual=[1, 1, 1],
+            submitted=True,
+        )
+        version = widened.data["event"]["version"]
+        asked = self.edit(event, {"expectedVersion": version, "endTime": "11:00"})
+        self.assertEqual(asked.status_code, 409)
+        self.assertTrue(asked.data["requiresResponseReset"])
+        self.assertEqual(asked.data["participantCount"], 2)
+        painted.refresh_from_db()
+        self.assertEqual(painted.availability_inperson, [1, 0, 1])
+
+        confirmed = self.edit(
+            event,
+            {"expectedVersion": version, "endTime": "11:00", "resetResponses": True},
+        )
+        self.assertEqual(confirmed.status_code, 200, confirmed.data)
+        self.assertEqual(confirmed.data["responsesReset"], 4)
+        # Everyone is back on the starting schedule, so the next change asks nothing more.
+        again = self.edit(
+            event,
+            {"expectedVersion": confirmed.data["event"]["version"], "days": [1, 2]},
+        )
+        self.assertEqual(again.status_code, 200, again.data)
+        self.assertEqual(again.data["responsesReset"], 4)
+
+    def test_a_busy_start_counts_paint_against_the_busy_schedule(self):
+        self.authenticate()
+        event = self.event(code="RESETBSY", starting_availability="busy")
+        for email, name, inperson, virtual in (
+            ("quiet@example.com", "Quiet", [0, 0], [0, 0]),
+            ("marked@example.com", "Marked", [0, 1], [0, 0]),
+        ):
+            Participant.objects.create(
+                event=event,
+                member=create_member(email, name, "Person"),
+                participant_name=name,
+                availability_inperson=inperson,
+                availability_virtual=virtual,
+            )
+
+        asked = self.edit(event, {"expectedVersion": event.version, "endTime": "10:30"})
+        self.assertEqual(asked.status_code, 409)
+        self.assertEqual(asked.data["participantCount"], 1)
+
     def test_flipping_the_starting_schedule_reseeds_only_untouched_participants(self):
         self.authenticate()
         event = self.event(code="STARTFLP")

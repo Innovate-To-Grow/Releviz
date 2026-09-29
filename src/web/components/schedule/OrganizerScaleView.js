@@ -431,14 +431,14 @@ export default function OrganizerScaleView() {
     [event],
   );
 
-  // Sends the organizer to the Overview and opens its inline editor, for the
-  // notices elsewhere on the page that point at a setting (the deadline).
-  const handleEditEvent = useCallback(() => {
+  // Sends the organizer to the Overview and opens its inline editor on the
+  // deadline, for the notices elsewhere on the page that point at it.
+  const handleEditDeadline = useCallback(() => {
     document.getElementById("organizer-overview")?.scrollIntoView({
       behavior: "auto",
       block: "start",
     });
-    overviewRef.current?.edit();
+    overviewRef.current?.edit({ field: "deadline" });
   }, []);
 
   const invalidateResults = useCallback(() => {
@@ -488,7 +488,7 @@ export default function OrganizerScaleView() {
             getToken={getToken}
             setDeliveryRequest={setDeliveryRequest}
             onReactivated={() => setSelection(null)}
-            onEditEvent={handleEditEvent}
+            onEditDeadline={handleEditDeadline}
           />
         }
       />
@@ -574,7 +574,7 @@ export default function OrganizerScaleView() {
             getToken={getToken}
             onResultsInvalidated={invalidateResults}
             onDeliveryRequestChange={setDeliveryRequest}
-            onEditEvent={handleEditEvent}
+            onEditDeadline={handleEditDeadline}
           />
         </section>
       </div>

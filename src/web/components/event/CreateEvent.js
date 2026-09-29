@@ -142,6 +142,7 @@ function CreateEvent({
   operation = "create",
   presentation = "page",
   initialEvent = null,
+  focusRequest = null,
   onSaved,
   onCancel,
 }) {
@@ -224,7 +225,15 @@ function CreateEvent({
   const [resetParticipantCount, setResetParticipantCount] = useState(0);
   const [resetConfirmed, setResetConfirmed] = useState(false);
   const [conflictEvent, setConflictEvent] = useState(null);
-  const [advancedOpen, setAdvancedOpen] = useState(editing && !inline);
+  const [advancedOpen, setAdvancedOpen] = useState(
+    (editing && !inline) || focusRequest?.field === "deadline",
+  );
+  const [seenFocusRequest, setSeenFocusRequest] = useState(focusRequest);
+  if (focusRequest !== seenFocusRequest) {
+    // The deadline sits under Advanced options: a new request for it opens them.
+    setSeenFocusRequest(focusRequest);
+    if (focusRequest?.field === "deadline") setAdvancedOpen(true);
+  }
   const timezoneOptions = useMemo(
     () => getTimezoneOptions(eventTimezone),
     [eventTimezone],
@@ -312,6 +321,22 @@ function CreateEvent({
     initialEvent,
     inline,
   ]);
+
+  useEffect(() => {
+    if (focusRequest?.field !== "deadline") return;
+    const input = document.getElementById("response-deadline");
+    if (!input) return;
+    if (typeof input.scrollIntoView === "function") {
+      input.scrollIntoView({ behavior: "auto", block: "center" });
+    }
+    input.focus();
+  }, [focusRequest]);
+
+  useEffect(() => {
+    // Saving disables its own button until the reset is confirmed, so the
+    // keyboard lands on the confirmation instead of being dropped.
+    if (resetRequired) document.getElementById("reset-confirmed")?.focus();
+  }, [resetRequired]);
 
   const clearFieldError = (fieldName) => {
     setFieldErrors((current) => {
@@ -467,8 +492,11 @@ function CreateEvent({
       }
     } catch (err) {
       if (err.requiresResponseReset) {
+        // Not a failure and not a stale version: the confirmation below says
+        // what saving again will do.
         setResetRequired(true);
         setResetParticipantCount(err.participantCount || 0);
+        return;
       }
       if (err.event) setConflictEvent(err.event);
       setError(
@@ -1021,7 +1049,15 @@ function CreateEvent({
               </p>
 
               <div className="form-row-2">
-                <FormField id="response-deadline" label="Response Deadline">
+                <FormField
+                  id="response-deadline"
+                  label="Response Deadline"
+                  help={
+                    eventTimezone.trim()
+                      ? `Uses the event timezone (${eventTimezone.trim()}).`
+                      : null
+                  }
+                >
                   <input
                     className="form-control"
                     aria-label="Response Deadline"
