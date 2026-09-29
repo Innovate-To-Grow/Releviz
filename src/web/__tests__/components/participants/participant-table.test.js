@@ -153,6 +153,42 @@ describe("ParticipantTable", () => {
     expect(screen.getAllByRole("columnheader")).toHaveLength(5);
   });
 
+  test.each([
+    ["with the selection column", {}],
+    ["without the selection column", { selectable: false }],
+  ])("every table part has an explicit role %s", (_label, props) => {
+    renderTable({
+      selectedIds: new Set(["1", "2", "3"]),
+      total: 12,
+      conflicts: { 2: { message: "Person 2 changed elsewhere." } },
+      ...props,
+    });
+    const table = screen.getByRole("table");
+    const parts = [
+      table,
+      ...table.querySelectorAll("thead, tbody, tr, th, td"),
+    ];
+    const expected = (part) =>
+      ({
+        TABLE: "table",
+        THEAD: "rowgroup",
+        TBODY: "rowgroup",
+        TR: "row",
+        TD: "cell",
+      })[part.tagName] ??
+      (part.closest("thead") ? "columnheader" : "rowheader");
+    expect(
+      parts
+        .filter((part) => part.getAttribute("role") !== expected(part))
+        .map((part) => part.outerHTML.slice(0, 60)),
+    ).toEqual([]);
+    expect(table.querySelectorAll("tbody th")).toHaveLength(3);
+    expect(table.querySelectorAll(".participants-table__helper")).toHaveLength(
+      1,
+    );
+    expect(table.querySelectorAll(".participants-row__notice")).toHaveLength(1);
+  });
+
   test("disables page selection when read-only or empty", () => {
     const { unmount } = render(
       <ParticipantTable participants={people} readOnly />,

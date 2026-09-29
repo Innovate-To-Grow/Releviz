@@ -256,6 +256,28 @@ describe("ParticipantRow", () => {
     ).toHaveAttribute("colspan", "6");
   });
 
+  test.each([
+    ["with the selection column", {}, 5],
+    ["without the selection column", { selectable: false }, 4],
+  ])("every row part has an explicit role %s", (_label, props, cellsInRow) => {
+    renderRow(person(), {
+      conflict: { message: "Changed elsewhere." },
+      ...props,
+    });
+    const [personRow, noticeRow] = screen.getAllByRole("row");
+    expect(personRow).toHaveAttribute("role", "row");
+    expect(noticeRow).toHaveAttribute("role", "row");
+    expect(personRow.querySelectorAll('td[role="cell"]')).toHaveLength(
+      cellsInRow,
+    );
+    expect(personRow.querySelectorAll("td:not([role])")).toHaveLength(0);
+    expect(within(personRow).getByRole("rowheader")).toHaveAttribute(
+      "role",
+      "rowheader",
+    );
+    expect(noticeRow.querySelector("td")).toHaveAttribute("role", "cell");
+  });
+
   test("works without any handlers", async () => {
     const user = userEvent.setup();
     render(

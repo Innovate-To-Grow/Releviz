@@ -76,12 +76,15 @@ export default function ParticipantRow({
 
   return (
     <>
+      {/* Roles are explicit because the narrow-screen layout changes the
+          display of table parts, and some browsers then drop the semantics. */}
       <tr
+        role="row"
         className={`participants-row${selected ? " participants-row--selected" : ""}`}
         data-roster-participant-id={p.id}
       >
         {selectable && (
-          <td className="participants-table__select">
+          <td role="cell" className="participants-table__select">
             <input
               className="form-check-input"
               type="checkbox"
@@ -92,7 +95,7 @@ export default function ParticipantRow({
             />
           </td>
         )}
-        <th scope="row" className="participants-table__name">
+        <th scope="row" role="rowheader" className="participants-table__name">
           <button
             type="button"
             className="participants-row__name"
@@ -122,7 +125,7 @@ export default function ParticipantRow({
             </span>
           )}
         </th>
-        <td className="participants-table__groups">
+        <td role="cell" className="participants-table__groups">
           {groups || (
             <>
               <span className="text-secondary" aria-hidden="true">
@@ -132,15 +135,15 @@ export default function ParticipantRow({
             </>
           )}
         </td>
-        <td className="participants-table__response">
+        <td role="cell" className="participants-table__response">
           <StatusBadge status={response.status}>{response.label}</StatusBadge>
         </td>
-        <td className="participants-table__invitation">
+        <td role="cell" className="participants-table__invitation">
           <StatusBadge status={invitation.status} dot={!invitation.plain}>
             {invitation.label}
           </StatusBadge>
         </td>
-        <td className="participants-table__actions">
+        <td role="cell" className="participants-table__actions">
           <div className="participants-row__actions">
             {answersThemselves ? (
               <span
@@ -167,8 +170,8 @@ export default function ParticipantRow({
         </td>
       </tr>
       {conflict && (
-        <tr className="participants-row__notice">
-          <td colSpan={columns}>
+        <tr role="row" className="participants-row__notice">
+          <td role="cell" colSpan={columns}>
             <Alert
               variant="warning"
               role="status"

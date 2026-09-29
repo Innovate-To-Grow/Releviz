@@ -1217,6 +1217,8 @@ code {
   flex-wrap: nowrap;
   overflow-x: auto;
   gap: 0.25rem;
+  padding: 0.25rem;
+  margin: -0.25rem;
   -webkit-overflow-scrolling: touch;
 }
 
@@ -1227,6 +1229,36 @@ code {
   white-space: nowrap;
   font-weight: 500;
   padding: 0.5rem 0.75rem;
+}
+
+/* On a phone the three labels alone fill the row, so drop the icons, tighten
+   the padding, and let the links share the row; scrolling is the fallback. */
+@media (max-width: 575.98px) {
+  .section-nav .nav {
+    gap: 0.125rem;
+  }
+
+  .section-nav .nav-item {
+    flex: 1 1 auto;
+  }
+
+  .section-nav .nav-link {
+    justify-content: center;
+    width: 100%;
+    padding-left: 0.375rem;
+    padding-right: 0.375rem;
+  }
+
+  .section-nav .icon-inline {
+    display: none;
+  }
+}
+
+@media (max-width: 359.98px) {
+  .section-nav .nav-link {
+    font-size: 0.9375rem;
+    min-height: 2.5rem;
+  }
 }
 
 /* Key/value stats row */
