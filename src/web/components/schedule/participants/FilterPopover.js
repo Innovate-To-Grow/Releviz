@@ -3,21 +3,17 @@
 import AppButton from "@/components/ui/AppButton";
 import { FilterIcon } from "@/components/ui/icons";
 import { usePopover } from "@/components/schedule/participants/MenuButton";
+import {
+  RESPONSE_FILTER_OPTIONS,
+  responseFilterKey,
+  responseFilterParams,
+} from "@/lib/participants";
 
-// Radio values are the API's query parameters as strings.
-const RESPONSE_OPTIONS = [
-  ["", "Any"],
-  ["true", "Submitted"],
-  ["false", "Not submitted"],
-];
-const INVITATION_OPTIONS = [
-  ["", "Any"],
-  ["not_sent", "Not sent"],
-  ["queued", "Sending"],
-  ["failed", "Failed"],
-  ["sent", "Sent"],
-  ["accepted", "Accepted"],
-];
+const RESPONSE_OPTIONS = RESPONSE_FILTER_OPTIONS.map(({ key, label }) => [
+  key,
+  label,
+]);
+// Radio values are the API's `included` parameter as strings.
 const RESULTS_OPTIONS = [
   ["", "Any"],
   ["true", "Counted"],
@@ -52,10 +48,11 @@ function RadioGroup({ legend, name, options, value, onChange }) {
 }
 
 /**
- * `Filter` button with a count of active filters and a popover of three
- * radio groups (Response, Invitation, Results). `value` holds the API
- * strings: submitted/included "" | "true" | "false", invitationStatus "" or
- * a delivery state.
+ * `Filter` button with a count of active filters and a popover of two radio
+ * groups (Response, Results). `value` holds the API strings: submitted and
+ * included "" | "true" | "false", invitationStatus "" or a delivery state.
+ * The Response group is one choice that sets submitted and invitationStatus
+ * together.
  */
 export function FilterButton({ value = {}, onChange, disabled = false }) {
   const { open, setOpen, rootRef, triggerRef, id, handleRootKeyDown } =
@@ -65,10 +62,9 @@ export function FilterButton({ value = {}, onChange, disabled = false }) {
     invitationStatus: value.invitationStatus ?? "",
     included: value.included ?? "",
   };
-  const activeCount = Object.values(current).filter(
-    (item) => item !== "",
-  ).length;
-  const set = (key, next) => onChange({ ...current, [key]: next });
+  const responseKey = responseFilterKey(current);
+  const activeCount =
+    (responseKey !== "" ? 1 : 0) + (current.included !== "" ? 1 : 0);
 
   return (
     <div
@@ -100,24 +96,19 @@ export function FilterButton({ value = {}, onChange, disabled = false }) {
         >
           <RadioGroup
             legend="Response"
-            name={`${id}-submitted`}
+            name={`${id}-response`}
             options={RESPONSE_OPTIONS}
-            value={current.submitted}
-            onChange={(next) => set("submitted", next)}
-          />
-          <RadioGroup
-            legend="Invitation"
-            name={`${id}-invitation`}
-            options={INVITATION_OPTIONS}
-            value={current.invitationStatus}
-            onChange={(next) => set("invitationStatus", next)}
+            value={responseKey}
+            onChange={(next) =>
+              onChange({ ...current, ...responseFilterParams(next) })
+            }
           />
           <RadioGroup
             legend="Results"
             name={`${id}-included`}
             options={RESULTS_OPTIONS}
             value={current.included}
-            onChange={(next) => set("included", next)}
+            onChange={(next) => onChange({ ...current, included: next })}
           />
         </div>
       )}

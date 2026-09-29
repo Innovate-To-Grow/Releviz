@@ -48,6 +48,25 @@ function participantRow(page, text) {
   return page.locator("tr.participants-row", { hasText: text });
 }
 
+// The row's one badge: submitted, or how far its invitation has got.
+function responseBadge(row) {
+  return row.locator(".participants-table__response");
+}
+
+// Picks an option in the Filter popover's single Response group, then closes
+// the popover so it cannot cover the list.
+async function chooseResponseFilter(page, label) {
+  await page
+    .locator("#organizer-roster")
+    .getByRole("button", { name: /^Filter/ })
+    .click();
+  await page
+    .getByRole("group", { name: "Response", exact: true })
+    .getByRole("radio", { name: label, exact: true })
+    .click();
+  await page.keyboard.press("Escape");
+}
+
 // Waits for a toast in the Participants section, then dismisses it so a
 // later toast with the same words is the only match. Toasts sit under an
 // open drawer or dialog, so the close is dispatched rather than clicked.
@@ -825,6 +844,9 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(eventDeliveryProgress.getByText("1 sent")).toBeVisible({
       timeout: LIVE_SYNC_TIMEOUT_MS,
     });
+    await expect(responseBadge(participantCard)).toHaveText("Invited", {
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
     const sentRoster = await apiJson(
       request,
       "GET",
@@ -929,6 +951,8 @@ test.describe("Releviz account and scheduling flow", () => {
         tempSessionCount: 1,
       }),
     );
+    // The organizer's row does not move on to Started for an opened link.
+    await expect(responseBadge(participantCard)).toHaveText("Invited");
 
     // Opening the same link again in the same browser lands on the schedule
     // again, still with no code, and keeps the session it has.
@@ -984,9 +1008,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(participantSummary(page)).toContainText("1 submitted", {
       timeout: 20_000,
     });
-    await expect(
-      participantCard.locator(".participants-table__response"),
-    ).toHaveText("Submitted");
+    await expect(responseBadge(participantCard)).toHaveText("Submitted");
     await expect
       .poll(() => currentResultsRevision(page), { timeout: 20_000 })
       .toBeGreaterThan(revisionBeforeResponse);
@@ -1318,7 +1340,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const addedCard = page.locator(
       `[data-roster-participant-id="${addedParticipant.id}"]`,
     );
-    await expect(addedCard.getByText("Not sent")).toBeVisible();
+    await expect(responseBadge(addedCard)).toHaveText("Not invited");
     const addedState = temporaryAccountState({
       code: eventCode,
       email: addedEmail,
@@ -1360,7 +1382,7 @@ test.describe("Releviz account and scheduling flow", () => {
     dispatchEmailJobs();
     // Delivery moves the invitation, which the live sync picks up as a
     // roster change.
-    await expect(addedCard.getByText("Sent", { exact: true })).toBeVisible({
+    await expect(responseBadge(addedCard)).toHaveText("Invited", {
       timeout: LIVE_SYNC_TIMEOUT_MS,
     });
     const rosterAfterSend = await apiJson(
@@ -1442,9 +1464,16 @@ test.describe("Releviz account and scheduling flow", () => {
       "No email · you enter their schedule",
     );
     await expect(managedRow).not.toContainText(organizerEmail);
+    // One Response column carries the whole person; there is no separate
+    // Invitation column, and nobody is invited here.
+    const rosterTable = page.locator("table.participants-table");
     await expect(
-      managedRow.locator(".participants-table__invitation"),
-    ).toHaveText("No email");
+      rosterTable.getByRole("columnheader", { name: "Response", exact: true }),
+    ).toHaveCount(1);
+    await expect(
+      rosterTable.getByRole("columnheader", { name: "Invitation" }),
+    ).toHaveCount(0);
+    await expect(responseBadge(managedRow)).toHaveText("Not submitted");
     await expect(
       managedRow.getByRole("button", { name: "Edit schedule" }),
     ).toBeVisible();
@@ -1503,6 +1532,7 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(dashboard.payload.participating).toEqual([]);
     const samRow = participantRow(page, "Sam No Email");
     await expect(samRow).toContainText("No email", { timeout: 20_000 });
+    await expect(responseBadge(samRow)).toHaveText("Not submitted");
     await expect(samRow.locator(".participants-table__groups")).toHaveText(
       "Every group",
     );
@@ -1540,9 +1570,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await addPerson(addPanel, participantName, participantEmail);
     const fullRow = participantRow(page, participantName);
     await expect(fullRow).toContainText(participantEmail);
-    await expect(fullRow.locator(".participants-table__invitation")).toHaveText(
-      "Not sent",
-    );
+    await expect(responseBadge(fullRow)).toHaveText("Not invited");
     // The result's Open link goes to the person panel, which says how the
     // row is answered and opens the schedule editor from there.
     await addPanel.getByRole("button", { name: "Open", exact: true }).click();
@@ -1573,8 +1601,10 @@ test.describe("Releviz account and scheduling flow", () => {
       organizerDrawer.getByText("Schedule submitted."),
     ).toBeVisible();
 
-    // Entering the response is not an acceptance: the row stays Not sent
-    // and the organizer keeps the right to edit it.
+    // Entering the response is not an acceptance: the invitation stays
+    // not sent and the organizer keeps the right to edit it. The row itself
+    // reads Submitted, which outranks every invitation stage.
+    await expect(responseBadge(fullRow)).toHaveText("Submitted");
     const rosterAfterSubmit = await apiJson(
       request,
       "GET",
@@ -1748,9 +1778,9 @@ test.describe("Releviz account and scheduling flow", () => {
     const ownRow = participantRow(page, "Owen Organizer");
     await expect(ownRow).toContainText("Owen Organizer (you)");
     await expect(ownRow).toContainText("From your account");
-    await expect(ownRow.locator(".participants-table__invitation")).toHaveText(
-      "—",
-    );
+    await expect(responseBadge(ownRow)).toHaveText("Submitted", {
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
     await expect(
       ownRow.getByRole("button", { name: "Edit my schedule" }),
     ).toBeVisible();
@@ -1772,9 +1802,93 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(adaPanel).toHaveCount(0);
     const adaRow = participantRow(page, "Ada Typo");
     await expect(adaRow).toContainText(fixedEmail);
-    await expect(adaRow.locator(".participants-table__invitation")).toHaveText(
-      "Not sent",
+    await expect(responseBadge(adaRow)).toHaveText("Not invited");
+
+    // The Filter popover has one Response group, and choosing an option
+    // leaves one Response chip. Ben's queued invitation counts as not sent
+    // until it is delivered, so wait for it to land first.
+    dispatchEmailJobs();
+    const benRow = participantRow(page, "Ben Leaving");
+    await expect(responseBadge(benRow)).toHaveText("Invited", {
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
+    const filterButton = page
+      .locator("#organizer-roster")
+      .getByRole("button", { name: /^Filter/ });
+    await filterButton.click();
+    const responseGroup = page.getByRole("group", {
+      name: "Response",
+      exact: true,
+    });
+    await expect(responseGroup.locator("label")).toHaveText([
+      "Any",
+      "Submitted",
+      "Not submitted",
+      "Not invited yet",
+      "Sending invite",
+      "Invite failed",
+      "Invited",
+      "Started",
+    ]);
+    await expect(
+      page.getByRole("group", { name: "Invitation", exact: true }),
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    await chooseResponseFilter(page, "Not invited yet");
+    await expect(participantSummary(page)).toContainText(
+      "Showing 1 of 3 people",
     );
+    await expect(adaRow).toBeVisible();
+    await expect(benRow).toHaveCount(0);
+    await expect(ownRow).toHaveCount(0);
+    await expect(
+      page.getByRole("button", {
+        name: "Remove filter Response: Not invited yet",
+      }),
+    ).toBeVisible();
+    // The pair of API filters behind the option is one active filter.
+    await expect(filterButton).toContainText("1 active");
+
+    await chooseResponseFilter(page, "Invited");
+    await expect(participantSummary(page)).toContainText(
+      "Showing 1 of 3 people",
+    );
+    await expect(benRow).toBeVisible();
+    await expect(adaRow).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: /^Remove filter Response:/ }),
+    ).toHaveCount(1);
+    await expect(
+      page.getByRole("button", { name: "Remove filter Response: Invited" }),
+    ).toBeVisible();
+
+    await chooseResponseFilter(page, "Submitted");
+    await expect(participantSummary(page)).toContainText(
+      "Showing 1 of 3 people",
+    );
+    await expect(ownRow).toBeVisible();
+    await expect(benRow).toHaveCount(0);
+
+    // Not submitted is everyone who has not submitted, invited or not.
+    await chooseResponseFilter(page, "Not submitted");
+    await expect(participantSummary(page)).toContainText(
+      "Showing 2 of 3 people",
+    );
+    await expect(adaRow).toBeVisible();
+    await expect(benRow).toBeVisible();
+    await expect(ownRow).toHaveCount(0);
+
+    // The chip clears both API filters behind the option at once.
+    await page
+      .getByRole("button", { name: "Remove filter Response: Not submitted" })
+      .click();
+    await expect(participantSummary(page)).toContainText("3 people");
+    await expect(participantSummary(page)).not.toContainText("Showing");
+    await expect(
+      page.getByRole("button", { name: /^Remove filter Response:/ }),
+    ).toHaveCount(0);
+    await expect(ownRow).toBeVisible();
 
     // A group is created from the Group filter, and one selected person is
     // put in it through the selection bar's picker.
@@ -2618,9 +2732,11 @@ test.describe("Releviz account and scheduling flow", () => {
     const registeredParticipantCard = participantRow(page, participantEmail);
     const manualParticipantCard = participantRow(page, manualEmail);
     await expect(registeredParticipantCard).toContainText(participantEmail);
-    await expect(
-      registeredParticipantCard.locator(".participants-table__response"),
-    ).toHaveText("Submitted");
+    await expect(responseBadge(registeredParticipantCard)).toHaveText(
+      "Submitted",
+    );
+    // Manual was emailed and reminded but has not answered.
+    await expect(responseBadge(manualParticipantCard)).toHaveText("Invited");
 
     // A weight for everyone in E2E Group: filter to the group, select the
     // page, and set it from the selection bar.

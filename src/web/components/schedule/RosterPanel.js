@@ -1514,6 +1514,8 @@ const RosterPanel = forwardRef(function RosterPanel(
 
   const removeChip = (key) => {
     if (key === "search") clearSearch();
+    else if (key === "response")
+      applyFilters({ submitted: "", invitationStatus: "" });
     else applyFilters({ [key]: "" });
   };
 
@@ -1599,6 +1601,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       total={Number(pagination.total || 0)}
       conflicts={rowConflicts}
       readOnly={!mutable}
+      openLink={event.accessMode === "open_link"}
       onToggleSelect={toggleSelect}
       onTogglePage={togglePage}
       onSelectAllMatching={() => setSelectAllMode(true)}

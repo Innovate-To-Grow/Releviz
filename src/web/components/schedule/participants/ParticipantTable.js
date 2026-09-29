@@ -19,6 +19,7 @@ export default function ParticipantTable({
   total = participants.length,
   conflicts = {},
   readOnly = false,
+  openLink = false,
   onToggleSelect,
   onTogglePage,
   onSelectAllMatching,
@@ -111,13 +112,6 @@ export default function ParticipantTable({
               <th
                 scope="col"
                 role="columnheader"
-                className="participants-table__invitation"
-              >
-                Invitation
-              </th>
-              <th
-                scope="col"
-                role="columnheader"
                 className="participants-table__actions"
               >
                 <span className="visually-hidden">Actions</span>
@@ -141,6 +135,7 @@ export default function ParticipantTable({
                 selected={selectedIds.has(participant.id)}
                 selectable={selectable}
                 readOnly={readOnly}
+                openLink={openLink}
                 conflict={conflicts[participant.id] ?? null}
                 onToggleSelect={onToggleSelect}
                 onOpen={onOpen}

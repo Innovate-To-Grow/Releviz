@@ -2,6 +2,7 @@
 
 /* Toolbar: search, group filter and filter button on one wrapping line */
 .participants-toolbar {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -181,6 +182,18 @@
 .participants-popover__menu.dropdown-menu-end {
   right: 0;
   left: auto;
+}
+
+/* A wrapped toolbar can leave the Filter button at the left edge, where a
+   menu right-aligned to the button would open off screen. Align it to the
+   toolbar's right edge instead; on one line the two edges coincide. */
+.participants-toolbar .participants-popover:has(> .dropdown-menu-end) {
+  position: static;
+}
+
+.participants-toolbar .participants-popover__menu.dropdown-menu-end {
+  top: auto;
+  margin-top: 0.25rem;
 }
 
 .participants-popover__group {
@@ -450,12 +463,12 @@
 }
 
 /* Narrow screens: each person becomes a wrapping row ---------------------
-   Checkbox and name share the first line; the response and invitation
-   badges and the actions follow, wrapping as room allows, so nothing scrolls
-   sideways. The table parts drop their table display for this, so the markup
-   carries explicit roles. The Groups column is clipped away and its text
-   repeats under the name. The columns need about 800px, so the table layout
-   only returns from the Bootstrap lg breakpoint up. */
+   Checkbox and name share the first line; the response badge and the
+   actions follow, wrapping as room allows, so nothing scrolls sideways. The
+   table parts drop their table display for this, so the markup carries
+   explicit roles. The Groups column is clipped away and its text repeats
+   under the name. The columns need about 800px, so the table layout only
+   returns from the Bootstrap lg breakpoint up. */
 
 @media (max-width: 991.98px) {
   .participants-table,
@@ -532,7 +545,6 @@
   }
 
   .participants-table .participants-row > .participants-table__response,
-  .participants-table .participants-row > .participants-table__invitation,
   .participants-table .participants-row > .participants-table__actions {
     order: 2;
     padding: 0.25rem 0.25rem 0.5rem;
@@ -586,17 +598,6 @@
     right: 0.5rem;
     bottom: 5rem;
     width: calc(100vw - 1rem);
-  }
-}
-
-/* Both badges do not fit beside the indent on the narrowest phones. */
-@media (max-width: 359.98px) {
-  .participants-table
-    .participants-row
-    > .participants-table__select
-    ~ .participants-table__response {
-    margin-left: 0;
-    padding-left: 0.75rem;
   }
 }
 

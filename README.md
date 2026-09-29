@@ -12,10 +12,10 @@ up to 1,000 people and 1,000 time slots.
 1. **Create an event.** Sign in, then set the meeting type, the daily time range and slot size, the
    meeting length, the days, and who can join. Block out any times that are never available.
 2. **Add participants.** Enter people one at a time in a side panel or import `.xlsx`/`.csv`
-   through a four-step sheet, filter the list by group, response, or invitation state, change
-   many people at once from the selection bar, and invite everyone not invited yet or send
-   reminders from the **Email** menu when you are ready. Every email is shown first exactly as
-   recipients will get it, and goes out only after a second confirmation.
+   through a four-step sheet, filter the list by group or response (including who has not been
+   invited yet), change many people at once from the selection bar, and invite everyone not invited
+   yet or send reminders from the **Email** menu when you are ready. Every email is shown first
+   exactly as recipients will get it, and goes out only after a second confirmation.
 3. **Collect availability.** Each participant paints Busy / If needed / Available on a schedule
    grid. The organizer can also enter a schedule for anyone who has not responded themselves.
 4. **Pick a time.** The organizer dashboard ranks candidate windows by weighted availability, lets

@@ -77,7 +77,11 @@ describe("ParticipantRow", () => {
     const cells = within(row()).getAllByRole("cell");
     expect(cells[1]).toHaveTextContent("Design");
     expect(screen.getByText("Submitted")).toHaveClass("status-badge");
-    expect(screen.getByText("Not sent")).toHaveClass("status-badge");
+    expect(row().querySelectorAll(".status-badge")).toHaveLength(1);
+    expect(cells[2]).toHaveClass("participants-table__response");
+    expect(cells[2]).toContainElement(screen.getByText("Submitted"));
+    expect(row().querySelector(".participants-table__invitation")).toBeNull();
+    expect(cells).toHaveLength(4);
 
     await user.click(screen.getByRole("button", { name: "Edit schedule" }));
     expect(handlers.onEditSchedule).toHaveBeenCalledWith(p);
@@ -124,8 +128,10 @@ describe("ParticipantRow", () => {
     expect(
       screen.getByRole("button", { name: /^Ada Lovelace/ }),
     ).toHaveTextContent("No email · you enter their schedule");
-    const badge = screen.getByText("No email", { selector: ".status-badge" });
-    expect(badge.querySelector(".status-badge__dot")).toBeNull();
+    const badge = screen.getByText("Not submitted");
+    expect(badge).toHaveClass("status-badge", "bg-secondary-subtle");
+    expect(badge.querySelector(".status-badge__dot")).not.toBeNull();
+    expect(row().querySelectorAll(".status-badge")).toHaveLength(1);
     expect(screen.getByText("No group")).toHaveClass("visually-hidden");
     await openMenu(user);
     expect(screen.queryByRole("menuitem", { name: /invitation/ })).toBeNull();
@@ -142,7 +148,8 @@ describe("ParticipantRow", () => {
     expect(within(row()).getAllByRole("cell")[1]).toHaveTextContent(
       "Every group",
     );
-    expect(screen.getByText("—")).toHaveClass("status-badge");
+    expect(screen.getByText("Not submitted")).toHaveClass("status-badge");
+    expect(row().querySelectorAll(".status-badge")).toHaveLength(1);
     await user.click(screen.getByRole("button", { name: "Edit my schedule" }));
     expect(handlers.onEditSchedule).toHaveBeenCalled();
     await openMenu(user);
@@ -173,7 +180,7 @@ describe("ParticipantRow", () => {
     expect(screen.getByText("Left out of results")).toHaveClass(
       "participants-tag",
     );
-    expect(screen.getByText("Accepted")).toHaveClass("status-badge");
+    expect(screen.getByText("Started")).toHaveClass("status-badge");
     await openMenu(user);
     expect(
       screen.getByRole("menuitem", { name: "Resend invitation" }),
@@ -193,7 +200,7 @@ describe("ParticipantRow", () => {
         </tbody>
       </table>,
     );
-    expect(screen.getByText("Failed")).toHaveClass("bg-danger-subtle");
+    expect(screen.getByText("Invite failed")).toHaveClass("bg-danger-subtle");
     unmount();
     render(
       <table>
@@ -207,7 +214,32 @@ describe("ParticipantRow", () => {
         </tbody>
       </table>,
     );
-    expect(screen.getByText("Sending…")).toHaveClass("bg-info-subtle");
+    expect(screen.getByText("Sending invite…")).toHaveClass("bg-info-subtle");
+  });
+
+  test.each([
+    ["Submitted", { submitted: true, invitationStatus: "accepted" }, "success"],
+    ["Not submitted", { organizerManaged: true }, "secondary"],
+    ["Invite failed", { invitationDelivery: "failed" }, "danger"],
+    ["Sending invite…", { invitationDelivery: "queued" }, "info"],
+    ["Started", { invitationStatus: "accepted" }, "info"],
+    ["Invited", { invitationStatus: "sent" }, "info"],
+    ["Not invited", { invitationStatus: "not_sent" }, "secondary"],
+  ])(
+    "the %s badge is one dotted badge in the %s tone",
+    (label, overrides, tone) => {
+      renderRow(person(overrides));
+      const badges = row().querySelectorAll(".status-badge");
+      expect(badges).toHaveLength(1);
+      expect(badges[0]).toHaveTextContent(label);
+      expect(badges[0]).toHaveClass(`bg-${tone}-subtle`);
+      expect(badges[0].querySelector(".status-badge__dot")).not.toBeNull();
+    },
+  );
+
+  test("Started does not look like Submitted", () => {
+    renderRow(person({ invitationStatus: "accepted" }));
+    expect(screen.getByText("Started")).not.toHaveClass("bg-success-subtle");
   });
 
   test("read-only rows keep the details but disable every change", async () => {
@@ -239,7 +271,7 @@ describe("ParticipantRow", () => {
     const rows = screen.getAllByRole("row");
     expect(rows).toHaveLength(2);
     expect(rows[1]).toHaveClass("participants-row__notice");
-    expect(within(rows[1]).getByRole("cell")).toHaveAttribute("colspan", "5");
+    expect(within(rows[1]).getByRole("cell")).toHaveAttribute("colspan", "4");
     expect(rows[1]).toHaveTextContent(
       "Ada Lovelace was changed in another session.",
     );
@@ -249,16 +281,16 @@ describe("ParticipantRow", () => {
     expect(handlers.onDismissConflict).toHaveBeenCalledWith(p);
   });
 
-  test("a conflict row with the select column spans six cells", () => {
+  test("a conflict row with the select column spans five cells", () => {
     renderRow(person(), { conflict: { message: "Changed elsewhere." } });
     expect(
       within(screen.getAllByRole("row")[1]).getByRole("cell"),
-    ).toHaveAttribute("colspan", "6");
+    ).toHaveAttribute("colspan", "5");
   });
 
   test.each([
-    ["with the selection column", {}, 5],
-    ["without the selection column", { selectable: false }, 4],
+    ["with the selection column", {}, 4],
+    ["without the selection column", { selectable: false }, 3],
   ])("every row part has an explicit role %s", (_label, props, cellsInRow) => {
     renderRow(person(), {
       conflict: { message: "Changed elsewhere." },

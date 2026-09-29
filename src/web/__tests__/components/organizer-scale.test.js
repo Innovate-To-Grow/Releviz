@@ -1293,7 +1293,7 @@ describe("scaled organizer workspace", () => {
     // The row never shows the organizer's own address as theirs.
     expect(row).not.toHaveTextContent("organizer@example.com");
     expect(row).toHaveTextContent("No email · you enter their schedule");
-    expect(within(row).getByText("No email")).toBeInTheDocument();
+    expect(within(row).getByText("Not submitted")).toHaveClass("status-badge");
     expect(
       within(row).getByRole("button", { name: "Edit schedule" }),
     ).toBeEnabled();
@@ -1580,11 +1580,14 @@ describe("scaled organizer workspace", () => {
     const table = within(rosterSection).getByRole("table", {
       name: "Participants",
     });
-    ["Name", "Groups", "Response", "Invitation"].forEach((column) => {
+    ["Name", "Groups", "Response"].forEach((column) => {
       expect(
         within(table).getByRole("columnheader", { name: column }),
       ).toBeInTheDocument();
     });
+    expect(
+      within(table).queryByRole("columnheader", { name: "Invitation" }),
+    ).toBeNull();
     const row = within(table)
       .getByRole("rowheader", { name: /Ada Faculty/ })
       .closest("tr");
@@ -1909,7 +1912,9 @@ describe("scaled organizer workspace", () => {
       ),
     );
     expect(
-      screen.getByRole("button", { name: "Remove filter Invitation: Failed" }),
+      screen.getByRole("button", {
+        name: "Remove filter Response: Invite failed",
+      }),
     ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Participants" })).toHaveFocus();
   });
@@ -2233,7 +2238,7 @@ describe("scaled organizer workspace", () => {
       name: "Replace the list with 1 person",
     });
     expect(screen.getByRole("note")).toHaveTextContent(
-      "Rebuilding clears schedules, invitations, and pending delivery. Everyone starts as Not sent and gets no reminders until you send invitations, which you can review once the import is done.",
+      "Rebuilding clears schedules, invitations, and pending delivery. Everyone starts as Not invited and gets no reminders until you send invitations, which you can review once the import is done.",
     );
     expect(rebuildButton).toBeDisabled();
     await userEvent.type(

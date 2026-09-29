@@ -48,20 +48,24 @@ reactivate the event first.
 ## Participants
 
 The **Participants** section of the organizer workspace is one list: each person on one row with
-their name, a contact line, their groups, a **Response** badge (**Submitted** or **Not
-submitted**), and an **Invitation** badge. The line under the heading counts people, submitted
-and not submitted responses, and groups. Adding people and sending invitations are separate
-steps, and nobody is emailed until you have seen the email and confirmed it: **Add and send
-invitation**, **Review and send invitations** at the end of an import, **Send invitation…** (in
-the selection bar or a row's **⋯** menu), and the **Email** menu all open the email review (see
+their name, a contact line, their groups, and one **Response** badge that says where they are, from
+**Not invited** through **Invited** and **Started** to **Submitted** (all seven are listed under
+[Send invitations](#send-invitations)). The line under the heading counts people, submitted and
+not submitted responses, and groups. Adding people and sending invitations are separate steps, and
+nobody is emailed until you have seen the email and confirmed it: **Add and send invitation**,
+**Review and send invitations** at the end of an import, **Send invitation…** (in the selection bar
+or a row's **⋯** menu), and the **Email** menu all open the email review (see
 [Review before sending](#review-before-sending)). In an invite-only event a banner above the list
 says how many people haven't been invited yet (see [Send invitations](#send-invitations)). Closed,
 finalized, and archived events show the list read-only until they are reactivated.
 
 Above the list, the search box matches names, emails, phones, and groups; **Group:** narrows the
-list to one group (or **No group**); and **Filter** narrows it by response, invitation state, or
-whether the person counts in the results. Active filters show as chips with **Clear all**, and
-the counts line then reads **Showing n of N people**.
+list to one group (or **No group**); and **Filter** narrows it by **Response** (one choice from
+**Any**, **Submitted**, **Not submitted**, **Not invited yet**, **Sending invite**, **Invite
+failed**, **Invited**, or **Started**; see [Send invitations](#send-invitations)) and by
+**Results** (**Any**, **Counted**, or **Left out**, for whether the person counts in the
+results). Active filters show as chips such as **Response: Invited**, with **Clear all**, and the
+counts line then reads **Showing n of N people**.
 
 Once an active event's response deadline has passed, a banner says so: people can't be added,
 invited, or changed, and your own schedule is locked, but you can still enter schedules for the
@@ -101,9 +105,10 @@ can use another of your verified addresses).
 These people never sign in or receive links, no invitation, reminder, or final notification is
 sent for them, and you enter their availability with **Edit schedule** (the add panel offers
 **Enter their schedule** straight away). Their row reads **No email · you enter their schedule**,
-their invitation badge reads **No email**, and the filing address is never shown. Several people
-can share your address and are told apart by name, so give different people distinct names (for
-example "John Smith (Team B)"). Entering an identical name again returns the existing row.
+its **Response** badge reads **Not submitted** until you submit their schedule (then **Submitted**),
+and the filing address is never shown. Several people can share your address and are told apart by
+name, so give different people distinct names (for example "John Smith (Team B)"). Entering an
+identical name again returns the existing row.
 
 Typing one of your own addresses into the add panel without ticking the box is refused, with a
 hint pointing to the checkbox or to **Add myself**.
@@ -120,9 +125,10 @@ or your own row), offers **Edit schedule**, and groups everything about the pers
   name. An email can be changed only until the person has opened their link (someone without a
   Releviz account), joined, or answered. The row then moves to the account behind the new address
   (or a new temporary identity) and keeps its name, groups, weight, and any schedule you entered;
-  it gets a fresh invitation marked **Not sent**, the old link stops working, and any queued email
-  to the old address is canceled. Adding an email to a person without one makes them an ordinary
-  person you can invite. After saving a new address, the notice offers **Send invitation** for it.
+  it gets a fresh invitation, so the row reads **Not invited**, the old link stops working, and
+  any queued email to the old address is canceled. Adding an email to a person without one makes
+  them an ordinary person you can invite. After saving a new address, the notice offers **Send
+  invitation** for it.
 - **Groups**: the person's group chips and **+ Add to group**, which opens the group picker.
 - **In the results**: whether their answers are counted (**Count Ada's answers**, for someone
   called Ada) and their **Weight** (0 to 1).
@@ -159,7 +165,7 @@ steps:
      groups are added to the person's existing groups; an import never removes anyone from a
      group.
    - Rebuilding destructively replaces the participant list, schedules, invitations, temporary
-     sessions, and pending deliveries, and everyone starts as **Not sent**. You must type the
+     sessions, and pending deliveries, and everyone starts as **Not invited**. You must type the
      event code to confirm.
 4. **Done**: what was imported, ending with **No invitations were sent.** When the import put
    people on the list who can be invited (those a merge added, or everyone a rebuild imported),
@@ -230,21 +236,39 @@ the first of them gets. **Send N invitations** on the confirmation step sends th
 returns as soon as the invitation jobs are queued: a notice counts what was queued and skipped,
 with **View progress**, and the delivery card at the top of the workspace follows the run.
 
-The **Invitation** badge on each row, which **Filter** also uses, shows:
+The **Response** badge on each row is the one place that says where a person is. It shows the
+first of these that applies, and the **Response** filter offers the same stages:
 
-- **Not sent**: no email yet. These people get no reminders until they are invited.
-- **Sending…**: the email is queued or being handed to the provider.
-- **Failed**: the provider refused the email for good. The delivery card's **Show failed** filters
-  the list to these people. **Retry failed recipients** opens the review with how many failed
-  emails will be sent again and the first of them exactly as it was written; failed emails the
-  event has moved past (to someone since removed, for a meeting time since changed, or for an
-  event no longer active) are canceled instead. **Send N again** on the confirmation step queues
-  them.
-- **Sent**: emailed, including people who have opened their link. Opening the link does not mark
-  the invitation accepted.
-- **Accepted**: the person joined, or saved or submitted their own response after the email.
-  Opening the link is not enough, and a response you enter for them does not count.
-- **No email**: a person without an email of their own; **—** marks your own row.
+- **Submitted**: their response is in, whether they submitted it or you did for them. This wins
+  over every invitation stage below, so someone you answered for before ever emailing them reads
+  **Submitted**: the notice above the list still counts them until they are invited, and their
+  person panel's **Invitation** section says **Not sent**.
+- **Not submitted**: a person who is never invited (someone without an email of their own, or your
+  own row) and has not submitted.
+- **Invite failed**: the provider refused their latest invitation email for good. The delivery
+  card's **Show failed** filters the list to these people. **Retry failed recipients** opens the
+  review with how many failed emails will be sent again and the first of them exactly as it was
+  written; failed emails the event has moved past (to someone since removed, for a meeting time
+  since changed, or for an event no longer active) are canceled instead. **Send N again** on the
+  confirmation step queues them.
+- **Sending invite…**: their latest invitation email is queued or being handed to the provider.
+- **Started**: after the email, the person joined or saved a response of their own, and it is not
+  submitted (a response they took back to a draft counts too). Opening the link is not enough, and
+  a response you enter for them does not count.
+- **Invited**: emailed, including people who have opened their link. Opening the link does not
+  make them **Started**.
+- **Not invited**: no email yet. These people get no reminders until they are invited. In an
+  open-link event nobody needs an invitation, so someone who joined with the event code and has
+  not submitted reads **Not submitted** instead.
+
+In the **Response** filter, **Not submitted** lists everyone who has not submitted, whatever their
+invitation stage. **Not invited yet**, **Invited**, and **Started** list the people at that stage
+who have not submitted. A person counts as not invited until their first email is delivered, so
+**Not invited yet** also lists people whose first email reads **Sending invite…** or **Invite
+failed**, and people who are never invited (or, in an open-link event, joined with the event code),
+whose badge reads **Not submitted**. **Sending invite** and **Invite failed** look only at the
+latest invitation email, so they can include someone whose badge already reads **Submitted**, and
+a resend that fails shows **Invite failed** over the earlier **Invited** or **Started**.
 
 The delivery card counts recipients that are sent, queued, or failed. It keeps itself current
 while recipients are queued (only while the tab is visible), stops once everyone is sent or
