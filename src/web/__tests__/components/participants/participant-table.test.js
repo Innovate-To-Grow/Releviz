@@ -63,7 +63,16 @@ describe("ParticipantTable", () => {
     expect(screen.getByText("Participants")).toHaveClass("visually-hidden");
     expect(
       screen.getAllByRole("columnheader").map((cell) => cell.textContent),
-    ).toEqual(["", "Name", "Groups", "Response", "Invitation", "Actions"]);
+    ).toEqual(["", "Name", "Groups", "Response", "Actions"]);
+    expect(
+      screen.queryByRole("columnheader", { name: "Invitation" }),
+    ).toBeNull();
+    expect(screen.getByRole("columnheader", { name: "Response" })).toHaveClass(
+      "participants-table__response",
+    );
+    expect(
+      document.querySelector(".participants-table__invitation"),
+    ).toBeNull();
     expect(
       screen.getAllByRole("checkbox", { name: /^Select Person/ }),
     ).toHaveLength(3);
@@ -150,7 +159,96 @@ describe("ParticipantTable", () => {
   test("drops the selection column when not selectable", () => {
     renderTable({ selectable: false });
     expect(screen.queryByRole("checkbox")).toBeNull();
-    expect(screen.getAllByRole("columnheader")).toHaveLength(5);
+    expect(screen.getAllByRole("columnheader")).toHaveLength(4);
+  });
+
+  test.each([
+    ["with", {}, 5],
+    ["without", { selectable: false }, 4],
+  ])(
+    "the helper and notice rows span every column %s the selection column",
+    (_label, props, columns) => {
+      renderTable({
+        selectedIds: new Set(["1", "2", "3"]),
+        total: 12,
+        conflicts: { 2: { message: "Person 2 changed elsewhere." } },
+        ...props,
+      });
+      expect(screen.getAllByRole("columnheader")).toHaveLength(columns);
+      const table = screen.getByRole("table");
+      const spans = [
+        ...table.querySelectorAll(
+          ".participants-table__helper td, .participants-row__notice td",
+        ),
+      ].map((cell) => cell.getAttribute("colspan"));
+      expect(spans).toEqual([String(columns), String(columns)]);
+    },
+  );
+
+  test("every person gets one response badge and there is no invitation column", () => {
+    renderTable({
+      participants: [
+        person(1),
+        person(2, { submitted: true }),
+        person(3, { invitationDelivery: "failed" }),
+      ],
+    });
+    const table = screen.getByRole("table");
+    expect(
+      table.querySelectorAll(".participants-table__response"),
+    ).toHaveLength(4);
+    expect(table.querySelector(".participants-table__invitation")).toBeNull();
+    const badges = [...table.querySelectorAll("tbody .status-badge")].map(
+      (badge) => badge.textContent,
+    );
+    expect(badges).toEqual(["Not invited", "Submitted", "Invite failed"]);
+  });
+
+  test("an open-link event reads never-invited people as not submitted", () => {
+    renderTable({
+      participants: [person(1), person(2, { invitationStatus: "sent" })],
+      openLink: true,
+    });
+    const badges = [
+      ...screen.getByRole("table").querySelectorAll("tbody .status-badge"),
+    ].map((badge) => badge.textContent);
+    expect(badges).toEqual(["Not submitted", "Invited"]);
+  });
+
+  test.each([
+    ["with the selection column", {}],
+    ["without the selection column", { selectable: false }],
+  ])("every table part has an explicit role %s", (_label, props) => {
+    renderTable({
+      selectedIds: new Set(["1", "2", "3"]),
+      total: 12,
+      conflicts: { 2: { message: "Person 2 changed elsewhere." } },
+      ...props,
+    });
+    const table = screen.getByRole("table");
+    const parts = [
+      table,
+      ...table.querySelectorAll("thead, tbody, tr, th, td"),
+    ];
+    const expected = (part) =>
+      ({
+        TABLE: "table",
+        THEAD: "rowgroup",
+        TBODY: "rowgroup",
+        TR: "row",
+        TD: "cell",
+      })[part.tagName] ??
+      (part.closest("thead") ? "columnheader" : "rowheader");
+    expect(
+      parts
+        .filter((part) => part.getAttribute("role") !== expected(part))
+        .map((part) => part.outerHTML.slice(0, 60)),
+    ).toEqual([]);
+    expect(table.querySelectorAll("tbody th")).toHaveLength(3);
+    expect(table.querySelectorAll(".participants-table__helper")).toHaveLength(
+      1,
+    );
+    expect(table.querySelectorAll(".participants-row__notice")).toHaveLength(1);
   });
 
   test("disables page selection when read-only or empty", () => {

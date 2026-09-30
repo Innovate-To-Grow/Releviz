@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import timedelta
+from math import ceil
 
 from django.utils import timezone
 
@@ -51,20 +52,34 @@ def assert_within_limit(*, member, purpose: str, target_email: str, now):
     import apps.authn.services.email.challenges as api
 
     cutoff = now - timedelta(hours=1)
-    sent_count = EmailAuthChallenge.objects.filter(
+    recent_challenges = EmailAuthChallenge.objects.filter(
         member=member,
         purpose=purpose,
         target_email__iexact=target_email,
-        created_at__gte=cutoff,
-    ).count()
+        created_at__gt=cutoff,
+    )
+    sent_count = recent_challenges.count()
     if sent_count >= api.MAX_CHALLENGES_PER_HOUR:
+        # Enough earlier sends must leave the rolling hour before another code
+        # can be requested, even if the cap has been reduced since those sends.
+        oldest_retained = recent_challenges.order_by("-created_at")[api.MAX_CHALLENGES_PER_HOUR - 1]
+        retry_after = max(
+            ceil((oldest_retained.created_at + timedelta(hours=1) - now).total_seconds()),
+            1,
+        )
         raise api.AuthChallengeThrottled(
-            "Too many verification codes requested. Please try again later."
+            "Too many verification codes requested. Please try again later.",
+            retry_after=retry_after,
         )
 
     latest = get_latest_pending(purpose=purpose, target_email=target_email)
     if latest and latest.last_sent_at and now - latest.last_sent_at < api.RESEND_COOLDOWN:
-        raise api.AuthChallengeThrottled("Please wait before requesting another code.")
+        raise api.AuthChallengeThrottled(
+            "Please wait before requesting another code.",
+            retry_after=max(
+                ceil((latest.last_sent_at + api.RESEND_COOLDOWN - now).total_seconds()), 1
+            ),
+        )
 
 
 def latest_pending_for_input(

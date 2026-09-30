@@ -1,6 +1,5 @@
 import uuid
 from datetime import timedelta
-from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core import mail
@@ -69,44 +68,22 @@ class TemporaryParticipantAccessTests(TestCase):
             format="json",
         )
 
-    def request_and_verify_temp_session(self):
+    def open_temp_session(self):
         invitation = EventInvitation.objects.get(
             event=self.event,
             email="managed@example.com",
         )
         client = APIClient()
-        verification_code = "123456"
-        with (
-            patch(
-                "apps.authn.services.email.challenges._random_code",
-                return_value=verification_code,
-            ),
-            patch(
-                "apps.authn.services.email.send_email.send_verification_email"
-            ) as send_verification,
-            self.captureOnCommitCallbacks(execute=True),
-        ):
-            requested = client.post(
-                "/events/temp-access/request-code",
-                {
-                    "code": self.event.code,
-                    "invitationToken": str(invitation.access_token),
-                },
-                format="json",
-            )
-        self.assertEqual(requested.status_code, 202)
-        send_verification.assert_called_once()
-        verified = client.post(
-            "/events/temp-access/verify",
+        opened = client.post(
+            "/events/temp-access/open",
             {
                 "code": self.event.code,
                 "invitationToken": str(invitation.access_token),
-                "verificationCode": verification_code,
             },
             format="json",
         )
-        self.assertEqual(verified.status_code, 200, verified.data)
-        return client, verified
+        self.assertEqual(opened.status_code, 200, opened.data)
+        return client, opened
 
     def test_managed_creation_reuses_global_identity_and_queues_one_invitation(self):
         created = self.create_managed()
@@ -345,7 +322,10 @@ class TemporaryParticipantAccessTests(TestCase):
         managed_job = EmailDeliveryJob.objects.filter(recipient="managed@example.com").first()
         dispatch_email_job(managed_job.pk)
         self.assertIn("/temp-access?code=TEMP123", mail.outbox[-1].body)
-        self.assertIn("six-digit code", mail.outbox[-1].body)
+        self.assertIn("Open the link to share your availability.", mail.outbox[-1].body)
+        self.assertIn("please do not forward it", mail.outbox[-1].body)
+        self.assertNotIn("six-digit", mail.outbox[-1].body)
+        self.assertNotIn("six-digit", mail.outbox[-1].attachments[0][1])
         self.assertIn("/temp-access?code=TEMP123", mail.outbox[-1].attachments[0][1])
 
         full = self.send_invitation("full@example.com")
@@ -400,18 +380,7 @@ class TemporaryParticipantAccessTests(TestCase):
         created = self.create_managed()
         participant_id = created.data["participant"]["id"]
         dispatch_email_job(EmailDeliveryJob.objects.get(recipient="managed@example.com").pk)
-        invalid = APIClient().post(
-            "/events/temp-access/request-code",
-            {"code": "UNKNOWN", "invitationToken": str(uuid.uuid4())},
-            format="json",
-        )
-        self.assertEqual(invalid.status_code, 202)
-        self.assertEqual(
-            invalid.data["message"],
-            "If this access link is valid, a verification code has been sent.",
-        )
-
-        temp_client, verified = self.request_and_verify_temp_session()
+        temp_client, verified = self.open_temp_session()
         self.assertEqual(verified.data["participant"]["id"], participant_id)
         self.assertEqual(verified.data["email"], "managed@example.com")
         cookie = verified.cookies["releviz_temp_event"]

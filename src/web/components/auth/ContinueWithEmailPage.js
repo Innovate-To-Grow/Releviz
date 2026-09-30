@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthContext";
+import useCodeResendCooldown from "@/components/auth/useCodeResendCooldown";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
@@ -87,6 +88,7 @@ export default function ContinueWithEmailPage({
     requiresProfileCompletion,
   } = useAuth();
   const redirectStarted = useRef(false);
+  const codeRequestPending = useRef(false);
   const [mode, setMode] = useState("code");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -97,6 +99,8 @@ export default function ContinueWithEmailPage({
   const [fieldError, setFieldError] = useState({});
   const [status, setStatus] = useState(initialStatus);
   const [loading, setLoading] = useState(false);
+  const recipient = (sentEmail || email).trim().toLowerCase();
+  const { secondsRemaining, startCooldown } = useCodeResendCooldown(recipient);
 
   useEffect(() => {
     if (authLoading || !user || redirectStarted.current) return;
@@ -116,6 +120,8 @@ export default function ContinueWithEmailPage({
   };
 
   const sendCode = async (address) => {
+    if (codeRequestPending.current || secondsRemaining > 0) return;
+    codeRequestPending.current = true;
     const eventDestination = new URL(next, "https://releviz.invalid");
     const eventCode =
       eventDestination.pathname === "/event"
@@ -130,20 +136,34 @@ export default function ContinueWithEmailPage({
           ? { source: "event_registration", event: eventCode }
           : { source: "login" }),
       });
+      startCooldown(address.toLowerCase(), response?.resend_after ?? 60);
       setInfoMessage(
         typeof response?.message === "string" ? response.message : "",
       );
       setSentEmail(address);
     } catch (err) {
+      if (err.status === 429) {
+        startCooldown(address.toLowerCase(), err.retryAfterSeconds ?? 60);
+        // A code from an earlier request may still be usable while resending
+        // is limited, including when this page was just reopened.
+        setSentEmail(address);
+      }
       setError(err.message || "Unable to send a verification code.");
     } finally {
+      codeRequestPending.current = false;
       setLoading(false);
     }
   };
 
   const handleCodeRequest = (event) => {
     event.preventDefault();
-    if (authLoading || redirectStarted.current) return;
+    if (
+      loading ||
+      secondsRemaining > 0 ||
+      authLoading ||
+      redirectStarted.current
+    )
+      return;
     clearFeedback();
     setStatus("");
     const address = email.trim();
@@ -155,7 +175,13 @@ export default function ContinueWithEmailPage({
   };
 
   const resendCode = () => {
-    if (authLoading || redirectStarted.current) return;
+    if (
+      loading ||
+      secondsRemaining > 0 ||
+      authLoading ||
+      redirectStarted.current
+    )
+      return;
     clearFeedback();
     sendCode(sentEmail);
   };
@@ -213,6 +239,11 @@ export default function ContinueWithEmailPage({
   const backToEmail = () => {
     setSentEmail("");
     setCode("");
+    clearFeedback();
+  };
+
+  const enterExistingCode = () => {
+    setSentEmail(email.trim());
     clearFeedback();
   };
 
@@ -351,12 +382,16 @@ export default function ContinueWithEmailPage({
           >
             <PanelHeader
               title="Verify Your Identity"
-              subtitle="Enter the 6-digit code we sent to continue signing in or setting up your account."
+              subtitle="Enter the 6-digit code from your email to continue signing in or setting up your account."
             />
             {alerts}
             <p className="mb-0">
               <span className="text-secondary">Sending to</span>{" "}
               <strong>{sentEmail}</strong>
+            </p>
+            <p className="small text-secondary mb-0">
+              Email can take a few minutes. Check your spam or junk folder. If
+              you requested another code, use the newest email.
             </p>
             <FormField label="Verification Code">
               <input
@@ -387,9 +422,11 @@ export default function ContinueWithEmailPage({
                 type="button"
                 className="btn btn-link p-0"
                 onClick={resendCode}
-                disabled={loading}
+                disabled={loading || secondsRemaining > 0}
               >
-                Resend code
+                {secondsRemaining > 0
+                  ? `Resend code in ${secondsRemaining}s`
+                  : "Resend code"}
               </button>
               <button
                 type="button"
@@ -431,6 +468,7 @@ export default function ContinueWithEmailPage({
               className="form-control"
               value={email}
               onChange={updateEmail}
+              disabled={loading}
               type="email"
               autoComplete="username"
               placeholder="you@email.com"
@@ -444,11 +482,28 @@ export default function ContinueWithEmailPage({
             icon={<EmailIcon />}
             busy={loading}
             disabled={
-              loading || authLoading || !EMAIL_PATTERN.test(email.trim())
+              loading ||
+              authLoading ||
+              secondsRemaining > 0 ||
+              !EMAIL_PATTERN.test(email.trim())
             }
           >
-            {loading ? "Sending code..." : "Continue"}
+            {loading
+              ? "Sending code..."
+              : secondsRemaining > 0
+                ? `Request code in ${secondsRemaining}s`
+                : "Continue"}
           </AppButton>
+          {secondsRemaining > 0 && EMAIL_PATTERN.test(email.trim()) && (
+            <button
+              type="button"
+              className="btn btn-link p-0 align-self-center"
+              onClick={enterExistingCode}
+              disabled={loading}
+            >
+              Enter a code you already have
+            </button>
+          )}
           <button
             type="button"
             className="btn btn-link p-0 align-self-center"

@@ -115,7 +115,12 @@ describe("temporary-account upgrade registration", () => {
       expect(verifySignup).toHaveBeenCalledWith({
         email: "temp@example.com",
         code: "123456",
-        temporaryUpgrade: true,
+        registration: {
+          password: "password123",
+          password_confirm: "password123",
+          first_name: "Taylor",
+          last_name: "Temp",
+        },
       }),
     );
   });

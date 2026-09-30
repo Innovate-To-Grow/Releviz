@@ -52,7 +52,6 @@ const VERIFICATION_EMAIL_SUBJECTS = {
   login: "Your login code - Releviz",
   password_reset: "Password reset code - Releviz",
   account_delete: "Delete account code - Releviz",
-  temp_event_access: "Your verification code - Releviz",
 };
 
 async function latestVerificationCode(email, afterMs, purpose) {
@@ -69,43 +68,57 @@ async function latestVerificationCode(email, afterMs, purpose) {
   return code;
 }
 
+// Every message in the sink addressed to `email` that was written at or after
+// `afterMs`, newest file first and, within one file, its last message first.
+async function emailsFor(email, afterMs) {
+  const normalizedEmail = email.trim().toLowerCase();
+  let entries = [];
+  try {
+    entries = await fs.readdir(EMAIL_FILE_PATH);
+  } catch {
+    entries = [];
+  }
+
+  const found = [];
+  for (const entry of entries) {
+    const file = path.join(EMAIL_FILE_PATH, entry);
+    const stat = await fs.stat(file);
+    if (stat.mtimeMs < afterMs) continue;
+    const body = await fs.readFile(file, "utf8");
+    // Django can append several messages to one file. They share its mtime,
+    // so examine the last message first when selecting the latest match.
+    const messages = body.split(/\r?\n-{20,}\r?\n/).reverse();
+    for (const message of messages) {
+      const recipientHeader = message.match(/^To:\s*(.+)$/im)?.[1] || "";
+      const recipients = recipientHeader
+        .split(",")
+        .map((recipient) => recipient.trim().toLowerCase());
+      if (!recipients.includes(normalizedEmail)) continue;
+      found.push({
+        body: decodeQuotedPrintable(message),
+        mtimeMs: stat.mtimeMs,
+      });
+    }
+  }
+  return found.sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
 async function latestEmailFor(email, afterMs, predicate = () => true) {
   const deadline = Date.now() + 20_000;
-  const normalizedEmail = email.trim().toLowerCase();
   while (Date.now() < deadline) {
-    let entries = [];
-    try {
-      entries = await fs.readdir(EMAIL_FILE_PATH);
-    } catch {
-      entries = [];
-    }
-
-    const matches = [];
-    for (const entry of entries) {
-      const file = path.join(EMAIL_FILE_PATH, entry);
-      const stat = await fs.stat(file);
-      if (stat.mtimeMs < afterMs) continue;
-      const body = await fs.readFile(file, "utf8");
-      // Django can append several messages to one file. They share its mtime,
-      // so examine the last message first when selecting the latest match.
-      const messages = body.split(/\r?\n-{20,}\r?\n/).reverse();
-      for (const message of messages) {
-        const recipientHeader = message.match(/^To:\s*(.+)$/im)?.[1] || "";
-        const recipients = recipientHeader
-          .split(",")
-          .map((recipient) => recipient.trim().toLowerCase());
-        if (!recipients.includes(normalizedEmail)) continue;
-        const decodedMessage = decodeQuotedPrintable(message);
-        if (predicate(decodedMessage)) {
-          matches.push({ body: decodedMessage, mtimeMs: stat.mtimeMs });
-        }
-      }
-    }
-    matches.sort((a, b) => b.mtimeMs - a.mtimeMs);
-    if (matches[0]) return matches[0].body;
+    const match = (await emailsFor(email, afterMs)).find(({ body }) =>
+      predicate(body),
+    );
+    if (match) return match.body;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`No matching email found for ${email}`);
+}
+
+// The messages already delivered to `email` since `afterMs`, without waiting
+// for more: for asserting that an action sent nothing.
+async function emailsSentTo(email, afterMs) {
+  return (await emailsFor(email, afterMs)).map(({ body }) => body);
 }
 
 // Both /login and /signup render the same passwordless panel: request a code
@@ -377,6 +390,7 @@ module.exports = {
   datetimeLocalHoursFromNow,
   decodeQuotedPrintable,
   dispatchEmailJobs,
+  emailsSentTo,
   expandAdvancedOptions,
   expectDashboard,
   fillTextbox,

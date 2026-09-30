@@ -2,6 +2,7 @@
 
 /* Toolbar: search, group filter and filter button on one wrapping line */
 .participants-toolbar {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -181,6 +182,18 @@
 .participants-popover__menu.dropdown-menu-end {
   right: 0;
   left: auto;
+}
+
+/* A wrapped toolbar can leave the Filter button at the left edge, where a
+   menu right-aligned to the button would open off screen. Align it to the
+   toolbar's right edge instead; on one line the two edges coincide. */
+.participants-toolbar .participants-popover:has(> .dropdown-menu-end) {
+  position: static;
+}
+
+.participants-toolbar .participants-popover__menu.dropdown-menu-end {
+  top: auto;
+  margin-top: 0.25rem;
 }
 
 .participants-popover__group {
@@ -449,13 +462,55 @@
   white-space: nowrap;
 }
 
-/* Narrow screens: groups move under the name, actions stack ------------- */
+/* Narrow screens: each person becomes a wrapping row ---------------------
+   Checkbox and name share the first line; the response badge and the
+   actions follow, wrapping as room allows, so nothing scrolls sideways. The
+   table parts drop their table display for this, so the markup carries
+   explicit roles. The Groups column is clipped away and its text repeats
+   under the name. The columns need about 800px, so the table layout only
+   returns from the Bootstrap lg breakpoint up. */
 
-@media (max-width: 640px) {
+@media (max-width: 991.98px) {
+  .participants-table,
+  .participants-table thead,
+  .participants-table tbody {
+    display: block;
+  }
+
+  .participants-table tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .participants-table > :not(caption) > * > * {
+    border-bottom-width: 0;
+  }
+
+  .participants-table tbody tr {
+    background-color: var(--bs-table-bg);
+    border-bottom: var(--bs-border-width) solid var(--bs-table-border-color);
+  }
+
+  .participants-table thead .participants-table__select {
+    flex: 0 0 2.5rem;
+    min-width: 0;
+  }
+
+  .participants-table thead .participants-table__name {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-left: 0.25rem;
+  }
+
+  .participants-table
+    thead
+    th:not(.participants-table__select):not(.participants-table__name),
   .participants-table .participants-table__groups {
     position: absolute;
     width: 1px;
     height: 1px;
+    min-width: 0;
     padding: 0;
     margin: -1px;
     overflow: hidden;
@@ -464,16 +519,77 @@
     border: 0;
   }
 
+  .participants-table .participants-row > .participants-table__select {
+    flex: 0 0 2.5rem;
+    min-width: 0;
+    align-self: flex-start;
+  }
+
+  .participants-table .participants-row > .participants-table__name {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-bottom: 0.25rem;
+  }
+
+  .participants-table
+    .participants-row
+    > .participants-table__select
+    + .participants-table__name {
+    padding-left: 0.25rem;
+  }
+
+  .participants-row::after {
+    content: "";
+    order: 1;
+    flex: 0 0 100%;
+  }
+
+  .participants-table .participants-row > .participants-table__response,
+  .participants-table .participants-row > .participants-table__actions {
+    order: 2;
+    padding: 0.25rem 0.25rem 0.5rem;
+  }
+
+  .participants-table .participants-row > .participants-table__response {
+    padding-left: 0.75rem;
+  }
+
+  .participants-table
+    .participants-row
+    > .participants-table__select
+    ~ .participants-table__response {
+    margin-left: 2.5rem;
+    padding-left: 0.25rem;
+  }
+
+  .participants-table .participants-row > .participants-table__actions {
+    width: auto;
+    margin-left: auto;
+    padding-right: 0.5rem;
+  }
+
   .participants-row__groups-inline {
     display: block;
     margin-top: 0.125rem;
+    overflow-wrap: anywhere;
   }
 
-  .participants-row__actions {
-    flex-direction: column;
-    align-items: flex-end;
+  .participants-row__actions .btn {
+    min-height: 2.5rem;
   }
 
+  .participants-row__actions .participants-menu--icon .btn {
+    min-width: 2.5rem;
+  }
+
+  .participants-row__notice td,
+  .participants-table__helper td {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 640px) {
   .participants-selection-bar {
     bottom: 0.5rem;
   }

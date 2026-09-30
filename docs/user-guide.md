@@ -22,6 +22,11 @@ on the home page:
 - **Access**: Invite only (default) or Open link
 - **Participants start as**: Available (default; people mark the times that do not work) or Busy
   (people mark the times that work)
+- **Response Deadline**: optional, entered in the event's timezone. People can't respond after it;
+  without one, responses stay open until you close them
+
+**Advanced options** (folded away) holds the slot length and the automatic reminder emails, which
+go out before the response deadline and so only apply to an event that has one.
 
 New events are active immediately and accept responses as soon as participants join. Creating an
 event does not send any email.
@@ -43,23 +48,29 @@ reactivate the event first.
 ## Participants
 
 The **Participants** section of the organizer workspace is one list: each person on one row with
-their name, a contact line, their groups, a **Response** badge (**Submitted** or **Not
-submitted**), and an **Invitation** badge. The line under the heading counts people, submitted
-and not submitted responses, and groups. Adding people and sending invitations are separate
-steps, and nobody is emailed until you have seen the email and confirmed it: **Add and send
-invitation**, **Review and send invitations** at the end of an import, **Send invitation…** (in
-the selection bar or a row's **⋯** menu), and the **Email** menu all open the email review (see
-[Review before sending](#review-before-sending)). Closed, finalized, and archived events show the
-list read-only until they are reactivated.
+their name, a contact line, their groups, and one **Response** badge that says where they are, from
+**Not invited** through **Invited** and **Started** to **Submitted** (all seven are listed under
+[Send invitations](#send-invitations)). The line under the heading counts people, submitted and
+not submitted responses, and groups. Adding people and sending invitations are separate steps, and
+nobody is emailed until you have seen the email and confirmed it: **Add and send invitation**,
+**Review and send invitations** at the end of an import, **Send invitation…** (in the selection bar
+or a row's **⋯** menu), and the **Email** menu all open the email review (see
+[Review before sending](#review-before-sending)). In an invite-only event a banner above the list
+says how many people haven't been invited yet (see [Send invitations](#send-invitations)). Closed,
+finalized, and archived events show the list read-only until they are reactivated.
 
 Above the list, the search box matches names, emails, phones, and groups; **Group:** narrows the
-list to one group (or **No group**); and **Filter** narrows it by response, invitation state, or
-whether the person counts in the results. Active filters show as chips with **Clear all**, and
-the counts line then reads **Showing n of N people**.
+list to one group (or **No group**); and **Filter** narrows it by **Response** (one choice from
+**Any**, **Submitted**, **Not submitted**, **Not invited yet**, **Sending invite**, **Invite
+failed**, **Invited**, or **Started**; see [Send invitations](#send-invitations)) and by
+**Results** (**Any**, **Counted**, or **Left out**, for whether the person counts in the
+results). Active filters show as chips such as **Response: Invited**, with **Clear all**, and the
+counts line then reads **Showing n of N people**.
 
 Once an active event's response deadline has passed, a banner says so: people can't be added,
 invited, or changed, and your own schedule is locked, but you can still enter schedules for the
-people you answer for. **Change deadline** opens the event settings.
+people you answer for. **Change deadline** opens the event settings in the Overview with the
+**Response Deadline** field ready to edit.
 
 ### Add people
 
@@ -94,9 +105,10 @@ can use another of your verified addresses).
 These people never sign in or receive links, no invitation, reminder, or final notification is
 sent for them, and you enter their availability with **Edit schedule** (the add panel offers
 **Enter their schedule** straight away). Their row reads **No email · you enter their schedule**,
-their invitation badge reads **No email**, and the filing address is never shown. Several people
-can share your address and are told apart by name, so give different people distinct names (for
-example "John Smith (Team B)"). Entering an identical name again returns the existing row.
+its **Response** badge reads **Not submitted** until you submit their schedule (then **Submitted**),
+and the filing address is never shown. Several people can share your address and are told apart by
+name, so give different people distinct names (for example "John Smith (Team B)"). Entering an
+identical name again returns the existing row.
 
 Typing one of your own addresses into the add panel without ticking the box is refused, with a
 hint pointing to the checkbox or to **Add myself**.
@@ -110,12 +122,13 @@ or your own row), offers **Edit schedule**, and groups everything about the pers
 
 - **Contact**: **Full name**, **Email**, and **Phone**. A name can be changed for anyone whose
   schedule you still enter; a person who answers under their own account keeps their account's
-  name. An email can be changed only until the person has signed in with their link, joined, or
-  answered. The row then moves to the account behind the new address (or a new temporary
-  identity) and keeps its name, groups, weight, and any schedule you entered; it gets a fresh
-  invitation marked **Not sent**, the old link stops working, and any queued email to the old
-  address is canceled. Adding an email to a person without one makes them an ordinary person you
-  can invite. After saving a new address, the notice offers **Send invitation** for it.
+  name. An email can be changed only until the person has opened their link (someone without a
+  Releviz account), joined, or answered. The row then moves to the account behind the new address
+  (or a new temporary identity) and keeps its name, groups, weight, and any schedule you entered;
+  it gets a fresh invitation, so the row reads **Not invited**, the old link stops working, and
+  any queued email to the old address is canceled. Adding an email to a person without one makes
+  them an ordinary person you can invite. After saving a new address, the notice offers **Send
+  invitation** for it.
 - **Groups**: the person's group chips and **+ Add to group**, which opens the group picker.
 - **In the results**: whether their answers are counted (**Count Ada's answers**, for someone
   called Ada) and their **Weight** (0 to 1).
@@ -152,7 +165,7 @@ steps:
      groups are added to the person's existing groups; an import never removes anyone from a
      group.
    - Rebuilding destructively replaces the participant list, schedules, invitations, temporary
-     sessions, and pending deliveries, and everyone starts as **Not sent**. You must type the
+     sessions, and pending deliveries, and everyone starts as **Not invited**. You must type the
      event code to confirm.
 4. **Done**: what was imported, ending with **No invitations were sent.** When the import put
    people on the list who can be invited (those a merge added, or everyone a rebuild imported),
@@ -208,7 +221,11 @@ Invitations go to a selection or to everyone still uninvited:
 - Tick people in the list (the header checkbox selects the page, and **Select all N matching**
   extends that to everyone matching the filter), then click **Send invitation…** in the selection
   bar. One person's **⋯** menu has **Send invitation** or **Resend invitation** too.
-- The **Email** menu offers **Invite everyone not invited yet (N)…**.
+- The **Email** menu offers **Invite everyone not invited yet (N)…**. In an invite-only event the
+  Participants list also says so above the list, as long as anyone is left: **N people haven't been
+  invited yet. Nobody is emailed until you send invitations.** Its **Send invitations…** does the
+  same, and the notice goes away once everyone is invited. Open link events don't show it, since
+  the link works without an invitation, and neither does a list that can't be changed.
 - **Add and send invitation** in the add panel, and **Review and send invitations (N)…** at the
   end of an import, invite the people just added.
 
@@ -219,20 +236,39 @@ the first of them gets. **Send N invitations** on the confirmation step sends th
 returns as soon as the invitation jobs are queued: a notice counts what was queued and skipped,
 with **View progress**, and the delivery card at the top of the workspace follows the run.
 
-The **Invitation** badge on each row, which **Filter** also uses, shows:
+The **Response** badge on each row is the one place that says where a person is. It shows the
+first of these that applies, and the **Response** filter offers the same stages:
 
-- **Not sent**: no email yet. These people get no reminders until they are invited.
-- **Sending…**: the email is queued or being handed to the provider.
-- **Failed**: the provider refused the email for good. The delivery card's **Show failed** filters
-  the list to these people. **Retry failed recipients** opens the review with how many failed
-  emails will be sent again and the first of them exactly as it was written; failed emails the
-  event has moved past (to someone since removed, for a meeting time since changed, or for an
-  event no longer active) are canceled instead. **Send N again** on the confirmation step queues
-  them.
-- **Sent**: emailed, including opened.
-- **Accepted**: the person verified their link, joined, or saved or submitted their own response
-  after the email. A response you enter for them does not count.
-- **No email**: a person without an email of their own; **—** marks your own row.
+- **Submitted**: their response is in, whether they submitted it or you did for them. This wins
+  over every invitation stage below, so someone you answered for before ever emailing them reads
+  **Submitted**: the notice above the list still counts them until they are invited, and their
+  person panel's **Invitation** section says **Not sent**.
+- **Not submitted**: a person who is never invited (someone without an email of their own, or your
+  own row) and has not submitted.
+- **Invite failed**: the provider refused their latest invitation email for good. The delivery
+  card's **Show failed** filters the list to these people. **Retry failed recipients** opens the
+  review with how many failed emails will be sent again and the first of them exactly as it was
+  written; failed emails the event has moved past (to someone since removed, for a meeting time
+  since changed, or for an event no longer active) are canceled instead. **Send N again** on the
+  confirmation step queues them.
+- **Sending invite…**: their latest invitation email is queued or being handed to the provider.
+- **Started**: after the email, the person joined or saved a response of their own, and it is not
+  submitted (a response they took back to a draft counts too). Opening the link is not enough, and
+  a response you enter for them does not count.
+- **Invited**: emailed, including people who have opened their link. Opening the link does not
+  make them **Started**.
+- **Not invited**: no email yet. These people get no reminders until they are invited. In an
+  open-link event nobody needs an invitation, so someone who joined with the event code and has
+  not submitted reads **Not submitted** instead.
+
+In the **Response** filter, **Not submitted** lists everyone who has not submitted, whatever their
+invitation stage. **Not invited yet**, **Invited**, and **Started** list the people at that stage
+who have not submitted. A person counts as not invited until their first email is delivered, so
+**Not invited yet** also lists people whose first email reads **Sending invite…** or **Invite
+failed**, and people who are never invited (or, in an open-link event, joined with the event code),
+whose badge reads **Not submitted**. **Sending invite** and **Invite failed** look only at the
+latest invitation email, so they can include someone whose badge already reads **Submitted**, and
+a resend that fails shows **Invite failed** over the earlier **Invited** or **Started**.
 
 The delivery card counts recipients that are sent, queued, or failed. It keeps itself current
 while recipients are queued (only while the tab is visible), stops once everyone is sent or
@@ -252,9 +288,10 @@ reminders go out on their schedule without a review.
 
 ### Who can open an event
 
-Invite-only events are visible only to the organizer, existing participants, invited people using
-their emailed link, and signed-in accounts whose verified email matches an invitation. Open-link
-events let anyone join with the event code, up to the 1,000-person limit.
+Invite-only events are visible only to the organizer, existing participants, invited people opening
+their emailed private link (see [Fill in availability](#fill-in-availability)), and signed-in
+accounts whose verified email matches an invitation. Open-link events let anyone join with the
+event code, up to the 1,000-person limit.
 
 ## Fill in availability
 
@@ -267,6 +304,17 @@ Each participant:
 
 If the organizer already added them, they skip **Join as** and see any schedule the organizer
 entered. Their first save or submit makes the response theirs.
+
+People without a Releviz account don't sign in at all. The invitation email carries a private link
+that opens their own schedule directly: no account, no password, and no code to type or wait for.
+The link is personal and grants access to that one event only, but anyone who has it can see the
+event and change and submit that person's schedule, so it should not be forwarded. It works again
+whenever it is opened, on the same device or another. It stops working, and shows **This invitation
+link isn't active**, when the organizer changes the person's email address or replaces the whole
+participant list (each files a new, unsent invitation with a new link) or when the person upgrades
+to a full account. Resending an invitation sends the same link again. **Upgrade to full access** on
+the schedule page still confirms the address with an emailed verification code. People who already
+have a Releviz account sign in instead and use the event page, as described above.
 
 By default every slot starts **Available**, so participants paint **Busy** over the times that do
 not work. The brush starts on the opposite of the starting state, and **Mark all Available** resets
@@ -287,6 +335,41 @@ Open the organizer view from the account that created the event. It is one page 
 sections, **Overview**, **Time Table**, and **Participants**; finalizing is a step inside the Time
 Table.
 
+### Event status
+
+An event is **active**, **closed**, **finalized**, or **archived**, and the line at the top of the
+page says which in plain words, next to the buttons that change it:
+
+- **Close responses** stops people from submitting or changing schedules and makes the participant
+  list read-only. You can still pick and finalize a time. Invitation and reminder emails still
+  waiting to go out are canceled and automatic reminders stop.
+- **Archive event** (from an active, closed, or finalized event) makes the event read-only and
+  moves it to **Archived** on your dashboard. An archived event that had a confirmed meeting keeps
+  it, and nobody is emailed until you reactivate the event.
+- **Reactivate event** opens a closed, finalized, or archived event again. Reopening one with a
+  confirmed meeting cancels the meeting and emails the people the confirmation reached, after you
+  have reviewed that email (see [Time Table and finalizing](#time-table-and-finalizing)).
+
+Closing and archiving ask for confirmation first and say what they do; nobody is emailed about
+either. The **Archive** button on the account dashboard asks the same question. When an active
+event's response deadline passes, the line says people can no longer respond and offers **Change
+deadline**, which opens the event settings in the Overview with the **Response Deadline** field
+ready to edit; the same button is on the Participants banner. An active event needs a deadline in
+the future or none, so reactivating an event whose deadline has passed removes it, says so, and
+offers **Set a new deadline**.
+
+### Editing the event
+
+**Edit event** in the Overview opens the event settings in place. The **Response Deadline** is
+entered in the event's timezone, which the field says. Changing the days, time window, slot length,
+or timezone gives everyone a fresh schedule for the new grid, because their old marks no longer
+line up. Invitations and membership stay. If anyone has submitted or painted availability, the
+editor first asks you to confirm **Schedule changes require a response reset** and says how many
+people will lose theirs; people who have only joined or left the starting schedule untouched are not
+counted, and when nobody has answered anything the change saves straight away. Every other setting
+(name, location, meeting type, duration, access, deadline, reminders) saves without touching
+anyone's answers.
+
 ### Participants and schedules
 
 - Search and filter the participant list (50 rows per page by default, up to 100).
@@ -297,8 +380,8 @@ Table.
   after that the row shows **Answers themselves** and only they can change their answers.
   Conflicting edits are never silently overwritten: the editor asks you to reload the latest
   response. Saving a submitted response as a draft asks first, since it leaves the results until
-  it is submitted again, and someone who is left out of the results has a read-only schedule
-  until you **Count them again**.
+  it is submitted again. Someone who is left out of the results keeps an editable schedule, which
+  counts once you **Count them again**.
 
 ### Groups
 
@@ -321,7 +404,8 @@ group picker, or in the **Groups** panel (**Manage groups…**), even before any
 Each person has a weight between 0 and 1 and either counts in the results or is left out. Rows
 show **Weight w** when the weight is not 1 and **Left out of results** when the person is not
 counted, and a banner above the list counts everyone left out, with **Show them** and **Count
-everyone again**.
+everyone again**. Leaving someone out changes only the results: they can still save and submit
+their schedule, and it counts as soon as they are counted again.
 
 - One person: **Leave out of results** or **Count in results** in the **⋯** menu, or the **In the
   results** section of their panel.
@@ -339,11 +423,14 @@ The Time Table shows the meeting-time calendar, with two collapsible steps under
 default: **Blocked times** (see above) and **Finalize**. Picking a time on the calendar opens
 Finalize. Inside Finalize:
 
-- **Recommended times** lists the recommended windows of the meeting's length as chips. The calendar
-  outlines them only while the list is open, and pointing at a chip highlights its time.
+- **Recommended times** lists the recommended windows of the meeting's length as chips, each with
+  the weighted share of the group who could attend all of it. The calendar outlines them only while
+  the list is open, and pointing at a chip highlights its time.
 - **Other times** picks any open time, recommended or not: choose a day (weekly events offer the
-  next four weeks, a week at a time), then click one of its start times, shown with the lowest
-  slot's share and the rank when the time is also recommended.
+  next four weeks, a week at a time), then click one of its start times, shown with its weighted
+  share and the rank when the time is also recommended. A recommended time shows its exact share,
+  the one on its chip under Recommended times; any other time shows up to its lowest slot's share,
+  since the share who can attend all of it can only be lower.
 
 While either list is open and in view, the calendar stays pinned under the section nav (on screens
 with room for it, with a shorter grid; scrolled past the lists, it goes with the page). Opening
@@ -359,24 +446,42 @@ with weight zero still count toward the unweighted score. There are no required 
 The list is as long as the good options are, at most ten: a window is listed only if someone with a
 weight above 0 can attend all of it, it scores at least half of the best window, and it shares no
 slot with a better listed window in the same format (so a long free stretch tiles into separate
-hours). The list says why it ends where it does, and an empty list names the reason (no responses
-yet, nobody free for a whole window, no upcoming times). Results cached under an older ranking rule
-are recomputed on the next read.
+hours). The list says why it ends where it does, points to **Other times** when it stops at ten or
+before the next option would fall under half of the best, and an empty list names the reason (no
+responses yet, nobody free for a whole window, no upcoming times). Results cached under an older
+ranking rule are recomputed on the next read.
 
-On the meeting-time calendar, blocked times are hatched, show no percentage, and cannot be picked.
+On the meeting-time calendar, a cell's percentage is the share of counted responses free in that one
+slot (a cell says so when read out, and the legend says "free in a slot"). A meeting covers several
+slots and counts each person by their lowest slot in it, so a recommended time's share can be lower
+than the shading of the cells it covers; a window picked on the calendar that is not recommended is
+summarized as "Up to" its lowest slot's share for the same reason. Blocked times are hatched, show
+no percentage, and cannot be picked.
 An open slot whose meeting window would run into a blocked time shows its percentage but cannot
-start a meeting.
+start a meeting. Until at least one response is counted the calendar is not shaded at all (a wall of
+0% would read as "nobody is free" when nobody has answered), and says so under the calendar; any
+window can still be picked, and its summary says that no responses have been counted yet.
 
 **Finalize** fixes one continuous meeting time, emails an iCalendar invitation to participants, and
-offers the calendar file for download. Pick a window, click **Review attendance**, then **Finalize
-meeting**: the [review](#review-before-sending) counts the invited people who will receive the
-confirmation and shows the one the first of them gets, for the picked time and with its calendar
-file attached. Nothing is finalized until **Finalize and send N emails** on the confirmation step.
-Only people who were sent an invitation get the confirmation; when nobody was, the review says no
-confirmation emails will be sent, and **Finalize meeting** on the confirmation step finalizes
-without emailing anyone. Once a meeting is finalized, picking is locked until the event is
-reactivated: Finalize shows the confirmed meeting without the two lists, and the calendar draws the
-confirmed meeting alone and ignores clicks.
+offers the calendar file for download. As soon as a window is picked, Finalize counts who could
+attend it (available, partial, unavailable, unanswered and left out of the results) and lists each
+person below the counts: **Fully available**, **Available if needed** (free for all of it, but only
+if needed somewhere), **Available for part of it**, or **Not available** for people who answered,
+and **Not submitted** or the reason someone was left out for the rest. It says when that reading is
+current and reads it again whenever the results change; **Finalize meeting** waits for it, and a
+failed reading offers **Try again**. The **Location or meeting link** you type stays put while you
+compare other times.
+
+Then click **Finalize meeting**: it asks what the confirmation would say for the meeting as it
+stands, location included, and the [review](#review-before-sending) counts the invited people who
+will receive the confirmation and shows the one the first of them gets, for the picked time and with
+its calendar file attached. Nothing is finalized until **Finalize and send N emails** on the
+confirmation step, and it finalizes exactly the meeting that was reviewed. Only people who were sent
+an invitation get the confirmation; when nobody was, the review says no confirmation emails will be
+sent, and **Finalize meeting** on the confirmation step finalizes without emailing anyone. Once a
+meeting is finalized, picking is locked until the event is reactivated: Finalize shows the confirmed
+meeting without the two lists, and the calendar draws the confirmed meeting alone and ignores
+clicks.
 
 Reactivating a finalized event (**Reactivate event**) cancels the meeting and emails a matching
 cancellation to everyone the confirmation reached. That email is reviewed first in the same way,
@@ -384,7 +489,8 @@ and the event reopens only with **Reopen and send N emails**. When nobody receiv
 confirmation, it reopens at once.
 
 While new responses are being processed, the Time Table says it is updating and keeps showing the
-last completed results; once current, it shows when they were generated.
+last calculated results; the notice goes away by itself once they are current. A calculation that
+fails is retried automatically, and the last calculated results stay on screen meanwhile.
 
 ### Live updates
 

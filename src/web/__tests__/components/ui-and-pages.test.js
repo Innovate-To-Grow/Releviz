@@ -856,7 +856,7 @@ describe("small UI modules", () => {
     );
     expect(screen.getByText("Planning")).toBeInTheDocument();
     expect(screen.getByText("Mixed")).toBeInTheDocument();
-    expect(screen.getByText("2026-07-08")).toBeInTheDocument();
+    expect(screen.getByText("Jul 8, 2026")).toBeInTheDocument();
     expect(screen.getByText("UTC")).toBeInTheDocument();
     expect(screen.getByText("Active")).toBeInTheDocument();
     expect(screen.getByText("Virtual · Meet link")).toBeInTheDocument();
@@ -922,6 +922,9 @@ describe("small UI modules", () => {
     ).toBeInTheDocument();
     expect(within(overview).getByText("Mon, Tue")).toBeInTheDocument();
     expect(
+      within(overview).getByText(/^Deadline .*8:00:00\sAM EDT$/),
+    ).toBeInTheDocument();
+    expect(
       within(overview).getByText("Mixed · 60 minutes"),
     ).toBeInTheDocument();
     expect(within(overview).getByText("Anyone with code")).toBeInTheDocument();
@@ -950,6 +953,48 @@ describe("small UI modules", () => {
     }
   });
 
+  test("EventDetailsGrid shows specific dates as compact ranges", () => {
+    const demoDates = [
+      "2026-10-12",
+      "2026-10-05",
+      "2026-10-06",
+      "2026-10-07",
+      "2026-10-08",
+      "2026-10-09",
+      "2026-10-13",
+      "2026-10-14",
+      "2026-10-15",
+      "2026-10-16",
+    ];
+    const event = {
+      daySelectionType: "specific_dates",
+      specificDates: demoDates,
+      days: [1, 2],
+      startTime: "09:00",
+      endTime: "17:00",
+      timezone: "UTC",
+    };
+    const { rerender } = render(
+      <EventDetailsGrid event={event} variant="organizer" />,
+    );
+    const schedule = screen.getByText("Schedule").closest("div");
+    expect(within(schedule).getByText("Oct 5–9, 12–16, 2026")).toBeVisible();
+    expect(screen.queryByText(/2026-10-05/)).not.toBeInTheDocument();
+
+    rerender(<EventDetailsGrid event={event} />);
+    expect(screen.getByText("Response days").nextSibling).toHaveTextContent(
+      "Oct 5–9, 12–16, 2026",
+    );
+
+    rerender(
+      <EventDetailsGrid
+        event={{ ...event, specificDates: [] }}
+        variant="organizer"
+      />,
+    );
+    expect(screen.getByText("Days not set")).toBeInTheDocument();
+  });
+
   test("EventDetailsGrid organizer variant toggles details and honours extra cards", async () => {
     render(
       <EventDetailsGrid
@@ -976,7 +1021,7 @@ describe("small UI modules", () => {
         ]}
       />,
     );
-    expect(screen.getByText("2026-07-08, 2026-07-09")).toBeInTheDocument();
+    expect(screen.getByText("Jul 8–9, 2026")).toBeInTheDocument();
     expect(screen.getByText("9:00 AM - 10:00 AM · UTC")).toBeInTheDocument();
     expect(screen.getByText("Virtual · 45 minutes")).toBeInTheDocument();
     expect(screen.getByText("Roster")).toBeInTheDocument();

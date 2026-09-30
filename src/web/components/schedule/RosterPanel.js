@@ -33,6 +33,7 @@ import AddPersonPanel from "@/components/schedule/participants/AddPersonPanel";
 import {
   DeadlineBanner,
   LeftOutBanner,
+  NotInvitedBanner,
   ReadOnlyBanner,
 } from "@/components/schedule/participants/Banners";
 import EmailMenu from "@/components/schedule/participants/EmailMenu";
@@ -233,7 +234,14 @@ function scrollToDelivery() {
 }
 
 const RosterPanel = forwardRef(function RosterPanel(
-  { event, setEvent, getToken, onResultsInvalidated, onDeliveryRequestChange },
+  {
+    event,
+    setEvent,
+    getToken,
+    onResultsInvalidated,
+    onDeliveryRequestChange,
+    onEditDeadline,
+  },
   forwardedRef,
 ) {
   const [participants, setParticipants] = useState([]);
@@ -1485,6 +1493,9 @@ const RosterPanel = forwardRef(function RosterPanel(
     filtering: hasActiveFilters,
   });
   const excludedCount = Number(overall?.excluded ?? stats.excluded ?? 0);
+  const notInvitedCount = Number(overall?.notInvited ?? 0);
+  const inviteEveryoneNotInvited = () =>
+    openSendDialog({ filter: { invitationStatus: "not_sent" } });
   const panelPerson =
     openPanel?.type === "person"
       ? participants.find((candidate) => candidate.id === openPanel.id) ||
@@ -1503,6 +1514,8 @@ const RosterPanel = forwardRef(function RosterPanel(
 
   const removeChip = (key) => {
     if (key === "search") clearSearch();
+    else if (key === "response")
+      applyFilters({ submitted: "", invitationStatus: "" });
     else applyFilters({ [key]: "" });
   };
 
@@ -1588,6 +1601,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       total={Number(pagination.total || 0)}
       conflicts={rowConflicts}
       readOnly={!mutable}
+      openLink={event.accessMode === "open_link"}
       onToggleSelect={toggleSelect}
       onTogglePage={togglePage}
       onSelectAllMatching={() => setSelectAllMode(true)}
@@ -1624,7 +1638,7 @@ const RosterPanel = forwardRef(function RosterPanel(
           >
             {mutable && (
               <EmailMenu
-                notInvitedCount={Number(overall?.notInvited ?? 0)}
+                notInvitedCount={notInvitedCount}
                 remindCount={Number(overall?.remindable ?? 0)}
                 reminders={{
                   enabled: Boolean(event.remindersEnabled),
@@ -1632,9 +1646,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                   timezone: event.timezone,
                 }}
                 disabled={reminderBusy}
-                onInviteAll={() =>
-                  openSendDialog({ filter: { invitationStatus: "not_sent" } })
-                }
+                onInviteAll={inviteEveryoneNotInvited}
                 onSendReminders={() => void previewReminders()}
               />
             )}
@@ -1662,7 +1674,14 @@ const RosterPanel = forwardRef(function RosterPanel(
           {deadlinePassed && (
             <DeadlineBanner
               deadline={event.responseDeadline}
-              editHref={`/edit?code=${encodeURIComponent(event.code)}`}
+              timezone={event.timezone}
+              onEdit={onEditDeadline}
+            />
+          )}
+          {mutable && event.accessMode !== "open_link" && (
+            <NotInvitedBanner
+              count={notInvitedCount}
+              onSend={inviteEveryoneNotInvited}
             />
           )}
           {loaded && excludedCount > 0 && (

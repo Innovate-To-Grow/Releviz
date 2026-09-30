@@ -5,9 +5,8 @@
 import {
   fetchTempAccessSession,
   logoutTempAccess,
-  requestTempAccessCode,
+  openTempAccess,
   updateTempAccessParticipant,
-  verifyTempAccess,
 } from "@/lib/api/tempAccess";
 
 function jsonResponse(payload, init = {}) {
@@ -15,6 +14,7 @@ function jsonResponse(payload, init = {}) {
   const response = {
     ok: status >= 200 && status < 300,
     status,
+    headers: { get: (name) => init.headers?.[name] ?? null },
     json: jest.fn().mockResolvedValue(payload),
   };
   response.clone = jest.fn(() => jsonResponse(payload, init));
@@ -26,45 +26,62 @@ describe("temporary access API", () => {
     global.fetch = jest.fn();
   });
 
-  test("uses the restricted cookie session for code request and verification", async () => {
-    fetch
-      .mockResolvedValueOnce(jsonResponse({ accepted: true }, { status: 202 }))
-      .mockResolvedValueOnce(jsonResponse({ event: { code: "ABC123" } }));
+  test("opens the private invitation link with the restricted cookie session", async () => {
+    const payload = { event: { code: "ABC123" }, participant: { version: 1 } };
+    fetch.mockResolvedValueOnce(jsonResponse(payload));
 
-    await requestTempAccessCode({
-      code: "ABC123",
-      invitationToken: "invite-token",
-    });
-    await verifyTempAccess({
-      code: "ABC123",
-      invitationToken: "invite-token",
-      verificationCode: "123456",
-    });
+    await expect(
+      openTempAccess({ code: "ABC123", invitationToken: "invite-token" }),
+    ).resolves.toEqual(payload);
 
-    expect(fetch).toHaveBeenNthCalledWith(
-      1,
-      "/events/temp-access/request-code",
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      "/events/temp-access/open",
       expect.objectContaining({
         method: "POST",
         credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           code: "ABC123",
           invitationToken: "invite-token",
         }),
       }),
     );
-    expect(fetch).toHaveBeenNthCalledWith(
-      2,
-      "/events/temp-access/verify",
-      expect.objectContaining({
-        credentials: "include",
-        body: JSON.stringify({
-          code: "ABC123",
-          invitationToken: "invite-token",
-          verificationCode: "123456",
-        }),
-      }),
+  });
+
+  test("maps an inactive invitation to a 404 with its error code", async () => {
+    fetch.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: "This invitation link is not active.",
+          errorCode: "temp_invitation_inactive",
+        },
+        { status: 404 },
+      ),
     );
+
+    await expect(
+      openTempAccess({ code: "ABC123", invitationToken: "stale" }),
+    ).rejects.toMatchObject({
+      status: 404,
+      errorCode: "temp_invitation_inactive",
+      message: "This invitation link is not active.",
+    });
+  });
+
+  test("reports a non-JSON gateway failure with its status only", async () => {
+    const response = jsonResponse(null, { status: 502 });
+    response.json.mockRejectedValue(new SyntaxError("Unexpected token <"));
+    response.clone = jest.fn(() => response);
+    fetch.mockResolvedValueOnce(response);
+
+    await expect(
+      openTempAccess({ code: "ABC123", invitationToken: "tok" }),
+    ).rejects.toMatchObject({
+      status: 502,
+      message: "HTTP 502",
+      errorCode: null,
+    });
   });
 
   test("loads, updates, and logs out without a bearer token", async () => {
@@ -115,6 +132,22 @@ describe("temporary access API", () => {
       errorCode: "participant_version_conflict",
       participant: latest,
       message: "Version conflict",
+    });
+  });
+
+  test("keeps retry timing from a throttled request", async () => {
+    fetch.mockResolvedValueOnce(
+      jsonResponse(
+        { detail: "Please wait.", retry_after: 60 },
+        { status: 429, headers: { "Retry-After": "120" } },
+      ),
+    );
+    await expect(
+      openTempAccess({ code: "ABC123", invitationToken: "tok" }),
+    ).rejects.toMatchObject({
+      status: 429,
+      retryAfterSeconds: 120,
+      message: "Please wait.",
     });
   });
 });

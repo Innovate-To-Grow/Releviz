@@ -1,4 +1,4 @@
-"""Tests for the per-app admin access predicate (apps.core.utils.access)."""
+"""All active admins can access every app, irrespective of legacy grants."""
 
 from types import SimpleNamespace
 
@@ -32,19 +32,27 @@ class UserCanAccessAppTest(TestCase):
     def test_non_staff_denied(self):
         self.assertFalse(user_can_access_app(_user(is_staff=False, admin_apps=["cms"]), "cms"))
 
-    def test_superuser_allowed_without_grant(self):
+    def test_legacy_superuser_allowed_without_grant(self):
         self.assertTrue(user_can_access_app(_user(is_superuser=True, admin_apps=[]), "cms"))
 
     def test_staff_with_matching_grant_allowed(self):
         self.assertTrue(user_can_access_app(_user(admin_apps=["cms", "event"]), "event"))
 
-    def test_staff_without_matching_grant_denied(self):
-        self.assertFalse(user_can_access_app(_user(admin_apps=["cms"]), "event"))
+    def test_staff_without_matching_grant_allowed(self):
+        self.assertTrue(user_can_access_app(_user(admin_apps=["cms"]), "event"))
 
-    def test_missing_admin_apps_attr_denied(self):
+    def test_staff_without_any_grants_allowed(self):
+        self.assertTrue(user_can_access_app(_user(), "event"))
+
+    def test_missing_admin_apps_attr_allowed(self):
         user = _user()
         del user.admin_apps
-        self.assertFalse(user_can_access_app(user, "cms"))
+        self.assertTrue(user_can_access_app(user, "cms"))
 
-    def test_none_admin_apps_denied(self):
-        self.assertFalse(user_can_access_app(_user(admin_apps=None), "cms"))
+    def test_none_admin_apps_allowed(self):
+        self.assertTrue(user_can_access_app(_user(admin_apps=None), "cms"))
+
+    def test_legacy_superuser_flag_does_not_bypass_inactive_or_nonstaff(self):
+        for fields in ({"is_active": False}, {"is_staff": False}):
+            with self.subTest(fields=fields):
+                self.assertFalse(user_can_access_app(_user(is_superuser=True, **fields), "cms"))

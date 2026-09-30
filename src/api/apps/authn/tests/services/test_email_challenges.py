@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TransactionTestCase
+from django.utils import timezone
 
 from apps.authn.models import ContactEmail
 from apps.authn.models.security import EmailAuthChallenge
@@ -145,7 +146,38 @@ class IssueEmailChallengeDeliveryFailureTests(TransactionTestCase):
                 member=self.member, purpose=PURPOSE, target_email="admin@example.com"
             )
 
-        with self.assertRaises(AuthChallengeThrottled):
+        with self.assertRaises(AuthChallengeThrottled) as throttled:
             issue_email_challenge(
                 member=self.member, purpose=PURPOSE, target_email="admin@example.com"
             )
+        self.assertGreater(throttled.exception.retry_after, 0)
+        self.assertLessEqual(throttled.exception.retry_after, 3600)
+
+    @patch("apps.authn.services.email.challenges.RESEND_COOLDOWN", timedelta(seconds=0))
+    @patch("apps.authn.services.email.send_email.send_verification_email")
+    def test_hourly_retry_wait_expires_when_oldest_required_send_leaves_window(self, _mock_send):
+        from apps.authn.services.email.challenges.queries import assert_within_limit
+
+        now = timezone.now()
+        for index in range(MAX_CHALLENGES_PER_HOUR):
+            challenge = issue_email_challenge(
+                member=self.member, purpose=PURPOSE, target_email="admin@example.com"
+            )
+            EmailAuthChallenge.objects.filter(pk=challenge.pk).update(
+                created_at=now - timedelta(minutes=50 - index)
+            )
+
+        with self.assertRaises(AuthChallengeThrottled) as throttled:
+            assert_within_limit(
+                member=self.member,
+                purpose=PURPOSE,
+                target_email="admin@example.com",
+                now=now,
+            )
+        self.assertEqual(throttled.exception.retry_after, 600)
+        assert_within_limit(
+            member=self.member,
+            purpose=PURPOSE,
+            target_email="admin@example.com",
+            now=now + timedelta(seconds=600),
+        )

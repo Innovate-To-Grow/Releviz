@@ -3,11 +3,12 @@
 from django.contrib import admin
 from unfold.admin import ModelAdmin
 
+from apps.core.admin import AppAccessPermissionMixin
 from apps.scheduling.models import FinalizationRequest, FinalMeeting
 
 
 @admin.register(FinalMeeting)
-class FinalMeetingAdmin(ModelAdmin):
+class FinalMeetingAdmin(AppAccessPermissionMixin, ModelAdmin):
     list_display = (
         "event",
         "starts_at",
@@ -39,7 +40,7 @@ class FinalMeetingAdmin(ModelAdmin):
 
 
 @admin.register(FinalizationRequest)
-class FinalizationRequestAdmin(ModelAdmin):
+class FinalizationRequestAdmin(AppAccessPermissionMixin, ModelAdmin):
     list_display = (
         "event",
         "idempotency_key",

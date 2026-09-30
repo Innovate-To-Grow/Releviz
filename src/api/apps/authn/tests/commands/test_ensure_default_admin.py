@@ -80,7 +80,7 @@ class EnsureDefaultAdminCommandTests(TestCase):
         )
 
         with patch.dict("os.environ", {"DJANGO_SUPERUSER_PASSWORD": "new-password"}):
-            with self.assertRaisesMessage(CommandError, "not an active staff superuser"):
+            with self.assertRaisesMessage(CommandError, "not an active administrator"):
                 call_command(
                     Command(),
                     yes=True,
@@ -195,7 +195,7 @@ class EnsureDefaultAdminCommandTests(TestCase):
         with (
             patch.object(Command, "_find_contact_for_update", side_effect=[None, winner_contact]),
             patch.dict("os.environ", {"DJANGO_SUPERUSER_PASSWORD": "loser-password"}),
-            self.assertRaisesMessage(CommandError, "not an active staff superuser"),
+            self.assertRaisesMessage(CommandError, "not an active administrator"),
         ):
             call_command(
                 Command(),
@@ -388,8 +388,10 @@ class EnsureDefaultAdminCreateOnlyTests(TestCase):
         self.assertTrue(member.check_password("existing-password"))
         self.assertFalse(contact.verified)
 
-    def test_rejects_an_existing_member_who_is_not_a_superuser(self):
-        member, _contact = self._make_admin(email="ordinary@example.com", is_superuser=False)
+    def test_rejects_an_existing_member_who_is_not_an_admin(self):
+        member, _contact = self._make_admin(
+            email="ordinary@example.com", is_staff=False, is_superuser=False
+        )
 
         with patch.dict("os.environ", {}, clear=True):
             with self.assertRaisesMessage(CommandError, "is not bootstrap-ready"):

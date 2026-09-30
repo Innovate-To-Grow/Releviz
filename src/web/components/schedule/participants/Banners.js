@@ -1,9 +1,33 @@
 "use client";
 
-import Link from "next/link";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import { formatDateTimeInTimezone } from "@/lib/format";
+
+/**
+ * Invite-only event with people the organizer has not emailed yet: adding
+ * someone never sends anything, so this stays until everyone is invited.
+ */
+export function NotInvitedBanner({ count, onSend }) {
+  if (!count) return null;
+  return (
+    <Alert
+      variant="info"
+      role="status"
+      className="participants-banner"
+      actions={
+        <AppButton variant="text" size="sm" className="p-0" onClick={onSend}>
+          Send invitations…
+        </AppButton>
+      }
+    >
+      {count === 1
+        ? "1 person hasn't been invited yet."
+        : `${count} people haven't been invited yet.`}{" "}
+      Nobody is emailed until you send invitations.
+    </Alert>
+  );
+}
 
 /** Whole-list notice that some people are not counted in the results. */
 export function LeftOutBanner({
@@ -45,23 +69,24 @@ export function LeftOutBanner({
 }
 
 /** Active event whose response deadline is in the past. */
-export function DeadlineBanner({ deadline, editHref }) {
+export function DeadlineBanner({ deadline, timezone, onEdit }) {
   return (
     <Alert
       variant="warning"
       role="status"
       className="participants-banner"
       actions={
-        editHref ? (
-          <Link className="alert-link" href={editHref}>
+        onEdit ? (
+          <AppButton variant="text" size="sm" className="p-0" onClick={onEdit}>
             Change deadline
-          </Link>
+          </AppButton>
         ) : null
       }
     >
-      The response deadline ({formatDateTimeInTimezone(deadline)}) has passed,
-      so people can&apos;t be added, invited or changed. You can still enter
-      schedules for people you answer for.
+      The response deadline (
+      {formatDateTimeInTimezone(deadline, timezone, { timeZoneName: "short" })})
+      has passed, so people can&apos;t be added, invited or changed. You can
+      still enter schedules for people you answer for.
     </Alert>
   );
 }

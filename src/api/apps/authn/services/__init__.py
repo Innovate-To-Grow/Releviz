@@ -49,7 +49,11 @@ from .members.import_ import (
     generate_template_excel,
     import_members_from_excel,
 )
-from .members.register import start_registration
+from .members.register import (
+    apply_registration_details,
+    start_registration,
+    validated_registration_details,
+)
 from .security import (
     RSADecryptionError,
     decrypt_password,
@@ -63,6 +67,8 @@ from .security import (
 __all__ = [
     "CreateMemberService",
     "start_registration",
+    "apply_registration_details",
+    "validated_registration_details",
     "import_members_from_excel",
     "generate_template_excel",
     "ImportResult",

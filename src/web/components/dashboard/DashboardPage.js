@@ -27,6 +27,7 @@ import {
   VirtualIcon,
 } from "@/components/ui/icons";
 import { useAuth } from "@/components/auth/AuthContext";
+import LifecycleConfirmDialog from "@/components/event/LifecycleConfirmDialog";
 import { fetchDashboardEvents } from "@/lib/api/dashboard";
 import {
   deleteEvent,
@@ -173,6 +174,7 @@ function DashboardPage() {
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [actionCode, setActionCode] = useState("");
+  const [archiveTarget, setArchiveTarget] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleteRequestKey, setDeleteRequestKey] = useState("");
@@ -226,6 +228,12 @@ function DashboardPage() {
     } finally {
       setActionCode("");
     }
+  };
+
+  const confirmArchive = async () => {
+    const target = archiveTarget;
+    await handleArchive(target);
+    setArchiveTarget(null);
   };
 
   const handleDuplicate = async (event) => {
@@ -409,7 +417,7 @@ function DashboardPage() {
                     event={event}
                     organizerActions
                     busy={actionCode === event.code}
-                    onArchive={handleArchive}
+                    onArchive={setArchiveTarget}
                     onDuplicate={handleDuplicate}
                     onDeleteRequested={openDeletePanel}
                   />
@@ -447,7 +455,7 @@ function DashboardPage() {
               title={`Archived (${archivedEvents.length})`}
               titleId="dashboard-archived-heading"
               headingLevel={2}
-              description="Archived events are read-only. Duplicate one to start again, or delete it permanently."
+              description="Archived events are read-only. Open one and choose Reactivate event to bring it back, duplicate it to start again, or delete it permanently."
               aria-labelledby="dashboard-archived-heading"
             >
               <div className="d-flex flex-column gap-3">
@@ -457,7 +465,7 @@ function DashboardPage() {
                     event={event}
                     organizerActions
                     busy={actionCode === event.code}
-                    onArchive={handleArchive}
+                    onArchive={setArchiveTarget}
                     onDuplicate={handleDuplicate}
                     onDeleteRequested={openDeletePanel}
                   />
@@ -486,6 +494,18 @@ function DashboardPage() {
             )}
           </Panel>
         </div>
+
+        {archiveTarget && (
+          <LifecycleConfirmDialog
+            action="archived"
+            event={archiveTarget}
+            busy={actionCode === archiveTarget.code}
+            onConfirm={() => void confirmArchive()}
+            onClose={() => {
+              if (actionCode !== archiveTarget.code) setArchiveTarget(null);
+            }}
+          />
+        )}
 
         {deleteTarget && (
           <Modal

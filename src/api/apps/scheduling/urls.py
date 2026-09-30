@@ -24,14 +24,9 @@ urlpatterns = [
     ),
     path("events/participants", views.ParticipantsView.as_view(), name="api-participants"),
     path(
-        "events/temp-access/request-code",
-        views.TemporaryAccessRequestCodeView.as_view(),
-        name="api-temp-access-request-code",
-    ),
-    path(
-        "events/temp-access/verify",
-        views.TemporaryAccessVerifyView.as_view(),
-        name="api-temp-access-verify",
+        "events/temp-access/open",
+        views.TemporaryAccessOpenView.as_view(),
+        name="api-temp-access-open",
     ),
     path(
         "events/temp-access/session",

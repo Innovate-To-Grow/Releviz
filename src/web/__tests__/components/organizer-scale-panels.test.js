@@ -16,8 +16,8 @@ import { createRef, useState } from "react";
 
 jest.mock("@/components/event/CreateEventClient", () => ({
   __esModule: true,
-  default: ({ initialEvent, onSaved, onCancel }) => (
-    <div>
+  default: ({ initialEvent, focusRequest, onSaved, onCancel }) => (
+    <div data-testid="event-editor" data-focus-field={focusRequest?.field}>
       <button type="button" onClick={onCancel}>
         Cancel
       </button>
@@ -89,6 +89,18 @@ import {
   selectionFromRecommendation,
   weekStartOf,
 } from "@/lib/meetingWindows";
+
+// Waits until the Time Table shows a finished snapshot (of `revision`, when
+// given): the section names the freshness of what it shows.
+function resultsAreCurrent(revision) {
+  return waitFor(() => {
+    const section = document.querySelector('[data-results-status="fresh"]');
+    expect(section).toBeInTheDocument();
+    if (revision !== undefined) {
+      expect(section).toHaveAttribute("data-results-revision", `${revision}`);
+    }
+  });
+}
 
 const getToken = jest.fn().mockResolvedValue("token");
 const baseEvent = {
@@ -979,16 +991,22 @@ test("managed schedule drawer explains who can edit each kind of participant", (
   );
 });
 
-test("managed schedule drawer locks editing while left out, saving, closed, or conflicted", () => {
+test("managed schedule drawer locks editing while saving, closed, or conflicted, but not while left out", () => {
   const onCountIn = jest.fn();
   const { rerender } = renderDrawer({ leftOut: true, onCountIn });
   expect(screen.getByRole("status")).toHaveTextContent(
-    "Temporary Taylor is left out of the results, so their schedule can't change.",
+    "Temporary Taylor is left out of the results, so their answers don't count.",
   );
-  expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+  // Leaving someone out only changes the results; their schedule still saves.
+  expect(
+    within(
+      screen.getByRole("group", { name: "Availability status" }),
+    ).getByRole("button", { name: "Busy" }),
+  ).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled();
   expect(
     screen.getByRole("button", { name: "Submit on behalf" }),
-  ).toBeDisabled();
+  ).toBeEnabled();
   expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
   fireEvent.click(screen.getByRole("button", { name: "Count them again" }));
   expect(onCountIn).toHaveBeenCalledTimes(1);
@@ -1075,7 +1093,7 @@ test("managed schedule drawer keeps Count them again off while the roster cannot
     onCountIn,
   });
   expect(screen.getByRole("status")).toHaveTextContent(
-    "Temporary Taylor is left out of the results, so their schedule can't change.",
+    "Temporary Taylor is left out of the results, so their answers don't count.",
   );
   expect(countIn()).toBeDisabled();
   fireEvent.click(countIn());
@@ -1245,6 +1263,97 @@ test.each([
   expect(screen.getByRole("button", { name: "Edit event" })).toBeDisabled();
 });
 
+test.each([
+  [
+    "a finalized event",
+    { status: "finalized" },
+    "Reactivate this finalized event before editing it.",
+  ],
+  [
+    "an archived event",
+    { status: "archived" },
+    "Reactivate this archived event before editing it.",
+  ],
+  [
+    "an event with a confirmed meeting",
+    { finalMeeting: { id: "final-1" } },
+    "Reactivate the event before editing a confirmed meeting.",
+  ],
+])(
+  "overview says why %s cannot be edited, in the page itself",
+  (_label, overrides, reason) => {
+    render(<OverviewPanel event={{ ...baseEvent, ...overrides }} />);
+
+    expect(
+      screen.getByText(
+        `Review the event schedule and response settings. ${reason}`,
+      ),
+    ).toBeInTheDocument();
+  },
+);
+
+test("the overview opens its inline editor when the workspace asks it to", async () => {
+  const ref = createRef();
+  render(
+    <OverviewPanel ref={ref} event={baseEvent} onEventSaved={jest.fn()} />,
+  );
+  expect(
+    screen.queryByRole("region", { name: "Edit event" }),
+  ).not.toBeInTheDocument();
+
+  act(() => ref.current.edit());
+
+  expect(
+    await screen.findByRole("region", { name: "Edit event" }),
+  ).toBeInTheDocument();
+  await waitFor(() =>
+    expect(screen.getByRole("heading", { name: "Edit event" })).toHaveFocus(),
+  );
+});
+
+test("the overview opens the editor on the deadline when that is what was asked for", async () => {
+  const ref = createRef();
+  render(
+    <OverviewPanel ref={ref} event={baseEvent} onEventSaved={jest.fn()} />,
+  );
+
+  act(() => ref.current.edit({ field: "deadline" }));
+  const editor = await screen.findByTestId("event-editor");
+  expect(editor).toHaveAttribute("data-focus-field", "deadline");
+  // The field takes the focus, not the editor's heading.
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 5));
+  });
+  expect(screen.getByRole("heading", { name: "Edit event" })).not.toHaveFocus();
+
+  // Closing and opening it again through the button starts from the top.
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await userEvent.click(screen.getByRole("button", { name: "Edit event" }));
+  expect(await screen.findByTestId("event-editor")).not.toHaveAttribute(
+    "data-focus-field",
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("heading", { name: "Edit event" })).toHaveFocus(),
+  );
+});
+
+test("the overview does not open an editor for an event that cannot be edited", () => {
+  const ref = createRef();
+  render(
+    <OverviewPanel
+      ref={ref}
+      event={{ ...baseEvent, status: "finalized" }}
+      onEventSaved={jest.fn()}
+    />,
+  );
+
+  act(() => ref.current.edit());
+
+  expect(
+    screen.queryByRole("region", { name: "Edit event" }),
+  ).not.toBeInTheDocument();
+});
+
 test("event controls close an active event without a reminders button", async () => {
   const setEvent = jest.fn();
   const setDeliveryRequest = jest.fn();
@@ -1279,6 +1388,26 @@ test("event controls close an active event without a reminders button", async ()
   await userEvent.click(
     within(controls).getByRole("button", { name: "Close responses" }),
   );
+  // What closing does is put to the organizer first; declining changes
+  // nothing.
+  let dialog = await screen.findByRole("dialog", { name: "Close responses?" });
+  expect(dialog).toHaveTextContent(
+    "Nobody can submit or change a schedule while responses are closed",
+  );
+  expect(dialog).toHaveTextContent(
+    "Invitation and reminder emails still waiting to go out are canceled and automatic reminders stop.",
+  );
+  await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(updateEventLifecycle).not.toHaveBeenCalled();
+
+  await userEvent.click(
+    within(controls).getByRole("button", { name: "Close responses" }),
+  );
+  dialog = await screen.findByRole("dialog", { name: "Close responses?" });
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Close responses" }),
+  );
   await waitFor(() =>
     expect(updateEventLifecycle).toHaveBeenCalledWith(
       baseEvent.code,
@@ -1288,6 +1417,9 @@ test("event controls close an active event without a reminders button", async ()
   );
   expect(setEvent).toHaveBeenCalledWith(
     expect.objectContaining({ status: "closed" }),
+  );
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
   );
 });
 
@@ -1491,7 +1623,176 @@ test("event controls surface lifecycle errors", async () => {
     />,
   );
   await userEvent.click(screen.getByRole("button", { name: "Archive event" }));
+  await userEvent.click(
+    within(
+      await screen.findByRole("dialog", { name: "Archive this event?" }),
+    ).getByRole("button", { name: "Archive event" }),
+  );
   expect(await screen.findByRole("alert")).toHaveTextContent("cannot archive");
+  // The failure is reported where the buttons are, not behind the dialog.
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+test("archiving says what it does to a live event's emails and asks first", async () => {
+  const setEvent = jest.fn();
+  updateEventLifecycle.mockResolvedValueOnce({
+    event: { ...baseEvent, status: "archived", version: 5 },
+  });
+  render(
+    <EventControls
+      event={baseEvent}
+      setEvent={setEvent}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "Archive event" }));
+  let dialog = await screen.findByRole("dialog", {
+    name: "Archive this event?",
+  });
+  expect(dialog).toHaveTextContent(
+    "The event becomes read-only and moves to Archived on your dashboard. People can no longer respond.",
+  );
+  expect(dialog).toHaveTextContent(
+    "Invitation and reminder emails still waiting to go out are canceled. Nobody is emailed about the change, and you can reactivate the event at any time.",
+  );
+  await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(updateEventLifecycle).not.toHaveBeenCalled();
+
+  await userEvent.click(screen.getByRole("button", { name: "Archive event" }));
+  dialog = await screen.findByRole("dialog", { name: "Archive this event?" });
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Archive event" }),
+  );
+  await waitFor(() =>
+    expect(updateEventLifecycle).toHaveBeenCalledWith(
+      baseEvent.code,
+      expect.objectContaining({ status: "archived", expectedVersion: 4 }),
+      "token",
+    ),
+  );
+  expect(setEvent).toHaveBeenCalledWith(
+    expect.objectContaining({ status: "archived" }),
+  );
+});
+
+test("archiving a finalized event leaves its confirmed meeting standing and says so", async () => {
+  const setEvent = jest.fn();
+  const setDeliveryRequest = jest.fn();
+  const finalized = {
+    ...baseEvent,
+    status: "finalized",
+    finalMeeting: { id: "final-1", active: true },
+  };
+  updateEventLifecycle.mockResolvedValueOnce({
+    event: { ...finalized, status: "archived", version: 5 },
+  });
+  render(
+    <EventControls
+      event={finalized}
+      setEvent={setEvent}
+      getToken={getToken}
+      setDeliveryRequest={setDeliveryRequest}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "Archive event" }));
+  const dialog = await screen.findByRole("dialog", {
+    name: "Archive this event?",
+  });
+  expect(dialog).toHaveTextContent(
+    "The confirmed meeting stays as it is and nobody is emailed. Reactivating the event later cancels it and emails the people it reached.",
+  );
+  // A finalized event was not collecting responses, so nothing is stopped.
+  expect(dialog).not.toHaveTextContent("People can no longer respond.");
+  expect(dialog).not.toHaveTextContent("still waiting to go out");
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Archive event" }),
+  );
+  await waitFor(() =>
+    expect(updateEventLifecycle).toHaveBeenCalledWith(
+      baseEvent.code,
+      expect.objectContaining({ status: "archived" }),
+      "token",
+    ),
+  );
+  expect(setDeliveryRequest).not.toHaveBeenCalled();
+});
+
+test("archiving a closed event without a meeting promises no email cancellations", async () => {
+  render(
+    <EventControls
+      event={{ ...baseEvent, status: "closed" }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "Archive event" }));
+  const dialog = await screen.findByRole("dialog", {
+    name: "Archive this event?",
+  });
+  expect(dialog).toHaveTextContent(
+    "Nobody is emailed about the change, and you can reactivate the event at any time.",
+  );
+  expect(dialog).not.toHaveTextContent("People can no longer respond.");
+  expect(dialog).not.toHaveTextContent("still waiting to go out");
+});
+
+test("an archived event with a confirmed meeting says the meeting still stands", () => {
+  render(
+    <EventControls
+      event={{
+        ...baseEvent,
+        status: "archived",
+        finalMeeting: { id: "final-1", active: true },
+      }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+    />,
+  );
+
+  expect(
+    screen.getByText(
+      "This event is archived. The confirmed meeting still stands.",
+    ),
+  ).toBeInTheDocument();
+});
+
+test("reactivating an archived event that holds a confirmed meeting reviews the cancellations first", async () => {
+  previewEventLifecycle.mockResolvedValueOnce({
+    cancellation: {
+      recipientCount: 2,
+      email: previewEmail({ subject: "Scale event was canceled" }),
+      sample: { name: "Ada Lovelace", email: "ada@example.com" },
+    },
+  });
+  render(
+    <EventControls
+      event={{
+        ...baseEvent,
+        status: "archived",
+        finalMeeting: { id: "final-1", active: true },
+      }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+    />,
+  );
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Reactivate event" }),
+  );
+  const dialog = await screen.findByRole("dialog", {
+    name: "Reopen scheduling",
+  });
+  expect(dialog).toHaveTextContent(
+    "2 people who received the confirmation will be told the meeting is canceled.",
+  );
+  expect(updateEventLifecycle).not.toHaveBeenCalled();
 });
 
 const LIFECYCLE_SUMMARIES = {
@@ -1644,6 +1945,11 @@ test("closing responses does not report a reactivation", async () => {
   await userEvent.click(
     screen.getByRole("button", { name: "Close responses" }),
   );
+  await userEvent.click(
+    within(
+      await screen.findByRole("dialog", { name: "Close responses?" }),
+    ).getByRole("button", { name: "Close responses" }),
+  );
 
   await waitFor(() =>
     expect(setEvent).toHaveBeenCalledWith(
@@ -1651,6 +1957,158 @@ test("closing responses does not report a reactivation", async () => {
     ),
   );
   expect(onReactivated).not.toHaveBeenCalled();
+});
+
+test("an active event past its deadline says nobody can respond and offers to change the deadline", async () => {
+  const onEditDeadline = jest.fn();
+  const { rerender } = render(
+    <EventControls
+      event={{ ...baseEvent, responseDeadline: "2020-01-01T00:00:00Z" }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+      onEditDeadline={onEditDeadline}
+    />,
+  );
+
+  const controls = screen.getByRole("region", { name: "Event controls" });
+  const lifecycle = within(controls).getByText(
+    "The response deadline has passed, so people can no longer respond.",
+  );
+  expect(lifecycle).toHaveAttribute("role", "status");
+  expect(
+    screen.queryByText("This event is active and accepting responses."),
+  ).not.toBeInTheDocument();
+  await userEvent.click(
+    within(controls).getByRole("button", { name: "Change deadline" }),
+  );
+  expect(onEditDeadline).toHaveBeenCalledTimes(1);
+
+  // Without a place to change it, the sentence stands on its own.
+  rerender(
+    <EventControls
+      event={{ ...baseEvent, responseDeadline: "2020-01-01T00:00:00Z" }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+    />,
+  );
+  expect(
+    within(controls).queryByRole("button", { name: "Change deadline" }),
+  ).not.toBeInTheDocument();
+});
+
+test("a deadline still ahead keeps the accepting-responses sentence", () => {
+  render(
+    <EventControls
+      event={{
+        ...baseEvent,
+        responseDeadline: new Date(Date.now() + 86400000).toISOString(),
+      }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+      onEditDeadline={jest.fn()}
+    />,
+  );
+
+  expect(
+    screen.getByText("This event is active and accepting responses."),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Change deadline" }),
+  ).not.toBeInTheDocument();
+});
+
+test("reactivating past an old deadline says it was removed, until a new one is set", async () => {
+  const onEditDeadline = jest.fn();
+  updateEventLifecycle.mockResolvedValueOnce({
+    event: {
+      ...baseEvent,
+      status: "active",
+      version: 6,
+      responseDeadline: null,
+    },
+  });
+  function Harness() {
+    const [event, setEvent] = useState({
+      ...baseEvent,
+      status: "closed",
+      version: 5,
+      responseDeadline: "2020-01-01T00:00:00Z",
+    });
+    return (
+      <>
+        <EventControls
+          event={event}
+          setEvent={setEvent}
+          getToken={getToken}
+          setDeliveryRequest={jest.fn()}
+          onEditDeadline={onEditDeadline}
+        />
+        <button
+          type="button"
+          onClick={() =>
+            setEvent((current) => ({
+              ...current,
+              responseDeadline: "2099-01-01T00:00:00Z",
+            }))
+          }
+        >
+          Set deadline elsewhere
+        </button>
+      </>
+    );
+  }
+  render(<Harness />);
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Reactivate event" }),
+  );
+  expect(updateEventLifecycle).toHaveBeenCalledWith(
+    baseEvent.code,
+    expect.objectContaining({ status: "active", responseDeadline: null }),
+    "token",
+  );
+  expect(
+    await screen.findByText(
+      "Responses are open again. The old deadline had passed, so it was removed.",
+    ),
+  ).toBeInTheDocument();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Set a new deadline" }),
+  );
+  expect(onEditDeadline).toHaveBeenCalledTimes(1);
+
+  // Once the event has a deadline again, the reminder goes away.
+  await userEvent.click(
+    screen.getByRole("button", { name: "Set deadline elsewhere" }),
+  );
+  expect(
+    screen.queryByText(/The old deadline had passed/),
+  ).not.toBeInTheDocument();
+});
+
+test("a reactivation that removed no deadline shows no notice", async () => {
+  updateEventLifecycle.mockResolvedValueOnce({
+    event: { ...baseEvent, status: "active", version: 6 },
+  });
+  render(
+    <StatefulEventControls
+      initialEvent={{ ...baseEvent, status: "closed", version: 5 }}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+      onEditDeadline={jest.fn()}
+    />,
+  );
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Reactivate event" }),
+  );
+  await screen.findByText("This event is active and accepting responses.");
+  expect(
+    screen.queryByText(/The old deadline had passed/),
+  ).not.toBeInTheDocument();
 });
 
 test("a rejected reactivation shows the error and reports nothing", async () => {
@@ -1703,6 +2161,12 @@ test("results support the legacy envelope and failed or empty snapshots", async 
       requestedRevision: 6,
       computedRevision: 5,
       results: { recommendations: [] },
+    })
+    .mockResolvedValueOnce({
+      status: "failed",
+      requestedRevision: 6,
+      computedRevision: null,
+      results: null,
     });
   const onChoose = jest.fn();
   const { rerender } = render(
@@ -1713,9 +2177,11 @@ test("results support the legacy envelope and failed or empty snapshots", async 
       onChoose={onChoose}
     />,
   );
-  expect(
-    await screen.findByText(/Results are current at revision 5/),
-  ).toBeInTheDocument();
+  await resultsAreCurrent(5);
+  // A current snapshot needs no notice: the calendar and lists speak for it,
+  // and the section only names its freshness for assistive tooling.
+  expect(screen.queryByText(/Results are current/)).not.toBeInTheDocument();
+  expect(document.querySelector(".alert")).not.toBeInTheDocument();
   // baseEvent has no slotGroups: the calendar falls back to its empty state
   // while the ranked list still lists the legacy recommendation.
   expect(
@@ -1742,12 +2208,27 @@ test("results support the legacy envelope and failed or empty snapshots", async 
       onChoose={onChoose}
     />,
   );
-  expect(
-    await screen.findByText(/Result calculation failed/),
-  ).toBeInTheDocument();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "The results could not be calculated. It will be retried automatically; the last calculated results stay on screen.",
+  );
   expect(
     screen.getByText("No valid meeting window is available yet."),
   ).toBeInTheDocument();
+
+  // With nothing calculated yet there are no earlier results to promise.
+  rerender(
+    <ResultsSnapshotPanel
+      event={baseEvent}
+      getToken={getToken}
+      invalidationKey={2}
+      onChoose={onChoose}
+    />,
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /^The results could not be calculated\. It will be retried automatically\.$/,
+    ),
+  );
 });
 
 test("results expose request failures", async () => {
@@ -1766,7 +2247,7 @@ test("results expose request failures", async () => {
 });
 
 test("finalize handles nested attendance, delivery progress, and confirmation errors", async () => {
-  previewFinalMeeting.mockResolvedValueOnce({
+  previewFinalMeeting.mockResolvedValue({
     finalMeeting: { attendance: { availableParticipantTotal: 4 } },
     recipientCount: 0,
     email: null,
@@ -1791,9 +2272,7 @@ test("finalize handles nested attendance, delivery progress, and confirmation er
   fireEvent.change(screen.getByLabelText("Location or meeting link"), {
     target: { value: "https://meet.example/scale" },
   });
-  await userEvent.click(
-    screen.getByRole("button", { name: "Review attendance" }),
-  );
+  // The attendance is read as soon as the time is picked.
   expect(await screen.findByText("4")).toBeInTheDocument();
   await userEvent.click(
     screen.getByRole("button", { name: "Finalize meeting" }),
@@ -1869,8 +2348,8 @@ test("finalize handles nested attendance, delivery progress, and confirmation er
   ).not.toBeInTheDocument();
 });
 
-test("finalize reviews the confirmation email the reviewed attendance came with", async () => {
-  previewFinalMeeting.mockResolvedValueOnce({
+test("finalize reviews the confirmation email for the meeting as it stands when Finalize is clicked", async () => {
+  previewFinalMeeting.mockResolvedValue({
     attendance: { availableParticipantTotal: 3 },
     recipientCount: 3,
     email: previewEmail(),
@@ -1895,19 +2374,45 @@ test("finalize reviews the confirmation email the reviewed attendance came with"
       onDeliveryRequest={onDeliveryRequest}
     />,
   );
-  expect(
-    screen.getByRole("button", { name: "Finalize meeting" }),
-  ).toBeDisabled();
-  await userEvent.click(
-    screen.getByRole("button", { name: "Review attendance" }),
-  );
+  const finalize = screen.getByRole("button", { name: "Finalize meeting" });
+  // Finalize waits for the attendance, which is read without being asked.
+  expect(finalize).toBeDisabled();
+  expect(screen.getByRole("status")).toHaveTextContent("Reviewing attendance…");
   expect(await screen.findByText("3")).toBeInTheDocument();
-  await userEvent.click(
-    screen.getByRole("button", { name: "Finalize meeting" }),
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Attendance review is current for this candidate.",
   );
-  // The reply to Review attendance already carries the email: no new ask.
+  expect(finalize).toBeEnabled();
   expect(previewFinalMeeting).toHaveBeenCalledTimes(1);
+  // The time alone is what the attendance depends on: no location goes with it.
+  expect(previewFinalMeeting).toHaveBeenLastCalledWith(
+    baseEvent.code,
+    {
+      startsAt: recommendation.startsAt,
+      endsAt: recommendation.endsAt,
+      channel: recommendation.channel,
+    },
+    "token",
+  );
+
+  // The confirmation email is asked for at the click, so it shows the
+  // location as typed by then.
+  fireEvent.change(screen.getByLabelText("Location or meeting link"), {
+    target: { value: "Room 9" },
+  });
+  await userEvent.click(finalize);
   const dialog = emailDialog("Finalize meeting");
+  expect(previewFinalMeeting).toHaveBeenCalledTimes(2);
+  expect(previewFinalMeeting).toHaveBeenLastCalledWith(
+    baseEvent.code,
+    {
+      startsAt: recommendation.startsAt,
+      endsAt: recommendation.endsAt,
+      channel: recommendation.channel,
+      location: "Room 9",
+    },
+    "token",
+  );
   expect(dialog).toHaveTextContent(
     "3 invited people will receive the confirmation and a calendar invitation.",
   );
@@ -1936,6 +2441,7 @@ test("finalize reviews the confirmation email the reviewed attendance came with"
       baseEvent.code,
       expect.objectContaining({
         startsAt: recommendation.startsAt,
+        location: "Room 9",
         expectedVersion: 4,
         idempotencyKey: "request-key",
       }),
@@ -1953,7 +2459,7 @@ test("finalize reviews the confirmation email the reviewed attendance came with"
 });
 
 test("finalize reads one confirmation recipient in the singular", async () => {
-  previewFinalMeeting.mockResolvedValueOnce({
+  previewFinalMeeting.mockResolvedValue({
     attendance: { availableParticipantTotal: 1 },
     recipientCount: 1,
     email: previewEmail(),
@@ -1966,9 +2472,6 @@ test("finalize reads one confirmation recipient in the singular", async () => {
       getToken={getToken}
       selection={recommendation}
     />,
-  );
-  await userEvent.click(
-    screen.getByRole("button", { name: "Review attendance" }),
   );
   await screen.findByRole("group", { name: "Attendance review" });
   await userEvent.click(
@@ -1992,31 +2495,23 @@ test("finalize reads one confirmation recipient in the singular", async () => {
   ).toBeInTheDocument();
 });
 
-test("finalize drops a review that answers after the location changed and sends the location reviewed", async () => {
-  // The first review is still out when the location is edited: its reply
-  // (for the old location) must not offer Finalize, whether it answers or
-  // fails.
+test("finalize finalizes the meeting whose confirmation email was reviewed", async () => {
+  // The email is asked for at the click: the location it was asked for is the
+  // one Finalize sends, and the field waits while that is on its way.
   let answer;
-  let failure;
   previewFinalMeeting
+    .mockResolvedValueOnce({
+      attendance: { availableParticipantTotal: 2 },
+      recipientCount: 2,
+      email: previewEmail(),
+      sample: null,
+    })
     .mockImplementationOnce(
       () =>
         new Promise((resolve) => {
           answer = resolve;
         }),
-    )
-    .mockImplementationOnce(
-      () =>
-        new Promise((_resolve, reject) => {
-          failure = reject;
-        }),
-    )
-    .mockResolvedValueOnce({
-      attendance: { availableParticipantTotal: 2 },
-      recipientCount: 2,
-      email: previewEmail({ text: "Location: Room 3" }),
-      sample: null,
-    });
+    );
   confirmFinalMeeting.mockResolvedValueOnce({
     event: { ...baseEvent, status: "finalized" },
   });
@@ -2029,71 +2524,38 @@ test("finalize drops a review that answers after the location changed and sends 
     />,
   );
   const location = screen.getByLabelText("Location or meeting link");
-  const review = screen.getByRole("button", { name: "Review attendance" });
-  const finalize = screen.getByRole("button", { name: "Finalize meeting" });
+  await screen.findByRole("group", { name: "Attendance review" });
 
   fireEvent.change(location, { target: { value: "Room 1" } });
-  await userEvent.click(review);
-  await waitFor(() =>
-    expect(previewFinalMeeting).toHaveBeenLastCalledWith(
-      baseEvent.code,
-      expect.objectContaining({ location: "Room 1" }),
-      "token",
-    ),
+  await userEvent.click(
+    screen.getByRole("button", { name: "Finalize meeting" }),
   );
-  fireEvent.change(location, { target: { value: "Room 2" } });
+  expect(location).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Preparing…" })).toBeDisabled();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   await act(async () =>
     answer({
-      attendance: { availableParticipantTotal: 9 },
-      recipientCount: 9,
+      attendance: { availableParticipantTotal: 2 },
+      recipientCount: 2,
       email: previewEmail({ text: "Location: Room 1" }),
       sample: null,
     }),
   );
-  expect(
-    screen.queryByRole("group", { name: "Attendance review" }),
-  ).not.toBeInTheDocument();
-  expect(screen.queryByRole("status")).not.toBeInTheDocument();
-  expect(finalize).toBeDisabled();
-  expect(review).toBeEnabled();
-
-  await userEvent.click(review);
-  await waitFor(() =>
-    expect(previewFinalMeeting).toHaveBeenLastCalledWith(
-      baseEvent.code,
-      expect.objectContaining({ location: "Room 2" }),
-      "token",
-    ),
-  );
-  fireEvent.change(location, { target: { value: "Room 3" } });
-  await act(async () => failure(new Error("review for Room 2 failed")));
-  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  expect(finalize).toBeDisabled();
-
-  await userEvent.click(review);
-  await screen.findByRole("group", { name: "Attendance review" });
-  expect(previewFinalMeeting).toHaveBeenCalledTimes(3);
-  expect(previewFinalMeeting).toHaveBeenLastCalledWith(
-    baseEvent.code,
-    expect.objectContaining({ location: "Room 3" }),
-    "token",
-  );
-  await userEvent.click(finalize);
   const dialog = emailDialog("Finalize meeting");
+  expect(location).toBeEnabled();
   expect(dialog).toHaveTextContent(
     "2 invited people will receive the confirmation and a calendar invitation.",
   );
   await userEvent.click(
     within(dialog).getByRole("tab", { name: "Plain text" }),
   );
-  expect(dialog).toHaveTextContent("Location: Room 3");
+  expect(dialog).toHaveTextContent("Location: Room 1");
   await userEvent.click(
     within(dialog).getByRole("button", { name: "Continue" }),
   );
   await userEvent.click(
     within(dialog).getByRole("button", { name: "Finalize and send 2 emails" }),
   );
-  // The meeting finalized is the one whose email was reviewed.
   await waitFor(() =>
     expect(confirmFinalMeeting).toHaveBeenCalledWith(
       baseEvent.code,
@@ -2101,7 +2563,7 @@ test("finalize drops a review that answers after the location changed and sends 
         startsAt: recommendation.startsAt,
         endsAt: recommendation.endsAt,
         channel: recommendation.channel,
-        location: "Room 3",
+        location: "Room 1",
         expectedVersion: 4,
         idempotencyKey: "request-key",
       },
@@ -2110,29 +2572,206 @@ test("finalize drops a review that answers after the location changed and sends 
   );
 });
 
+test("finalize reports a confirmation email it could not prepare and lets the organizer click again", async () => {
+  const reply = {
+    attendance: { availableParticipantTotal: 2 },
+    recipientCount: 2,
+    email: previewEmail(),
+    sample: null,
+  };
+  previewFinalMeeting
+    .mockResolvedValueOnce(reply)
+    .mockRejectedValueOnce(new Error("preview unavailable"))
+    .mockRejectedValueOnce(new Error(""))
+    .mockResolvedValueOnce(reply);
+  renderFinalize(recommendation);
+  await screen.findByRole("group", { name: "Attendance review" });
+  const finalize = screen.getByRole("button", { name: "Finalize meeting" });
+
+  await userEvent.click(finalize);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "preview unavailable",
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  // The attendance stays; only the email review is missing.
+  expect(
+    screen.getByRole("group", { name: "Attendance review" }),
+  ).toBeInTheDocument();
+  expect(finalize).toBeEnabled();
+
+  await userEvent.click(finalize);
+  await waitFor(() =>
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Unable to review this meeting time.",
+    ),
+  );
+
+  await userEvent.click(finalize);
+  expect(emailDialog("Finalize meeting")).toBeInTheDocument();
+  expect(previewFinalMeeting).toHaveBeenCalledTimes(4);
+});
+
 test("finalize refuses a review reply that does not say who would be emailed", async () => {
   // A reply without `recipientCount` (an older server) says nothing about
   // the confirmation email, so it must not read as "nobody is emailed".
-  previewFinalMeeting.mockResolvedValueOnce({
+  previewFinalMeeting.mockResolvedValue({
     attendance: { availableParticipantTotal: 4 },
   });
   renderFinalize(recommendation);
+  // The attendance needs no count of recipients.
+  expect(await screen.findByText("4")).toBeInTheDocument();
   await userEvent.click(
-    screen.getByRole("button", { name: "Review attendance" }),
+    screen.getByRole("button", { name: "Finalize meeting" }),
   );
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "Unable to check who would get the confirmation email.",
   );
-  expect(
-    screen.queryByRole("group", { name: "Attendance review" }),
-  ).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+test("finalize reads the attendance again when the results move on, and drops the reply for results that were left", async () => {
+  let answerFirst;
+  previewFinalMeeting
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answerFirst = resolve;
+        }),
+    )
+    .mockResolvedValueOnce({ attendance: { availableParticipantTotal: 5 } });
+  const panel = (resultsRevision) => (
+    <FinalizeScalePanel
+      event={{ ...baseEvent, resultsRevision }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      selection={recommendation}
+    />
+  );
+  const { rerender } = render(panel(3));
+  await waitFor(() => expect(previewFinalMeeting).toHaveBeenCalledTimes(1));
+  expect(screen.getByRole("status")).toHaveTextContent("Reviewing attendance…");
   expect(
     screen.getByRole("button", { name: "Finalize meeting" }),
   ).toBeDisabled();
+
+  // The results move on while the first reading is still out: when it comes,
+  // it describes results that are gone.
+  rerender(panel(4));
+  expect(await screen.findByText("5")).toBeInTheDocument();
+  await act(async () =>
+    answerFirst({ attendance: { availableParticipantTotal: 9 } }),
+  );
+  expect(screen.queryByText("9")).not.toBeInTheDocument();
+  expect(screen.getByText("5")).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Attendance review is current for this candidate.",
+  );
+  expect(previewFinalMeeting).toHaveBeenCalledTimes(2);
+
+  // New results after that: the counts on screen are read again, and
+  // Finalize waits for them.
+  previewFinalMeeting.mockResolvedValueOnce({
+    attendance: { availableParticipantTotal: 6 },
+  });
+  rerender(panel(5));
+  expect(screen.getByRole("status")).toHaveTextContent("Reviewing attendance…");
+  expect(
+    screen.getByRole("button", { name: "Finalize meeting" }),
+  ).toBeDisabled();
+  expect(await screen.findByText("6")).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Attendance review is current for this candidate.",
+  );
+  expect(
+    screen.getByRole("button", { name: "Finalize meeting" }),
+  ).toBeEnabled();
+  expect(previewFinalMeeting).toHaveBeenCalledTimes(3);
+});
+
+test("finalize leaves the attendance reading behind when another time is picked", async () => {
+  let answerFirst;
+  previewFinalMeeting
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answerFirst = resolve;
+        }),
+    )
+    .mockResolvedValueOnce({ attendance: { availableParticipantTotal: 5 } });
+  const other = {
+    ...recommendation,
+    startsAt: "2026-09-02T09:00:00Z",
+    endsAt: "2026-09-02T10:00:00Z",
+    label: "Other time",
+  };
+  const panel = (selection) => (
+    <FinalizeScalePanel
+      event={baseEvent}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      selection={selection}
+    />
+  );
+  const { rerender } = render(panel(recommendation));
+  await waitFor(() => expect(previewFinalMeeting).toHaveBeenCalledTimes(1));
+
+  rerender(panel(other));
+  expect(await screen.findByText("5")).toBeInTheDocument();
+  await act(async () =>
+    answerFirst({ attendance: { availableParticipantTotal: 9 } }),
+  );
+  expect(screen.queryByText("9")).not.toBeInTheDocument();
+  expect(previewFinalMeeting).toHaveBeenLastCalledWith(
+    baseEvent.code,
+    {
+      startsAt: other.startsAt,
+      endsAt: other.endsAt,
+      channel: other.channel,
+    },
+    "token",
+  );
+});
+
+test("finalize keeps the location typed while different times are compared", async () => {
+  previewFinalMeeting.mockResolvedValue({
+    attendance: { availableParticipantTotal: 1 },
+    recipientCount: 0,
+  });
+  const other = {
+    ...recommendation,
+    startsAt: "2026-09-02T09:00:00Z",
+    endsAt: "2026-09-02T10:00:00Z",
+  };
+  const panel = (selection, event = baseEvent) => (
+    <FinalizeScalePanel
+      event={event}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      selection={selection}
+    />
+  );
+  const { rerender } = render(panel(recommendation));
+  // Until something is typed the field shows the event's own location.
+  expect(screen.getByLabelText("Location or meeting link")).toHaveValue(
+    "Room 4",
+  );
+  rerender(panel(recommendation, { ...baseEvent, location: "Room 5" }));
+  expect(screen.getByLabelText("Location or meeting link")).toHaveValue(
+    "Room 5",
+  );
+
+  fireEvent.change(screen.getByLabelText("Location or meeting link"), {
+    target: { value: "Room 7" },
+  });
+  rerender(panel(other));
+  expect(screen.getByLabelText("Location or meeting link")).toHaveValue(
+    "Room 7",
+  );
+  await screen.findByRole("group", { name: "Attendance review" });
 });
 
 test("the finalize dialog is drawn on the page body, outside a sticky ancestor", async () => {
-  previewFinalMeeting.mockResolvedValueOnce({
+  previewFinalMeeting.mockResolvedValue({
     attendance: { availableParticipantTotal: 1 },
     recipientCount: 1,
     email: previewEmail(),
@@ -2148,9 +2787,6 @@ test("the finalize dialog is drawn on the page body, outside a sticky ancestor",
       />
     </div>,
   );
-  await userEvent.click(
-    screen.getByRole("button", { name: "Review attendance" }),
-  );
   await screen.findByRole("group", { name: "Attendance review" });
   await userEvent.click(
     screen.getByRole("button", { name: "Finalize meeting" }),
@@ -2163,7 +2799,7 @@ test("the finalize dialog is drawn on the page body, outside a sticky ancestor",
 });
 
 test("a meeting finalized elsewhere closes an open finalize review and hands focus to Download", async () => {
-  previewFinalMeeting.mockResolvedValueOnce({
+  previewFinalMeeting.mockResolvedValue({
     attendance: { availableParticipantTotal: 1 },
     recipientCount: 1,
     email: previewEmail(),
@@ -2183,9 +2819,6 @@ test("a meeting finalized elsewhere closes an open finalize review and hands foc
       getToken={getToken}
       selection={recommendation}
     />,
-  );
-  await userEvent.click(
-    screen.getByRole("button", { name: "Review attendance" }),
   );
   await screen.findByRole("group", { name: "Attendance review" });
   await userEvent.click(
@@ -2273,7 +2906,7 @@ test("finalized organizers can download ICS and see download errors", async () =
   click.mockRestore();
 });
 
-test("finalize empty and inactive states point at the calendar and block review", async () => {
+test("finalize empty and inactive states point at the calendar and block finalizing", async () => {
   const headingRef = createRef();
   const { rerender } = render(
     <FinalizeScalePanel
@@ -2307,8 +2940,12 @@ test("finalize empty and inactive states point at the calendar and block review"
   );
   expect(screen.getByRole("note")).toHaveTextContent("Reactivate this event");
   expect(
-    screen.getByRole("button", { name: "Review attendance" }),
+    screen.getByRole("button", { name: "Finalize meeting" }),
   ).toBeDisabled();
+  // Nothing about the picked time is asked for on an event that can't be
+  // finalized.
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  expect(previewFinalMeeting).not.toHaveBeenCalled();
 });
 
 const calendarSelection = {
@@ -2349,7 +2986,7 @@ test("finalize describes a custom calendar window with its estimated availabilit
   expect(screen.getByText("In person")).toBeInTheDocument();
   expect(
     screen.getByText(
-      "Up to 75% weighted · 70% unweighted across this window (its lowest slot; people must be free for all of it). Exact attendance counts appear after Review attendance.",
+      "Up to 75% weighted · 70% unweighted across this window (its lowest slot; people must be free for all of it).",
     ),
   ).toBeInTheDocument();
   expect(
@@ -2365,10 +3002,8 @@ test("finalize describes a custom calendar window with its estimated availabilit
     document.querySelector("#organizer-finalize > summary"),
   ).toHaveTextContent(/Selected · .*9:00 AM/);
 
-  // The calendar window's instants are sent verbatim.
-  await userEvent.click(
-    screen.getByRole("button", { name: "Review attendance" }),
-  );
+  // The calendar window's instants are sent verbatim, as soon as it is
+  // picked: the attendance is asked for before any location is.
   await waitFor(() =>
     expect(previewFinalMeeting).toHaveBeenCalledWith(
       baseEvent.code,
@@ -2376,11 +3011,11 @@ test("finalize describes a custom calendar window with its estimated availabilit
         startsAt: "2026-09-01T09:00:00Z",
         endsAt: "2026-09-01T10:00:00Z",
         channel: "inperson",
-        location: "Room 4",
       },
       "token",
     ),
   );
+  expect(previewFinalMeeting).toHaveBeenCalledTimes(1);
   expect(await screen.findByText("3")).toBeInTheDocument();
   // A count-only payload draws the tiles without a per-person table.
   expect(screen.queryByRole("table")).toBeNull();
@@ -2406,6 +3041,12 @@ test("finalize lists attendance by person behind the count tiles", async () => {
           name: "Pat Partly",
           status: "partial",
           minimumAvailability: 0.5,
+        },
+        {
+          participantId: "p-9",
+          name: "Sam Sometimes",
+          status: "partial",
+          minimumAvailability: 0,
         },
         {
           participantId: "p-3",
@@ -2434,10 +3075,6 @@ test("finalize lists attendance by person behind the count tiles", async () => {
   });
   renderFinalize(calendarSelection);
 
-  await userEvent.click(
-    screen.getByRole("button", { name: "Review attendance" }),
-  );
-
   const region = await screen.findByRole("region", {
     name: "Attendance by person",
   });
@@ -2460,9 +3097,10 @@ test("finalize lists attendance by person behind the count tiles", async () => {
           .map((cell) => cell.textContent),
       ]),
   ).toEqual([
-    ["Ada Always", "Submitted", "Fully available · 100%"],
-    ["Pat Partly", "Submitted", "Partly available · 50%"],
-    ["Uma Unable", "Submitted", "Not available · 0%"],
+    ["Ada Always", "Submitted", "Fully available"],
+    ["Pat Partly", "Submitted", "Available if needed"],
+    ["Sam Sometimes", "Submitted", "Available for part of it"],
+    ["Uma Unable", "Submitted", "Not available"],
     ["Nina Noreply", "Not submitted", "—"],
     ["Hank Hidden", "Not included", "Hidden from results"],
     ["Olive Omitted", "Not included", "Excluded by organizer"],
@@ -2504,7 +3142,11 @@ test("finalize shows exact ranked metrics and the rescheduled note", () => {
   ).toBeInTheDocument();
 });
 
-test("finalize explains when a window has no counted responses", () => {
+test("finalize explains when a window has no counted responses", async () => {
+  previewFinalMeeting.mockResolvedValue({
+    attendance: { availableParticipantTotal: 0 },
+    recipientCount: 0,
+  });
   renderFinalize({
     ...calendarSelection,
     metrics: { exact: false, weighted: null, unweighted: null },
@@ -2516,8 +3158,10 @@ test("finalize explains when a window has no counted responses", () => {
   expect(screen.queryByText(/Up to/)).not.toBeInTheDocument();
   expect(screen.queryByText(/weighted/)).not.toBeInTheDocument();
   expect(screen.getByText("Custom window")).toBeInTheDocument();
+  // The organizer may still finalize: the attendance is read like any other.
+  await screen.findByRole("group", { name: "Attendance review" });
   expect(
-    screen.getByRole("button", { name: "Review attendance" }),
+    screen.getByRole("button", { name: "Finalize meeting" }),
   ).toBeEnabled();
 });
 
@@ -2623,7 +3267,10 @@ test("choosing a stale ranked window reveals its next occurrence and keeps it ma
 });
 
 test("finalize lists partial and unavailable counts and reports review failures", async () => {
-  previewFinalMeeting.mockRejectedValueOnce(new Error(""));
+  previewFinalMeeting
+    .mockRejectedValueOnce(new Error("review unavailable"))
+    .mockRejectedValueOnce(new Error(""))
+    .mockResolvedValueOnce({ attendance: { availableParticipantTotal: 2 } });
   renderFinalize({
     ...calendarSelection,
     metrics: {
@@ -2641,12 +3288,33 @@ test("finalize lists partial and unavailable counts and reports review failures"
       "60% weighted · 50% unweighted · 4 fully available · 2 partially available · 1 unavailable",
     ),
   ).toBeInTheDocument();
-  await userEvent.click(
-    screen.getByRole("button", { name: "Review attendance" }),
-  );
   expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Unable to review this meeting time.",
+    "review unavailable",
   );
+  // Finalize needs the attendance it would be confirming.
+  expect(
+    screen.getByRole("button", { name: "Finalize meeting" }),
+  ).toBeDisabled();
+  expect(
+    screen.queryByRole("group", { name: "Attendance review" }),
+  ).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await waitFor(() =>
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Unable to review this meeting time.",
+    ),
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(
+    await screen.findByRole("group", { name: "Attendance review" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Finalize meeting" }),
+  ).toBeEnabled();
+  expect(previewFinalMeeting).toHaveBeenCalledTimes(3);
 });
 
 test("results refresh through the workspace handle and show a finalized event's time zone fallback", async () => {
@@ -2709,7 +3377,7 @@ test("results hand the workspace their freshness and reload silently for it", as
   );
   // Nothing to compare against before the first load lands.
   expect(panel.current.activity()).toBeNull();
-  await screen.findByText(/Results are current at revision 7/);
+  await resultsAreCurrent(7);
   expect(panel.current.activity()).toEqual({
     status: "fresh",
     requestedRevision: 7,
@@ -2746,9 +3414,11 @@ test("results hand the workspace their freshness and reload silently for it", as
     });
     await silent;
   });
-  expect(
-    screen.getByText(/Results are updating for revision 8/),
-  ).toBeInTheDocument();
+  expect(screen.getByText(/Results are updating/)).toBeInTheDocument();
+  // The section names the state and the revision it is showing.
+  const section = document.querySelector("[data-results-status]");
+  expect(section).toHaveAttribute("data-results-status", "refreshing");
+  expect(section).toHaveAttribute("data-results-revision", "7");
   expect(panel.current.activity()).toEqual({
     status: "refreshing",
     requestedRevision: 8,
@@ -2765,9 +3435,7 @@ test("results hand the workspace their freshness and reload silently for it", as
     ).rejects.toThrow("offline");
   });
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  expect(
-    screen.getByText(/Results are updating for revision 8/),
-  ).toBeInTheDocument();
+  expect(screen.getByText(/Results are updating/)).toBeInTheDocument();
 
   // A legacy envelope without freshness fields reports nulls for them.
   fetchEventResults.mockResolvedValueOnce({ results: { recommendations: [] } });
@@ -2780,6 +3448,8 @@ test("results hand the workspace their freshness and reload silently for it", as
     computedRevision: null,
     generatedAt: null,
   });
+  expect(section).toHaveAttribute("data-results-status", "fresh");
+  expect(section).not.toHaveAttribute("data-results-revision");
 });
 
 test("the ranked list is collapsed by default and summarizes the best window", async () => {
@@ -2900,7 +3570,7 @@ test(
       />
     );
     const { rerender } = render(panel(true));
-    await screen.findByText(/Results are updating for revision 8/);
+    await screen.findByText(/Showing the last calculated results meanwhile/);
     expect(fetchEventResults).toHaveBeenCalledTimes(1);
     // With the server pushing changes, the workspace's digest pass reloads
     // the snapshot the moment it is published, so the panel does not poll
@@ -2944,7 +3614,7 @@ test(
     // so the panel tries again on its own ...
     await tick(2000);
     await waitFor(() => expect(fetchEventResults).toHaveBeenCalledTimes(2));
-    await screen.findByText(/Results are updating for revision 8/);
+    await screen.findByText(/Showing the last calculated results meanwhile/);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     // ... and once a load succeeds, it leaves the snapshot to the push.
     await tick(2000);
@@ -3037,13 +3707,16 @@ async function renderRanking(recommendations, basis) {
       onSelect={jest.fn()}
     />,
   );
-  await screen.findByText(/Results are current at revision 2/);
+  await resultsAreCurrent(2);
   const rail = document.querySelector("details.organizer-recommended-times");
   return { ...view, rail, intro: rail.querySelector(".ranked-chips__intro") };
 }
 
 const RANKING_RULE =
   "We recommend times someone can attend for the whole 60 minutes, at least half as available as the best, never overlapping in the same format.";
+const RANKING_SHARES =
+  "Shares count each person for the whole 60 minutes, so they can be lower than the calendar's per-slot shading.";
+const RANKING_OTHER_TIMES = "Other times below lists every open time.";
 const RANKING_POINTER =
   "Point at one to find it on the calendar; click one to select it.";
 
@@ -3069,7 +3742,7 @@ test.each([
       weightedAvailabilityFloor: 0.5,
       nextWeightedAvailability: 0.4286,
     },
-    "The next option drops to 43% weighted, under half of the best.",
+    `The next option drops to 43% weighted, under half of the best. ${RANKING_OTHER_TIMES}`,
   ],
   [
     "the next option rounds to the floor",
@@ -3080,7 +3753,7 @@ test.each([
       weightedAvailabilityFloor: 0.5,
       nextWeightedAvailability: 0.4975,
     },
-    "The next option drops to 49.7% weighted, under half of the best.",
+    `The next option drops to 49.7% weighted, under half of the best. ${RANKING_OTHER_TIMES}`,
   ],
   [
     "a best window under half of the group",
@@ -3091,7 +3764,7 @@ test.each([
       weightedAvailabilityFloor: 0.2,
       nextWeightedAvailability: 0.1,
     },
-    "The next option drops to 10% weighted, under half of the best. No time suits even half of the weighted group; these are the closest.",
+    `The next option drops to 10% weighted, under half of the best. ${RANKING_OTHER_TIMES} No time suits even half of the weighted group; these are the closest.`,
   ],
   [
     "a lone window under half of the group",
@@ -3104,7 +3777,7 @@ test.each([
   async (_case, recommendations, basis, reason) => {
     const { rail, intro } = await renderRanking(recommendations, basis);
     expect(intro).toHaveTextContent(
-      `${RANKING_RULE} ${reason} ${RANKING_POINTER}`,
+      `${RANKING_RULE} ${RANKING_SHARES} ${reason} ${RANKING_POINTER}`,
       { normalizeWhitespace: true },
     );
     expect(
@@ -3128,7 +3801,9 @@ test("a full ranked list reports how many more windows qualified", async () => {
   expect(rail.querySelector("summary")).toHaveTextContent(
     "10 of 12 recommended · best Tue 09:00–10:00",
   );
-  expect(intro).toHaveTextContent("Showing the top 10 of 12.");
+  expect(intro).toHaveTextContent(
+    `Showing the top 10 of 12. ${RANKING_OTHER_TIMES}`,
+  );
   expect(rail.querySelectorAll(".ranked-chip")).toHaveLength(10);
 });
 
@@ -3245,7 +3920,7 @@ test("an older snapshot's 0% padding is neither listed nor outlined", async () =
       },
     });
     render(<ResultsSnapshotPanel {...timeTableProps(datedEvent)} />);
-    await screen.findByText(/Results are updating for revision 7/);
+    await screen.findByText(/Showing the last calculated results meanwhile/);
     const rail = document.querySelector("details.organizer-recommended-times");
     await toggleRecommendedTimes();
     expect(rail.querySelectorAll(".ranked-chip")).toHaveLength(1);
@@ -3326,7 +4001,7 @@ test("a focused recommended time keeps its highlight and focus when a live updat
     render(
       <ResultsSnapshotPanel ref={panel} {...timeTableProps(datedEvent)} />,
     );
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     await toggleRecommendedTimes();
     const rail = document.querySelector("details.organizer-recommended-times");
     const chipFor = (label) =>
@@ -3497,7 +4172,7 @@ const STEP_DESCRIPTION =
 
 test("the blocked-times step starts closed and turns the calendar into the paint surface while open", async () => {
   const { unmount } = renderTimeTable(weeklyEvent);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
 
   const details = blockedTimesDetails();
   expect(details).not.toHaveAttribute("open");
@@ -3585,7 +4260,7 @@ test("the blocked-times step starts closed and turns the calendar into the paint
   // The API always emits `blockedSlots: {}` for a fresh event (truthy, but
   // empty): still closed, still nothing to save.
   const { unmount: unmountEmpty } = renderTimeTable(blockedWeeklyEvent({}));
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   expect(blockedTimesDetails()).not.toHaveAttribute("open");
   expect(blockedTimesDetails()).toHaveTextContent("0 slots blocked");
   await openBlockedTimes();
@@ -3593,7 +4268,7 @@ test("the blocked-times step starts closed and turns the calendar into the paint
   unmountEmpty();
 
   renderTimeTable(blockedWeeklyEvent({ "weekday:1": [1], "weekday:3": [2] }));
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   expect(blockedTimesDetails()).not.toHaveAttribute("open");
   expect(blockedTimesDetails()).toHaveTextContent("2 slots blocked");
   // Closed: the calendar shows the stored blocks as blocked slots.
@@ -3642,7 +4317,7 @@ test("the blocked-times step counts blocked rows defensively and keeps the discl
     ...weeklyEvent,
     blockedSlots: "not-a-map",
   });
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   expect(blockedTimesDetails()).toHaveTextContent("0 slots blocked");
   expect(blockedTimesDetails()).not.toHaveAttribute("open");
 
@@ -3657,7 +4332,7 @@ test("the blocked-times step counts blocked rows defensively and keeps the discl
     ...weeklyEvent,
     blockedSlots: { "weekday:1": "rows?", "weekday:3": [0, 3] },
   });
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   expect(blockedTimesDetails()).toHaveTextContent("2 slots blocked");
   expect(blockedTimesDetails()).not.toHaveAttribute("open");
 });
@@ -3677,7 +4352,7 @@ test("painting on the calendar saves the marked rows and re-hydrates from the sa
   // `weeklyEvent` omits `slotCount`: the marks fall back to the highest
   // slot index.
   renderStatefulTimeTable(weeklyEvent, onEventSaved);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
 
   paintCell(0);
@@ -3737,7 +4412,7 @@ test("painting on the calendar saves the marked rows and re-hydrates from the sa
 test("the Open brush unmarks on the calendar and Clear all clears every mark", async () => {
   updateEvent.mockResolvedValue({ event: weeklyEvent });
   renderTimeTable(blockedWeeklyEvent({ "weekday:1": [1], "weekday:3": [2] }));
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
   expect(saveButton()).toBeDisabled();
 
@@ -3797,7 +4472,7 @@ test("the blocked-times draft recovers from a conflict by loading the newer even
     }),
   );
   renderStatefulTimeTable(weeklyEvent, onEventSaved);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
 
   paintCell(0);
@@ -3833,7 +4508,7 @@ test("the blocked-times draft keeps unsaved marks across an inline event edit", 
     responsesReset: 0,
   }));
   renderStatefulTimeTable(blockedWeeklyEvent(), onEventSaved);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
 
   paintCell(0);
@@ -3895,7 +4570,7 @@ test("the blocked-times draft announces unsaved marks it discards for a changed 
     })),
   };
   const { rerender } = renderTimeTable(stored);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
   const show = (event) =>
     rerender(<ResultsSnapshotPanel {...timeTableProps(event)} />);
@@ -3962,7 +4637,7 @@ test("the blocked-times draft reloads the page for a conflict without the newer 
     Object.assign(new Error("Version mismatch"), { status: 409 }),
   );
   renderTimeTable(weeklyEvent, { onEventSaved });
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
 
   paintCell(2);
@@ -3994,7 +4669,7 @@ test("the blocked-times draft surfaces other failures without a reload action", 
     )
     .mockRejectedValueOnce(Object.assign(new Error(""), { status: 500 }));
   renderTimeTable(weeklyEvent);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
 
   paintCell(4);
@@ -4043,7 +4718,7 @@ test.each([
   "the blocked-times paint surface is read-only for %s",
   async (_label, overrides, reason) => {
     renderTimeTable(blockedWeeklyEvent({ "weekday:1": [1] }, overrides));
-    await screen.findByText(/Results are current/);
+    await resultsAreCurrent();
     await openBlockedTimes();
 
     expect(saveButton()).toBeDisabled();
@@ -4071,7 +4746,7 @@ test.each([
 test("the blocked-times draft handles events without slot groups or slots", async () => {
   updateEvent.mockResolvedValue({ event: weeklyEvent });
   const { unmount } = renderTimeTable(baseEvent);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   // No slots: the calendar shows its empty state (the only one on screen)
   // and the step has nothing to paint on.
   expect(
@@ -4091,7 +4766,7 @@ test("the blocked-times draft handles events without slot groups or slots", asyn
       ...weeklyEvent.slotGroups.slice(1),
     ],
   });
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
   expect(calendarGrid().querySelectorAll("[data-cell-idx]")).toHaveLength(4);
   expect(screen.getByText("0 slots marked")).toBeInTheDocument();
@@ -4111,7 +4786,7 @@ test("the blocked-times draft handles events without slot groups or slots", asyn
 test("the blocked-times draft stands alone without a lock or a save listener", async () => {
   updateEvent.mockResolvedValue({ event: weeklyEvent });
   renderTimeTable(weeklyEvent);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
 
   // Unlocked by default: no lock title, and the grid takes paint.
@@ -4174,7 +4849,7 @@ test("the blocked-times draft hook defaults to an unlocked, saveable draft", asy
 
 test("the blocked-times tools sit in a bar under the calendar only while the step is open", async () => {
   renderTimeTable(weeklyEvent);
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   expect(
     screen.queryByRole("region", { name: "Blocked times tools" }),
   ).not.toBeInTheDocument();
@@ -4219,7 +4894,7 @@ test("the blocked-times tools sit in a bar under the calendar only while the ste
 test("painting on the calendar never picks a window", async () => {
   const onSelect = jest.fn();
   renderTimeTable(weeklyEvent, { onSelect });
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
   await openBlockedTimes();
 
   paintCell(1);
@@ -4343,7 +5018,7 @@ test("Other times picks any open time with one click, like Recommended times", a
     mockDatedSnapshot();
     const onSelect = jest.fn();
     render(<PickingTimeTable {...timeTableProps(datedEvent, { onSelect })} />);
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const finalize = document.getElementById("organizer-finalize");
     const other = document.getElementById("organizer-other-times");
     expect(finalize).toContainElement(other);
@@ -4361,7 +5036,7 @@ test("Other times picks any open time with one click, like Recommended times", a
 
     await openOtherTimes();
     expect(other).toHaveTextContent(
-      "Any open time the calendar lets you pick, recommended or not. Choose a day, then click a start time: each starts a 60-minute meeting. Shares are weighted, from each time's lowest slot; times are in UTC.",
+      "Any open time the calendar lets you pick, recommended or not. Choose a day, then click a start time: each starts a 60-minute meeting. Recommended times show their exact weighted share; any other shows up to its lowest slot's, since people must be free for all of it. Times are in UTC.",
     );
     // One date: no week stepper, one day, already open.
     expect(
@@ -4373,8 +5048,8 @@ test("Other times picks any open time with one click, like Recommended times", a
     expect(days).toHaveLength(1);
     expect(days[0]).toHaveAttribute("aria-pressed", "true");
 
-    // Every start the calendar would accept, as chips: times, the lowest
-    // slot's share, and the rank when it is also recommended.
+    // Every start the calendar would accept, as chips: times, the weighted
+    // share, and the rank when it is also recommended.
     const list = within(other).getByRole("list", {
       name: /^Start times on /,
     });
@@ -4402,7 +5077,7 @@ test("Other times picks any open time with one click, like Recommended times", a
     expect(chips.map((chip) => chip.tabIndex)).toEqual([0, -1, -1]);
     const detail = () => other.querySelector(".ranked-chips__detail");
     expect(detail()).toHaveTextContent(
-      /09:00–10:00 · up to 50% weighted · recommended #2$/,
+      /09:00–10:00 · 50% weighted · recommended #2$/,
     );
     await userEvent.hover(chips[2]);
     expect(detail()).toHaveTextContent(/10:00–11:00 · up to 40% weighted$/);
@@ -4458,6 +5133,56 @@ test("Other times picks any open time with one click, like Recommended times", a
   }
 });
 
+test("Other times shows a recommended time's exact share and the rest at most their lowest slot's", async () => {
+  const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
+  try {
+    // Every slot of 09:00–10:00 is at least half free, yet only 45% of the
+    // group (weighted) can attend all of it.
+    fetchEventResults.mockResolvedValue({
+      status: "fresh",
+      requestedRevision: 7,
+      computedRevision: 7,
+      results: {
+        countedResponseTotal: 3,
+        channels: {
+          inperson: {
+            weighted: [0.5, 0.9, 0.9, 0.4],
+            unweighted: [0.4, 0.8, 0.8, 0.3],
+          },
+        },
+        recommendations: [
+          { ...datedRanked, weightedAvailability: 0.7 },
+          { ...datedRunnerUp, weightedAvailability: 0.45 },
+        ],
+      },
+    });
+    render(<PickingTimeTable {...timeTableProps(datedEvent)} />);
+    await resultsAreCurrent(7);
+    const other = await openOtherTimes();
+    const chips = otherChips(other);
+    expect(
+      textsOf(chips.map((chip) => chip.querySelector(".ranked-chip__share"))),
+    ).toEqual(["45% weighted", "70% weighted", "40% weighted"]);
+    expect(chips[0]).toHaveAccessibleName(
+      /^09:00\s*–10:00 45% weighted\s*, Thu, Aug 20, recommended #2, select this time$/,
+    );
+    const detail = () => other.querySelector(".ranked-chips__detail");
+    expect(detail()).toHaveTextContent(
+      /09:00–10:00 · 45% weighted · recommended #2$/,
+    );
+    await userEvent.hover(chips[2]);
+    expect(detail()).toHaveTextContent(/10:00–11:00 · up to 40% weighted$/);
+    // The chip under Recommended times prints the same figure.
+    const rail = document.getElementById("organizer-recommended-times");
+    expect(textsOf([...rail.querySelectorAll(".ranked-chip__share")])).toEqual([
+      "70% weighted",
+      "45% weighted",
+    ]);
+  } finally {
+    nowSpy.mockRestore();
+  }
+});
+
 test("Other times pages a weekly event by week in its own time zone", async () => {
   // Wednesday 23:30 in Los Angeles is already Thursday in UTC. Four weeks
   // from the event-local Wednesday end on Monday 19 October; counted from
@@ -4491,7 +5216,7 @@ test("Other times pages a weekly event by week in its own time zone", async () =
         )}
       />,
     );
-    await screen.findByText(/Results are current at revision 1/);
+    await resultsAreCurrent(1);
     const other = document.getElementById("organizer-other-times");
     expect(other.querySelector("summary")).toHaveTextContent(
       "21 open times in the next 4 weeks · recommended or not",
@@ -4594,7 +5319,7 @@ test("Other times reopens on the day of the pick, and follows a pick made elsewh
   try {
     mockEmptySnapshot();
     render(<PickingTimeTable {...timeTableProps(weeklyEvent)} />);
-    await screen.findByText(/Results are current/);
+    await resultsAreCurrent();
     let other = await openOtherTimes();
     const stepper = () =>
       within(other).getByRole("group", { name: "Week shown" });
@@ -4651,7 +5376,7 @@ test("choosing a time shows on the time table: the day, the time pointed at, and
   try {
     mockDatedSnapshot();
     render(<PickingTimeTable {...timeTableProps(datedEvent)} />);
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const results = document.querySelector(".meeting-results");
     const candidate = () =>
       document.querySelector(".meeting-calendar__block--candidate");
@@ -4729,7 +5454,7 @@ test("the calendar stays where the organizer puts it; only Other times' own brow
     render(
       <PickingTimeTable panelRef={panelRef} {...timeTableProps(weeklyEvent)} />,
     );
-    await screen.findByText(/Results are current/);
+    await resultsAreCurrent();
     const shownWeek = () =>
       within(calendarGrid())
         .getAllByRole("columnheader")
@@ -4835,7 +5560,7 @@ test("the pinned calendar follows the lists: pinned, pushed out by their end, le
   try {
     mockDatedSnapshot();
     render(<PickingTimeTable {...timeTableProps(datedEvent)} />);
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const root = document.documentElement;
     const results = document.querySelector(".meeting-results");
     const calendar = results.querySelector(":scope > .meeting-calendar");
@@ -4929,7 +5654,7 @@ test("Other times marks a pick only in its own format", async () => {
         {...timeTableProps({ ...datedEvent, mode: "mixed" })}
       />,
     );
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const other = await openOtherTimes();
     await userEvent.click(otherChips(other)[0]);
     expect(otherChips(other)[0]).toHaveAttribute("aria-pressed", "true");
@@ -4987,7 +5712,7 @@ test("Other times pages dates like the calendar, and the pages stay put as dates
     const { unmount } = render(
       <ResultsSnapshotPanel {...timeTableProps(nineDateEvent)} />,
     );
-    await screen.findByText(/Results are current/);
+    await resultsAreCurrent();
     let other = await openOtherTimes();
     let stepper = within(other).getByRole("group", { name: "Dates shown" });
     expect(stepper).toHaveTextContent("Aug 20 – Aug 26, 2026");
@@ -5007,7 +5732,7 @@ test("Other times pages dates like the calendar, and the pages stay put as dates
     nowSpy.mockReturnValue(Date.parse("2026-08-21T00:00:00Z"));
     mockEmptySnapshot();
     render(<ResultsSnapshotPanel {...timeTableProps(nineDateEvent)} />);
-    await screen.findByText(/Results are current/);
+    await resultsAreCurrent();
     other = await openOtherTimes();
     stepper = within(other).getByRole("group", { name: "Dates shown" });
     expect(stepper).toHaveTextContent("Aug 21 – Aug 26, 2026");
@@ -5025,7 +5750,7 @@ test("Other times follows the calendar's format and explains when nothing can st
         {...timeTableProps({ ...datedEvent, mode: "mixed" })}
       />,
     );
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     let other = await openOtherTimes();
     const format = within(other).getByRole("group", { name: "Format" });
     expect(
@@ -5052,7 +5777,7 @@ test("Other times follows the calendar's format and explains when nothing can st
     const passed = render(
       <ResultsSnapshotPanel {...timeTableProps(datedEvent)} />,
     );
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     other = document.getElementById("organizer-other-times");
     expect(other.querySelector("summary")).toHaveTextContent(
       "No upcoming open time",
@@ -5077,7 +5802,7 @@ test("Other times follows the calendar's format and explains when nothing can st
         )}
       />,
     );
-    await screen.findByText(/Results are current/);
+    await resultsAreCurrent();
     // Closed, the list renders nothing but its (empty) status line: no
     // controls and no stale "nothing can start" note.
     other = document.getElementById("organizer-other-times");
@@ -5100,7 +5825,7 @@ test("Other times follows the calendar's format and explains when nothing can st
         {...timeTableProps({ ...datedEvent, meetingDurationMinutes: 45 })}
       />,
     );
-    await screen.findByText(/Results are current/);
+    await resultsAreCurrent();
     other = document.getElementById("organizer-other-times");
     expect(other.querySelector("summary")).toHaveTextContent(
       "The meeting length does not fit the slots",
@@ -5127,7 +5852,7 @@ test("opening Blocked times hides the ranked outlines and the pick until it clos
     render(
       <ResultsSnapshotPanel {...timeTableProps(datedEvent, { selection })} />,
     );
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const rankBlock = () =>
       document.querySelector(".meeting-calendar__block--rank");
     const selectedBlock = () =>
@@ -5159,7 +5884,7 @@ test("ranked windows are compact chips that highlight their window on the calend
   try {
     mockDatedSnapshot();
     render(<ResultsSnapshotPanel {...timeTableProps(datedEvent)} />);
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const rail = document.querySelector("details.organizer-recommended-times");
     await toggleRecommendedTimes();
 
@@ -5225,7 +5950,7 @@ test("choosing a ranked window leaves painting mode and keeps the draft", async 
     render(
       <ResultsSnapshotPanel {...timeTableProps(datedEvent, { onChoose })} />,
     );
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
 
     await openBlockedTimes();
     paintCell(0);
@@ -5260,7 +5985,7 @@ test("the calendar draws the ranked windows only while the ranked list is open",
     render(
       <ResultsSnapshotPanel {...timeTableProps(datedEvent, { onSelect })} />,
     );
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const grid = screen.getByRole("grid", { name: /^Meeting time calendar/ });
     const cell = (index) => grid.querySelector(`[data-cell-idx="${index}"]`);
     const rankBlock = () =>
@@ -5406,7 +6131,7 @@ test("the blocked-times step sits first under the calendar and saves through the
     responsesReset: 0,
   });
   renderTimeTable(weeklyEvent, { onEventSaved });
-  await screen.findByText(/Results are current/);
+  await resultsAreCurrent();
 
   const stack = document.querySelector(".time-table__sections");
   expect(Array.from(stack.children).map((step) => step.id)).toEqual([
@@ -5480,13 +6205,13 @@ test("results note blocked slots only when the snapshot lists them", async () =>
 
   // A snapshot computed before blocking shipped simply has no note.
   rerender(<ResultsSnapshotPanel {...panelProps} invalidationKey={1} />);
-  await screen.findByText(/Results are current at revision 8/);
+  await resultsAreCurrent(8);
   expect(
     screen.queryByText(/blocked slots are excluded/),
   ).not.toBeInTheDocument();
 
   rerender(<ResultsSnapshotPanel {...panelProps} invalidationKey={2} />);
-  await screen.findByText(/Results are current at revision 9/);
+  await resultsAreCurrent(9);
   expect(
     screen.queryByText(/blocked slots are excluded/),
   ).not.toBeInTheDocument();
@@ -5499,7 +6224,7 @@ test("a finalized meeting locks picking until the event is reactivated", async (
     const onSelect = jest.fn();
     const props = timeTableProps(datedEvent, { onSelect });
     const { rerender } = render(<PickingTimeTable {...props} />);
-    await screen.findByText(/Results are current at revision 7/);
+    await resultsAreCurrent(7);
     const cellAt = (index) =>
       screen
         .getByRole("grid", { name: /^Meeting time calendar/ })
@@ -5599,7 +6324,7 @@ test("finalizing here hands focus to Download calendar; a live finalization neve
     location: "",
     active: true,
   };
-  previewFinalMeeting.mockResolvedValueOnce({
+  previewFinalMeeting.mockResolvedValue({
     attendance: { availableParticipantTotal: 2 },
     recipientCount: 0,
     email: null,
@@ -5620,9 +6345,6 @@ test("finalizing here hands focus to Download calendar; a live finalization neve
     );
   }
   const { unmount } = render(<StatefulFinalize />);
-  await userEvent.click(
-    screen.getByRole("button", { name: "Review attendance" }),
-  );
   await screen.findByRole("group", { name: "Attendance review" });
   // The button that opens the email review goes away with the review
   // workspace once the dialog finalizes.

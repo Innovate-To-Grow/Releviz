@@ -8,8 +8,35 @@ import "@testing-library/jest-dom";
 import {
   DeadlineBanner,
   LeftOutBanner,
+  NotInvitedBanner,
   ReadOnlyBanner,
 } from "@/components/schedule/participants/Banners";
+
+describe("NotInvitedBanner", () => {
+  test("renders nothing when everyone has been invited", () => {
+    const { container } = render(
+      <NotInvitedBanner count={0} onSend={jest.fn()} />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  test("says nothing is sent yet and offers to send the invitations", () => {
+    const onSend = jest.fn();
+    render(<NotInvitedBanner count={3} onSend={onSend} />);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "3 people haven't been invited yet. Nobody is emailed until you send invitations.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send invitations…" }));
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  test("uses the singular for one person", () => {
+    render(<NotInvitedBanner count={1} onSend={jest.fn()} />);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "1 person hasn't been invited yet. Nobody is emailed until you send invitations.",
+    );
+  });
+});
 
 describe("LeftOutBanner", () => {
   test("renders nothing when nobody is left out", () => {
@@ -84,22 +111,27 @@ describe("LeftOutBanner", () => {
 });
 
 describe("DeadlineBanner", () => {
-  test("names the deadline and links to the edit page", () => {
-    const deadline = "2026-09-01T12:00:00Z";
-    render(<DeadlineBanner deadline={deadline} editHref="/edit?code=ABC" />);
+  test("names the deadline in the event timezone and offers to change it", () => {
+    const onEdit = jest.fn();
+    render(
+      <DeadlineBanner
+        deadline="2026-09-01T12:00:00Z"
+        timezone="America/New_York"
+        onEdit={onEdit}
+      />,
+    );
     const banner = screen.getByRole("status");
     expect(banner).toHaveClass("alert-warning");
     expect(banner).toHaveTextContent(
-      `The response deadline (${new Date(deadline).toLocaleString([], {})}) has passed, so people can't be added, invited or changed. You can still enter schedules for people you answer for.`,
+      /The response deadline \(.*8:00:00\sAM EDT\) has passed, so people can't be added, invited or changed\. You can still enter schedules for people you answer for\./,
     );
-    expect(
-      screen.getByRole("link", { name: "Change deadline" }),
-    ).toHaveAttribute("href", "/edit?code=ABC");
+    fireEvent.click(screen.getByRole("button", { name: "Change deadline" }));
+    expect(onEdit).toHaveBeenCalledTimes(1);
   });
 
-  test("omits the link without an href", () => {
+  test("omits the action without a handler", () => {
     render(<DeadlineBanner deadline="2026-09-01T12:00:00Z" />);
-    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 });
 

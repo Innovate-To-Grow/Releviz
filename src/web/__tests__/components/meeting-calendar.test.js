@@ -234,11 +234,15 @@ describe("MeetingCalendar", () => {
     expect(cell(1)).toHaveAttribute("data-level", "partial");
     expect(cell(1)).toHaveAttribute(
       "aria-label",
-      expect.stringContaining("Weighted 83%, unweighted 80% of 12 responses."),
+      expect.stringContaining(
+        "Free in this slot: weighted 83%, unweighted 80% of 12 responses.",
+      ),
     );
     expect(cell(6)).toHaveAttribute(
       "aria-label",
-      expect.stringContaining("Weighted 20%, unweighted 15% of 12 responses."),
+      expect.stringContaining(
+        "Free in this slot: weighted 20%, unweighted 15% of 12 responses.",
+      ),
     );
 
     const shading = screen.getByRole("group", { name: "Shading" });
@@ -249,7 +253,7 @@ describe("MeetingCalendar", () => {
     expect(weighted).toHaveAttribute("aria-pressed", "true");
     expect(unweighted).toHaveAttribute("aria-pressed", "false");
     expect(
-      screen.getByText("0% → 100% of responses free (weighted)"),
+      screen.getByText("0% → 100% of responses free in a slot (weighted)"),
     ).toBeInTheDocument();
 
     await userEvent.click(unweighted);
@@ -261,12 +265,14 @@ describe("MeetingCalendar", () => {
     expect(cell(6)).toHaveTextContent("15%");
     expect(cell(1).style.backgroundColor).not.toBe(weightedBackground);
     expect(
-      screen.getByText("0% → 100% of responses free (unweighted)"),
+      screen.getByText("0% → 100% of responses free in a slot (unweighted)"),
     ).toBeInTheDocument();
     // The accessible description always carries both figures.
     expect(cell(1)).toHaveAttribute(
       "aria-label",
-      expect.stringContaining("Weighted 83%, unweighted 80% of 12 responses."),
+      expect.stringContaining(
+        "Free in this slot: weighted 83%, unweighted 80% of 12 responses.",
+      ),
     );
   });
 
@@ -313,7 +319,7 @@ describe("MeetingCalendar", () => {
     expect(cell(0)).toHaveAttribute(
       "aria-label",
       expect.stringContaining(
-        "Mon, Sep 14, 9:00 AM – 9:30 AM. Weighted 50%, unweighted 45% of 12 responses. Starts a 60-minute window 9:00 AM – 10:00 AM.",
+        "Mon, Sep 14, 9:00 AM – 9:30 AM. Free in this slot: weighted 50%, unweighted 45% of 12 responses. Starts a 60-minute window 9:00 AM – 10:00 AM.",
       ),
     );
 
@@ -1442,6 +1448,61 @@ describe("MeetingCalendar", () => {
     );
   });
 
+  test("shades nothing while a snapshot counts nobody, and stays pickable", async () => {
+    // Every share of an empty snapshot is stored as 0: painted, it would read
+    // as "nobody is free" when nobody has answered.
+    const nobody = {
+      ...results,
+      countedResponseTotal: 0,
+      channels: {
+        inperson: { weighted: Array(8).fill(0), unweighted: Array(8).fill(0) },
+      },
+      recommendations: [],
+    };
+    const { onSelect } = renderCalendar({ results: nobody });
+
+    expect(document.querySelector(".meeting-calendar__note")).toHaveTextContent(
+      /^No responses are counted yet, so nothing is shaded\. Shading appears as people submit their schedules\. You can already pick any window\.$/,
+    );
+    document.querySelectorAll("[data-cell-idx]").forEach((element) => {
+      expect(element.style.backgroundColor).toBe("");
+      expect(
+        element.querySelector(".meeting-calendar__cell-value"),
+      ).toHaveTextContent("");
+      expect(element).toHaveClass("meeting-calendar__cell--neutral");
+    });
+    expect(cell(0)).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("No responses counted yet."),
+    );
+    expect(cell(0)).not.toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("Weighted"),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Next week" }));
+    await userEvent.click(cell(4));
+
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "inperson",
+        slotIndices: [4, 5],
+        metrics: { exact: false, weighted: null, unweighted: null },
+      }),
+    );
+  });
+
+  test("keeps the snapshot's own shading once anyone is counted", () => {
+    renderCalendar({ results: { ...results, countedResponseTotal: 1 } });
+
+    expect(document.querySelector(".meeting-calendar__note")).toBeNull();
+    expect(cell(0)).not.toHaveClass("meeting-calendar__cell--neutral");
+    expect(cell(0)).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("of 1 responses"),
+    );
+  });
+
   test("renders legacy date groups and keeps their instants", async () => {
     const { onSelect } = renderCalendar({
       event: legacyEvent,
@@ -2253,11 +2314,11 @@ describe("MeetingCalendar", () => {
     expect(cell(1).style.backgroundColor).toMatch(/^rgb\(/);
     expect(cell(1).getAttribute("title").split("\n")).toEqual([
       expect.stringMatching(/^Mon, Sep 14, /),
-      "Weighted 83%, unweighted 80% of 12 responses.",
+      "Free in this slot: weighted 83%, unweighted 80% of 12 responses.",
       "A 60-minute meeting starting here would overlap a blocked time.",
     ]);
     expect(cell(1).getAttribute("aria-label")).toMatch(
-      /^Mon, Sep 14, .* Weighted 83%, unweighted 80% of 12 responses\. A 60-minute meeting starting here would overlap a blocked time\.$/,
+      /^Mon, Sep 14, .* Free in this slot: weighted 83%, unweighted 80% of 12 responses\. A 60-minute meeting starting here would overlap a blocked time\.$/,
     );
     expect(cell(1).getAttribute("aria-label")).not.toContain(
       "This time is blocked",
@@ -2333,7 +2394,7 @@ describe("MeetingCalendar", () => {
     expect(cell(1)).toHaveTextContent("83%");
     expect(cell(1).getAttribute("title").split("\n")).toEqual([
       expect.stringMatching(/^Mon, Sep 14, /),
-      "Weighted 83%, unweighted 80% of 12 responses.",
+      "Free in this slot: weighted 83%, unweighted 80% of 12 responses.",
       "A 60-minute meeting starting here would overlap a blocked time.",
       "Inside recommended time #1.",
     ]);

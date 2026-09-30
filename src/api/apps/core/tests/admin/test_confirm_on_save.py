@@ -1,9 +1,13 @@
 """Integration tests for typed confirmation on current admin forms."""
 
-from django.test import TestCase, override_settings
+from django.contrib import admin
+from django.contrib.admin import helpers
+from django.core.exceptions import PermissionDenied
+from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 
-from apps.core.models import AWSCredentialConfig
+from apps.core.models import AWSCredentialConfig, BackgroundJob
+from apps.core.services.background_jobs import enqueue_job
 from apps.core.tests.helpers import make_admin, make_superuser
 
 CHANGE_SESSION_KEY = "_admin_pending_change_core_awscredentialconfig"
@@ -29,7 +33,7 @@ def _confirm_change_data(client, confirmation_word, *, token=None):
 
 
 @override_settings(ADMIN_REQUIRE_CONFIRMATION=True)
-class ConfirmViewPerAppAccessTests(TestCase):
+class ConfirmViewAdminAccessTests(TestCase):
     def setUp(self):
         self.outsider = make_admin(
             apps=["scheduling"],
@@ -37,29 +41,83 @@ class ConfirmViewPerAppAccessTests(TestCase):
         )
         self.client.login(username="outsider@example.com", password="testpass123")
 
-    def test_non_app_staff_gets_403_on_confirmation_views(self):
+    def test_former_admin_cannot_access_confirmation_views(self):
+        self.outsider.is_staff = False
+        self.outsider.save(update_fields=["is_staff"])
         for url_name in (CONFIRM_URL, "admin:core_awscredentialconfig_confirm_action"):
             with self.subTest(url_name=url_name):
                 response = self.client.get(reverse(url_name))
-                self.assertEqual(response.status_code, 403)
-                # The branded 403 page shows the reason the view raised, not
-                # Django's bare "403 Forbidden".
-                self.assertTemplateUsed(response, "403.html")
-                self.assertContains(
-                    response,
-                    "You do not have permission to view AWS Credentials.",
-                    status_code=403,
-                )
-                self.assertNotContains(
-                    response,
-                    "You do not have permission to perform this action.",
-                    status_code=403,
-                )
+                self.assertEqual(response.status_code, 302)
+                self.assertTrue(response.url.startswith(reverse("admin:login")))
 
-    def test_app_staff_is_not_forbidden(self):
-        self.outsider.admin_apps = ["core"]
-        self.outsider.save(update_fields=["admin_apps"])
-        self.assertNotEqual(self.client.get(reverse(CONFIRM_URL)).status_code, 403)
+    def test_admin_can_access_confirmation_for_any_app(self):
+        response = self.client.get(reverse(CONFIRM_URL), follow=True)
+        self.assertContains(response, "No pending change found")
+
+    def test_change_confirmation_rechecks_demoted_admin_before_pending_save(self):
+        response = self.client.post(reverse(ADD_URL), _form_data("Protected config"))
+        self.assertEqual(response.status_code, 302)
+        session = self.client.session
+        pending = session[CHANGE_SESSION_KEY]
+        model_admin = admin.site._registry[AWSCredentialConfig]
+
+        self.outsider.is_staff = False
+        self.outsider.save(update_fields=["is_staff"])
+        request = RequestFactory().post(
+            reverse(CONFIRM_URL),
+            {
+                "token": pending["token"],
+                "confirmation_word": model_admin.get_confirmation_word(),
+            },
+        )
+        request.user = self.outsider
+        request.session = session
+
+        with self.assertRaisesMessage(PermissionDenied, "You do not have permission to view"):
+            model_admin._confirm_change_view(request)
+
+        self.assertEqual(session[CHANGE_SESSION_KEY], pending)
+        self.assertFalse(AWSCredentialConfig.objects.filter(name="Protected config").exists())
+
+    def test_action_confirmation_rechecks_inactive_admin_before_pending_retry(self):
+        job, _created = enqueue_job(kind="test.echo", dedupe_key="revoked-admin", payload={})
+        job.status = BackgroundJob.Status.FAILED
+        job.save(update_fields=["status"])
+        model_admin = admin.site._registry[BackgroundJob]
+        response = self.client.post(
+            reverse("admin:core_backgroundjob_changelist"),
+            {
+                "action": "retry_selected_jobs",
+                "index": "0",
+                "select_across": "0",
+                helpers.ACTION_CHECKBOX_NAME: [str(job.pk)],
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        session = self.client.session
+        session_key = model_admin._session_action_key()
+        pending = session[session_key]
+
+        self.outsider.is_active = False
+        self.outsider.save(update_fields=["is_active"])
+        request = RequestFactory().post(
+            reverse("admin:core_backgroundjob_confirm_action"),
+            {
+                "token": pending["token"],
+                "confirmation_word": model_admin.get_action_confirmation_word(
+                    "retry_selected_jobs"
+                ),
+            },
+        )
+        request.user = self.outsider
+        request.session = session
+
+        with self.assertRaisesMessage(PermissionDenied, "You do not have permission to view"):
+            model_admin._confirm_action_view(request)
+
+        self.assertEqual(session[session_key], pending)
+        job.refresh_from_db()
+        self.assertEqual(job.status, BackgroundJob.Status.FAILED)
 
 
 @override_settings(ADMIN_REQUIRE_CONFIRMATION=True)

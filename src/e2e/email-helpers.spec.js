@@ -41,12 +41,32 @@ async function readVerificationCode(mailDirectory, email, afterMs, purpose) {
   return stdout;
 }
 
+async function readEmailsSentTo(mailDirectory, email, afterMs) {
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [
+      "-e",
+      `const [helper, input] = process.argv.slice(1);
+       const { email, afterMs } = JSON.parse(input);
+       require(helper).emailsSentTo(email, afterMs)
+         .then(bodies => process.stdout.write(JSON.stringify(bodies)))
+         .catch(error => { console.error(error.message); process.exitCode = 1; });`,
+      path.join(__dirname, "helpers/releviz.js"),
+      JSON.stringify({ email, afterMs }),
+    ],
+    {
+      env: { ...process.env, EMAIL_FILE_PATH: mailDirectory },
+      timeout: 30_000,
+    },
+  );
+  return JSON.parse(stdout);
+}
+
 const PURPOSE_SUBJECTS = {
   register: "Verify your email - Releviz",
   login: "Your login code - Releviz",
   password_reset: "Password reset code - Releviz",
   account_delete: "Delete account code - Releviz",
-  temp_event_access: "Your verification code - Releviz",
 };
 
 function emailMessage(recipient, subject, code) {
@@ -126,5 +146,46 @@ test.describe("Verification email selection", () => {
     ).rejects.toThrow(
       /Unknown verification email purpose: unsupported-purpose/,
     );
+  });
+
+  test("lists only what was sent to the recipient since the given time", async ({
+    mailDirectory,
+  }) => {
+    const fixtureId = randomUUID();
+    const email = `email-helper-${fixtureId}@example.com`;
+    const otherEmail = `other-${fixtureId}@example.com`;
+    const timestamp = Date.now() - 5_000;
+    async function writeEmailFile(label, body, offset) {
+      const file = path.join(
+        mailDirectory,
+        `email-helper-${fixtureId}-${label}.log`,
+      );
+      await fs.writeFile(file, body);
+      const modifiedAt = new Date(timestamp + offset);
+      await fs.utimes(file, modifiedAt, modifiedAt);
+    }
+
+    await writeEmailFile(
+      "before",
+      emailMessage(email, "Before - Releviz", "111111"),
+      -2_000,
+    );
+    await writeEmailFile(
+      "after",
+      emailMessage(email, "After - Releviz", "222222"),
+      1_000,
+    );
+    await writeEmailFile(
+      "other",
+      emailMessage(otherEmail, "Other - Releviz", "333333"),
+      2_000,
+    );
+
+    const sent = await readEmailsSentTo(mailDirectory, email, timestamp);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("Subject: After - Releviz");
+    await expect(
+      readEmailsSentTo(mailDirectory, `nobody-${fixtureId}@example.com`, 0),
+    ).resolves.toEqual([]);
   });
 });

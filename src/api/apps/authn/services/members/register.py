@@ -31,7 +31,7 @@ def validate_password_pair(data: dict, *, password_key: str = "password") -> str
     return password
 
 
-def _validated_registration_details(data: dict) -> dict:
+def validated_registration_details(data: dict) -> dict:
     password = validate_password_pair(data)
     first_name = str(data.get("first_name") or data.get("firstName") or "").strip()
     last_name = str(data.get("last_name") or data.get("lastName") or "").strip()
@@ -46,7 +46,14 @@ def _validated_registration_details(data: dict) -> dict:
     }
 
 
-def _apply_registration_details(member, details: dict, *, email: str) -> None:
+def _validate_password_strength(details: dict, user) -> None:
+    try:
+        validate_password(details["password"], user=user)
+    except DjangoValidationError as exc:
+        raise serializers.ValidationError({"password": list(exc.messages)}) from exc
+
+
+def apply_registration_details(member, details: dict, *, email: str) -> None:
     member.first_name = details["first_name"]
     member.last_name = details["last_name"]
     member.email = email
@@ -67,7 +74,7 @@ def start_registration(data: dict, *, _temporary_upgrade_member_id=None):
     email = normalize_email(data.get("email", ""))
     if not email:
         raise serializers.ValidationError({"email": "Email is required."})
-    details = _validated_registration_details(data)
+    details = validated_registration_details(data)
 
     contact = (
         ContactEmail.objects.select_related("member").filter(email_address__iexact=email).first()
@@ -104,15 +111,21 @@ def start_registration(data: dict, *, _temporary_upgrade_member_id=None):
 
     if member is None:
         member = Member(is_active=False)
-        _apply_registration_details(member, details, email=email)
+        apply_registration_details(member, details, email=email)
         member.save()
+    elif authorized_temporary_upgrade:
+        # The link alone opens the temporary session, so its holder must not be
+        # able to choose the future full account's password or name. The
+        # details are only checked here; the person re-submits them together
+        # with the emailed code (see ``_complete_registration``).
+        _validate_password_strength(
+            details,
+            Member(first_name=details["first_name"], last_name=details["last_name"], email=email),
+        )
     else:
-        _apply_registration_details(member, details, email=email)
-        # A normal pending registration remains inactive until email
-        # verification. An authenticated temporary member must stay active so
-        # its event-scoped session continues working during that same wait.
-        if not authorized_temporary_upgrade:
-            member.is_active = False
+        apply_registration_details(member, details, email=email)
+        # A normal pending registration remains inactive until email verification.
+        member.is_active = False
         member.save()
 
     if contact is None:

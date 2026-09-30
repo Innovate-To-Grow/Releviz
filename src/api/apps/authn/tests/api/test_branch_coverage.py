@@ -178,6 +178,31 @@ class EmailCodeCompletionBranchTests(TestCase):
         # Only the ownership claim runs; the empty display name skips the rename.
         query.assert_called_once_with(member=member, response_claimed_at__isnull=True)
 
+    def test_details_are_applied_only_to_a_temporary_member(self):
+        from apps.authn.models import EmailAuthChallenge
+        from apps.authn.views.auth import email_code
+
+        details = {"password": "StrongPass123!", "first_name": "Real", "last_name": "Person"}
+        temporary = _member(
+            first_name="Temp",
+            is_active=True,
+            access_level=Member.AccessLevel.TEMPORARY,
+        )
+        full = _member(first_name="Full", is_active=True, access_level=Member.AccessLevel.FULL)
+        for member in (temporary, full):
+            challenge = SimpleNamespace(
+                member_id=member.pk,
+                target_email="person@example.com",
+                purpose=EmailAuthChallenge.Purpose.REGISTER,
+            )
+            email_code._complete_registration(challenge, details=details)
+            member.refresh_from_db()
+
+        self.assertEqual((temporary.first_name, temporary.last_name), ("Real", "Person"))
+        self.assertEqual(temporary.email, "person@example.com")
+        self.assertTrue(temporary.check_password("StrongPass123!"))
+        self.assertEqual(full.first_name, "Full")
+
 
 class ViewHelperBranchTests(TestCase):
     def test_auth_success_response_without_request_skips_origin_check(self):
