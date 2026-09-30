@@ -10,7 +10,7 @@ from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.authn.models import ContactEmail, EmailAuthChallenge
+from apps.authn.models import ContactEmail
 from apps.authn.security.helpers import RateLimitDecision
 from apps.authn.services.email.auth_email import resolve_login_identifier
 from apps.authn.tests.helpers import create_member, token_for
@@ -30,7 +30,6 @@ from apps.scheduling.services.invitations import (
     mark_invitation_for_member,
     member_invitation_emails,
 )
-from apps.scheduling.services.temporary_access import request_temporary_access_code
 
 ORGANIZER_EMAIL = "organizer@example.com"
 NOT_OWNED_MESSAGE = "Use one of your own verified email addresses for a person you manage."
@@ -443,24 +442,16 @@ class OrganizerManagedParticipantTests(TestCase):
             invited_by=self.organizer,
             first_sent_at=timezone.now(),
         )
-        self.assertFalse(
-            request_temporary_access_code(
-                event_code=self.event.code,
-                access_token=own_invitation.access_token,
-            )
-        )
-        requested = APIClient().post(
-            "/events/temp-access/request-code",
+        opened = APIClient().post(
+            "/events/temp-access/open",
             {"code": self.event.code, "invitationToken": str(own_invitation.access_token)},
             format="json",
         )
-        self.assertEqual(requested.status_code, 202)
-        self.assertFalse(
-            EmailAuthChallenge.objects.filter(
-                purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS
-            ).exists()
-        )
+        self.assertEqual(opened.status_code, 404)
+        self.assertEqual(opened.data["errorCode"], "temp_invitation_inactive")
         self.assertFalse(TemporaryEventSession.objects.exists())
+        own_invitation.refresh_from_db()
+        self.assertIsNone(own_invitation.opened_at)
         self.assertEqual(len(mail.outbox), 0)
 
     def test_organizer_joins_alongside_managed_people(self):

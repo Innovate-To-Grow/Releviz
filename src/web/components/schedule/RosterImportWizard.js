@@ -737,7 +737,7 @@ export default function RosterImportWizard({
   const allOnPageSelected = rows.length > 0 && selectedOnPage === rows.length;
 
   const receipt = result?.receipt || {};
-  // A rebuild starts everyone over as Not sent, so all of them are up for
+  // A rebuild starts everyone over as Not invited, so all of them are up for
   // an invitation; a merge offers only the people it added.
   const invitableIds =
     (mode === "rebuild"
@@ -1439,9 +1439,9 @@ export default function RosterImportWizard({
                 <div className="import-sheet__rebuild d-flex flex-column gap-3 mt-3">
                   <Alert variant="warning" role="note">
                     Rebuilding clears schedules, invitations, and pending
-                    delivery. Everyone starts as Not sent and gets no reminders
-                    until you send invitations, which you can review once the
-                    import is done.
+                    delivery. Everyone starts as Not invited and gets no
+                    reminders until you send invitations, which you can review
+                    once the import is done.
                   </Alert>
                   <FormField
                     label={`Type ${event.code} to confirm`}

@@ -46,11 +46,10 @@ from .roster import (
 )
 from .temporary_access import (
     TemporaryAccessLogoutView,
+    TemporaryAccessOpenView,
     TemporaryAccessParticipantView,
-    TemporaryAccessRequestCodeView,
     TemporaryAccessSessionView,
     TemporaryAccessUpgradeRegistrationView,
-    TemporaryAccessVerifyView,
 )
 
 __all__ = [
@@ -95,11 +94,10 @@ __all__ = [
     "RosterView",
     # Temporary access
     "TemporaryAccessLogoutView",
+    "TemporaryAccessOpenView",
     "TemporaryAccessParticipantView",
-    "TemporaryAccessRequestCodeView",
     "TemporaryAccessSessionView",
     "TemporaryAccessUpgradeRegistrationView",
-    "TemporaryAccessVerifyView",
     # Operations
     "DeliveryRequestView",
     "DeliveryRetryPreviewView",

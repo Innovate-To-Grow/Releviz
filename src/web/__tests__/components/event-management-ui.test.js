@@ -168,8 +168,30 @@ describe("organizer event management UI", () => {
       ),
     ).toBeInTheDocument();
 
+    // Archiving is put to the organizer first; declining changes nothing.
     await userEvent.click(
       within(sourceCard).getByRole("button", { name: "Archive" }),
+    );
+    let archiveDialog = await screen.findByRole("dialog", {
+      name: "Archive this event?",
+    });
+    expect(archiveDialog).toHaveTextContent(
+      "The event becomes read-only and moves to Archived on your dashboard.",
+    );
+    await userEvent.click(
+      within(archiveDialog).getByRole("button", { name: "Cancel" }),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(updateEventLifecycle).not.toHaveBeenCalled();
+
+    await userEvent.click(
+      within(sourceCard).getByRole("button", { name: "Archive" }),
+    );
+    archiveDialog = await screen.findByRole("dialog", {
+      name: "Archive this event?",
+    });
+    await userEvent.click(
+      within(archiveDialog).getByRole("button", { name: "Archive event" }),
     );
     await waitFor(() =>
       expect(updateEventLifecycle).toHaveBeenCalledWith(
@@ -185,6 +207,7 @@ describe("organizer event management UI", () => {
     expect(
       await screen.findByText("Planning session was archived."),
     ).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     const archivedCard = screen
       .getByRole("link", { name: baseEvent.name })
       .closest("article");
@@ -285,7 +308,7 @@ describe("organizer event management UI", () => {
     const archived = screen.getByRole("region", { name: "Archived (1)" });
     expect(
       within(archived).getByText(
-        "Archived events are read-only. Duplicate one to start again, or delete it permanently.",
+        "Archived events are read-only. Open one and choose Reactivate event to bring it back, duplicate it to start again, or delete it permanently.",
       ),
     ).toBeInTheDocument();
     const archivedCard = within(archived)
@@ -377,7 +400,13 @@ describe("organizer event management UI", () => {
     await userEvent.click(
       within(card).getByRole("button", { name: "Archive" }),
     );
+    await userEvent.click(
+      within(
+        await screen.findByRole("dialog", { name: "Archive this event?" }),
+      ).getByRole("button", { name: "Archive event" }),
+    );
     expect(await screen.findByText("Archive refused")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     await userEvent.click(within(card).getByRole("button", { name: "Delete" }));
     await userEvent.type(
@@ -404,6 +433,16 @@ describe("organizer event management UI", () => {
     const click = new MouseEvent("click", { bubbles: true, cancelable: true });
     edit.dispatchEvent(click);
     expect(click.defaultPrevented).toBe(true);
+
+    // A finalized event can be archived; its confirmed meeting stays.
+    await userEvent.click(
+      within(finalizedCard).getByRole("button", { name: "Archive" }),
+    );
+    expect(
+      await screen.findByRole("dialog", { name: "Archive this event?" }),
+    ).toHaveTextContent(
+      "The confirmed meeting stays as it is and nobody is emailed.",
+    );
   });
 
   test("dashboard reports load failures and redirects unauthenticated users", async () => {
@@ -429,11 +468,14 @@ describe("organizer event management UI", () => {
   test("edit form loads values and requires explicit response-reset confirmation", async () => {
     searchParams = new URLSearchParams("code=EVENT123");
     fetchEvent.mockResolvedValue({ event: baseEvent });
+    // The server sends the current event along with the demand, but that is
+    // not a stale version: the form must not offer to "reload" it.
     const resetError = Object.assign(
       new Error("Saved availability would be reset."),
       {
         requiresResponseReset: true,
         participantCount: 2,
+        event: baseEvent,
       },
     );
     updateEvent.mockRejectedValueOnce(resetError).mockResolvedValueOnce({
@@ -464,9 +506,18 @@ describe("organizer event management UI", () => {
         /clear draft and submitted availability for 2 participants/,
       ),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Saved availability would be reset."),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/latest saved version/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Reload latest event" }),
+    ).not.toBeInTheDocument();
     const confirmation = screen.getByLabelText(
       "I understand that participant availability will be reset.",
     );
+    // Saving is off until this is ticked, so the keyboard is sent to it.
+    expect(confirmation).toHaveFocus();
     const saveButton = screen.getByRole("button", { name: "Save changes" });
     expect(saveButton).toBeDisabled();
     await userEvent.click(confirmation);
@@ -543,6 +594,69 @@ describe("organizer event management UI", () => {
     expect(updateEvent.mock.calls[0][1]).not.toHaveProperty("blockedSlots");
     expect(onSaved).toHaveBeenCalledWith(result);
     expect(replace).not.toHaveBeenCalled();
+  });
+
+  test("a request for the deadline focuses the field, which is not behind Advanced options", () => {
+    const quiet = render(
+      <CreateEvent
+        operation="edit"
+        presentation="inline"
+        initialEvent={baseEvent}
+      />,
+    );
+    // The deadline is one of the main settings, so it is on screen without a
+    // request while the rarely used ones stay folded.
+    const advanced = screen.getByText("Advanced options").closest("details");
+    expect(advanced).not.toHaveAttribute("open");
+    expect(advanced).not.toContainElement(
+      screen.getByLabelText("Response Deadline"),
+    );
+    expect(screen.getByLabelText("Response Deadline")).toBeVisible();
+    expect(screen.getByLabelText("Response Deadline")).not.toHaveFocus();
+    quiet.unmount();
+
+    const view = render(
+      <CreateEvent
+        operation="edit"
+        presentation="inline"
+        initialEvent={baseEvent}
+        focusRequest={{ field: "deadline" }}
+      />,
+    );
+    const folded = screen.getByText("Advanced options").closest("details");
+    expect(folded).not.toHaveAttribute("open");
+    expect(screen.getByLabelText("Response Deadline")).toHaveFocus();
+    // Optional, what it does, and whose clock the picker shows.
+    expect(
+      screen.getByLabelText("Response Deadline"),
+    ).toHaveAccessibleDescription(
+      "Optional. People can't respond after this time; without one, responses stay open until you close them. Uses the event timezone (UTC).",
+    );
+
+    // A fresh request moves the keyboard there again.
+    screen.getByLabelText("Response Deadline").blur();
+    view.rerender(
+      <CreateEvent
+        operation="edit"
+        presentation="inline"
+        initialEvent={baseEvent}
+        focusRequest={{ field: "deadline" }}
+      />,
+    );
+    expect(screen.getByLabelText("Response Deadline")).toHaveFocus();
+
+    // A request for anything else leaves the keyboard where it is.
+    screen.getByLabelText("Response Deadline").blur();
+    view.rerender(
+      <CreateEvent
+        operation="edit"
+        presentation="inline"
+        initialEvent={baseEvent}
+        focusRequest={{ field: "name" }}
+      />,
+    );
+    expect(screen.getByLabelText("Response Deadline")).not.toHaveFocus();
+    expect(folded).not.toHaveAttribute("open");
   });
 
   test("edit form exposes conflicts, load errors, and authentication recovery", async () => {
@@ -642,6 +756,16 @@ describe("organizer event management UI", () => {
     expect(advancedOptions).not.toContainElement(accessField);
     expect(advancedOptions).not.toContainElement(startingField);
 
+    // The deadline decides when people stop being able to respond, so it sits
+    // with who can join rather than behind Advanced options.
+    const deadlineField = screen.getByLabelText("Response Deadline");
+    expect(deadlineField).toBeVisible();
+    expect(deadlineField).toHaveValue("");
+    expect(advancedOptions).not.toContainElement(deadlineField);
+    expect(deadlineField).toHaveAccessibleDescription(
+      `Optional. People can't respond after this time; without one, responses stay open until you close them. Uses the event timezone (${timezoneField.value}).`,
+    );
+
     expect(advancedOptions).toContainElement(
       screen.getByLabelText("Slot Duration"),
     );
@@ -649,11 +773,11 @@ describe("organizer event management UI", () => {
     // visibility setting to expose.
     expect(screen.queryByLabelText("Participant View")).not.toBeInTheDocument();
     expect(advancedOptions).toContainElement(
-      screen.getByLabelText("Response Deadline"),
-    );
-    expect(advancedOptions).toContainElement(
       screen.getByLabelText("Reminder Hours Before Deadline"),
     );
+    expect(
+      screen.getByText(/Automatic reminders go out before the response/),
+    ).toBeInTheDocument();
     await userEvent.click(screen.getByText("Advanced options"));
     expect(advancedOptions).toHaveAttribute("open");
     expect(

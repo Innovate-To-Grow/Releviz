@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/icons";
 import CreateEventClient from "@/components/event/CreateEventClient";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
+import LifecycleConfirmDialog from "@/components/event/LifecycleConfirmDialog";
 import BlockedSlotsControls, {
   useBlockedSlotsDraft,
 } from "@/components/schedule/BlockedSlotsEditor";
@@ -55,6 +56,7 @@ import {
   normalizeSlotGroups,
   rankedRecommendations,
   recommendationForWindow,
+  recommendationMetrics,
   selectionFromRecommendation,
   selectionFromWindow,
   selectionKey,
@@ -67,6 +69,7 @@ import {
   windowSlotCount,
 } from "@/lib/meetingWindows";
 import { createLocalDateTimeResolver } from "@/lib/time";
+import useDeadlinePassed from "@/lib/useDeadlinePassed";
 import {
   confirmFinalMeeting,
   downloadFinalCalendar,
@@ -518,19 +521,38 @@ const LIFECYCLE_SUMMARIES = {
   archived: "This event is archived.",
 };
 
+// An active event past its deadline still reads "active", but nobody can
+// respond, so the sentence says so rather than promising responses.
+function lifecycleSummaryOf(event, deadlinePassed) {
+  if (deadlinePassed) {
+    return "The response deadline has passed, so people can no longer respond.";
+  }
+  if (event.status === "archived" && event.finalMeeting) {
+    return "This event is archived. The confirmed meeting still stands.";
+  }
+  return LIFECYCLE_SUMMARIES[event.status] || "";
+}
+
 export function EventControls({
   event,
   setEvent,
   getToken,
   setDeliveryRequest,
   onReactivated,
+  onEditDeadline,
 }) {
   const [changing, setChanging] = useState(false);
   const [error, setError] = useState("");
+  // "closed" | "archived" while the consequences of that change are put to
+  // the organizer.
+  const [confirming, setConfirming] = useState(null);
+  // What a reactivation did beyond reopening, shown until the next change.
+  const [notice, setNotice] = useState("");
   // { cancellation, busy, error } while the cancellation emails reopening a
-  // finalized event sends are reviewed.
+  // confirmed meeting sends are reviewed.
   const [reopen, setReopen] = useState(null);
-  const lifecycleSummary = LIFECYCLE_SUMMARIES[event.status] || "";
+  const deadlinePassed = useDeadlinePassed(event);
+  const lifecycleSummary = lifecycleSummaryOf(event, deadlinePassed);
 
   // Reactivating past the old deadline clears it, as an active event needs
   // a deadline ahead of it.
@@ -544,16 +566,22 @@ export function EventControls({
   // Makes the change; a failure is the caller's to show.
   const applyLifecycle = async (nextStatus) => {
     const token = await getToken();
+    const deadline = deadlineFor(nextStatus);
     const data = await updateEventLifecycle(
       event.code,
       {
         status: nextStatus,
         expectedVersion: event.version,
-        responseDeadline: deadlineFor(nextStatus),
+        responseDeadline: deadline,
       },
       token,
     );
     setEvent(data.event);
+    setNotice(
+      deadline === null && event.responseDeadline
+        ? "Responses are open again. The old deadline had passed, so it was removed."
+        : "",
+    );
     if (nextStatus === "active") onReactivated?.();
     if (data.cancellationDeliveryRequestId) {
       setDeliveryRequest({
@@ -580,11 +608,16 @@ export function EventControls({
     }
   };
 
-  // Reopening a finalized event cancels its meeting and emails everyone the
-  // confirmation reached, so those emails are reviewed and confirmed first.
-  // With nobody to tell, it reopens at once.
+  const confirmLifecycle = async () => {
+    await changeLifecycle(confirming);
+    setConfirming(null);
+  };
+
+  // Reopening an event that holds a confirmed meeting cancels it and emails
+  // everyone the confirmation reached, so those emails are reviewed and
+  // confirmed first. With nobody to tell, it reopens at once.
   const reactivate = async () => {
-    if (event.status === "finalized") {
+    if (event.status === "finalized" || event.finalMeeting) {
       setChanging(true);
       setError("");
       try {
@@ -634,25 +667,20 @@ export function EventControls({
       className="organizer-event-controls d-flex flex-wrap align-items-center gap-2 mw-100"
       aria-labelledby="organizer-lifecycle-title"
     >
-      <div className="organizer-event-controls__label d-inline-flex align-items-center gap-2 me-1">
-        <StatusBadge
-          status={event.status}
-          className="organizer-lifecycle-panel__status"
-        >
-          {event.status || "unknown"}
-        </StatusBadge>
-        <h3
-          id="organizer-lifecycle-title"
-          className="small fw-semibold text-secondary mb-0"
-        >
-          Event controls
-        </h3>
-      </div>
+      <h3 id="organizer-lifecycle-title" className="visually-hidden">
+        Event controls
+      </h3>
+      <StatusBadge
+        status={event.status}
+        className="organizer-lifecycle-panel__status me-1"
+      >
+        {event.status || "unknown"}
+      </StatusBadge>
 
       {event.status === "active" && (
         <AppButton
           variant="outlined"
-          onClick={() => changeLifecycle("closed")}
+          onClick={() => setConfirming("closed")}
           disabled={changing}
         >
           Close responses
@@ -671,7 +699,7 @@ export function EventControls({
         <AppButton
           variant="outlined"
           icon={<ArchiveIcon />}
-          onClick={() => changeLifecycle("archived")}
+          onClick={() => setConfirming("archived")}
           disabled={changing}
         >
           Archive event
@@ -685,6 +713,40 @@ export function EventControls({
             role="status"
           >
             {lifecycleSummary}
+            {deadlinePassed && onEditDeadline && (
+              <>
+                {" "}
+                <AppButton
+                  variant="text"
+                  size="sm"
+                  className="p-0 align-baseline"
+                  onClick={onEditDeadline}
+                >
+                  Change deadline
+                </AppButton>
+              </>
+            )}
+          </p>
+        )}
+        {notice && event.status === "active" && !event.responseDeadline && (
+          <p
+            className="organizer-event-controls__notice small text-secondary mb-0"
+            role="status"
+          >
+            {notice}
+            {onEditDeadline && (
+              <>
+                {" "}
+                <AppButton
+                  variant="text"
+                  size="sm"
+                  className="p-0 align-baseline"
+                  onClick={onEditDeadline}
+                >
+                  Set a new deadline
+                </AppButton>
+              </>
+            )}
           </p>
         )}
         {error && (
@@ -693,6 +755,18 @@ export function EventControls({
           </Alert>
         )}
       </div>
+
+      {confirming && (
+        <LifecycleConfirmDialog
+          action={confirming}
+          event={event}
+          busy={changing}
+          onConfirm={() => void confirmLifecycle()}
+          onClose={() => {
+            if (!changing) setConfirming(null);
+          }}
+        />
+      )}
 
       {reopen && (
         <EmailSendDialog
@@ -727,10 +801,14 @@ export function EventControls({
   );
 }
 
-export function OverviewPanel({ event, onEventSaved }) {
+export const OverviewPanel = forwardRef(function OverviewPanel(
+  { event, onEventSaved },
+  ref,
+) {
   const [editing, setEditing] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
   const [saveStatus, setSaveStatus] = useState("");
+  const [focusRequest, setFocusRequest] = useState(null);
   const panelRef = useRef(null);
   const editorHeadingRef = useRef(null);
   const { locked: editLocked, reason: editLockReason } = editLockOf(event);
@@ -745,16 +823,24 @@ export function OverviewPanel({ event, onEventSaved }) {
     );
   };
 
-  const openEditor = () => {
+  // `field` names the setting the organizer came for: the editor opens with
+  // that field focused rather than at its heading.
+  const openEditor = (field = null) => {
     setSaveStatus("");
     setEditingEvent(event);
     setEditing(true);
-    window.setTimeout(() => editorHeadingRef.current?.focus(), 0);
+    if (field) {
+      setFocusRequest({ field });
+    } else {
+      setFocusRequest(null);
+      window.setTimeout(() => editorHeadingRef.current?.focus(), 0);
+    }
   };
 
   const closeEditor = () => {
     setEditing(false);
     setEditingEvent(null);
+    setFocusRequest(null);
     focusEditButton();
   };
 
@@ -764,6 +850,14 @@ export function OverviewPanel({ event, onEventSaved }) {
     closeEditor();
   };
 
+  // Lets the rest of the workspace (a deadline notice, say) open the editor
+  // here rather than sending the organizer to another page.
+  useImperativeHandle(ref, () => ({
+    edit: ({ field } = {}) => {
+      if (!editLocked) openEditor(field);
+    },
+  }));
+
   return (
     <Panel
       ref={panelRef}
@@ -771,7 +865,11 @@ export function OverviewPanel({ event, onEventSaved }) {
       headingLevel={3}
       titleId="organizer-overview-heading"
       title="Overview"
-      description="Review the event schedule and response settings."
+      description={
+        editLocked
+          ? `Review the event schedule and response settings. ${editLockReason}`
+          : "Review the event schedule and response settings."
+      }
       actions={
         editLocked ? (
           <AppButton
@@ -788,7 +886,7 @@ export function OverviewPanel({ event, onEventSaved }) {
             variant="outlined"
             className="organizer-overview-edit-link"
             icon={<EditIcon />}
-            onClick={openEditor}
+            onClick={() => openEditor()}
             disabled={editing}
             aria-expanded={editing}
             aria-controls="organizer-inline-event-editor"
@@ -851,6 +949,7 @@ export function OverviewPanel({ event, onEventSaved }) {
             operation="edit"
             presentation="inline"
             initialEvent={editingEvent}
+            focusRequest={focusRequest}
             onSaved={handleSaved}
             onCancel={closeEditor}
           />
@@ -858,7 +957,7 @@ export function OverviewPanel({ event, onEventSaved }) {
       )}
     </Panel>
   );
-}
+});
 
 /**
  * Blocked times: the first step under the Time Table calendar. While it is
@@ -1032,16 +1131,19 @@ function recommendedTimesIntro({ basis, count, meetingMinutes, mixed }) {
     return `The calendar outlines every recommended time. ${pointer}`;
   const sentences = [
     `We recommend times someone can attend for the whole ${meetingMinutes} minutes, at least half as available as the best, never overlapping${mixed ? " in the same format" : ""}.`,
+    `Shares count each person for the whole ${meetingMinutes} minutes, so they can be lower than the calendar's per-slot shading.`,
   ];
   const total = qualifyingTotal(basis, count);
+  // Where to look when the list stops short of what the organizer wants.
+  const others = "Other times below lists every open time.";
   if (basis.listEnd === "limit")
-    sentences.push(`Showing the top ${count} of ${total}.`);
+    sentences.push(`Showing the top ${count} of ${total}. ${others}`);
   else if (
     basis.listEnd === "belowFloor" &&
     basis.nextWeightedAvailability != null
   )
     sentences.push(
-      `The next option drops to ${shareBelow(basis.nextWeightedAvailability, basis.weightedAvailabilityFloor)}% weighted, under half of the best.`,
+      `The next option drops to ${shareBelow(basis.nextWeightedAvailability, basis.weightedAvailabilityFloor)}% weighted, under half of the best. ${others}`,
     );
   else if (basis.listEnd === "noMoreWindows")
     sentences.push(
@@ -1330,9 +1432,10 @@ function useStartableDays(event, now) {
 }
 
 // One open time as a chip: its start (the chip's visible name), its full
-// local times, the lowest slot's weighted share (an upper bound, as in
-// Finalize), its rank when the same time is also recommended, and whether
-// it is the current pick.
+// local times, its weighted share, its rank when the same time is also
+// recommended, and whether it is the current pick. A recommended time has
+// its exact share, the one its chip in Recommended times prints; any other
+// has its lowest slot's, an upper bound (as in Finalize).
 function otherTimeEntries({
   day,
   k,
@@ -1343,12 +1446,17 @@ function otherTimeEntries({
 }) {
   return day.rows.map((row, index) => {
     const window = windowAt(day.column, row, k);
-    const share = windowMetrics(results, channel, window.slotIndices).weighted;
     const recommendation = recommendationForWindow(
       recommendations,
       channel,
       window,
     );
+    const { exact, weighted: share } = recommendation
+      ? recommendationMetrics(recommendation)
+      : {
+          exact: false,
+          ...windowMetrics(results, channel, window.slotIndices),
+        };
     const times = formatWindowTimes(day.column.slots.slice(row, row + k));
     const [start, end] = times.split("–");
     return {
@@ -1360,7 +1468,11 @@ function otherTimeEntries({
       start,
       end,
       share:
-        share == null ? null : share > 0 ? `up to ${shareOf(share)}%` : "0%",
+        share == null
+          ? null
+          : share > 0
+            ? `${exact ? "" : "up to "}${shareOf(share)}%`
+            : "0%",
       chipShare: share == null ? null : share > 0 ? shareOf(share) : "0",
       rank: recommendation?.rank ?? null,
       selected:
@@ -1699,8 +1811,9 @@ function OtherTimesSection({
             ? `Any open time in the next ${OTHER_TIMES_WEEKS} weeks, recommended or not (the calendar reaches further).`
             : "Any open time the calendar lets you pick, recommended or not."}{" "}
           Choose a day, then click a start time: each starts a {meetingMinutes}
-          -minute meeting. Shares are weighted, from each time&apos;s lowest
-          slot; times are in {timeZone}.
+          -minute meeting. Recommended times show their exact weighted share;
+          any other shows up to its lowest slot&apos;s, since people must be
+          free for all of it. Times are in {timeZone}.
         </p>
         {(mixed || groups.length > 1) && (
           <div className="other-times__controls">
@@ -2295,6 +2408,8 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
     <Panel
       ref={sectionRef}
       className="organizer-panel organizer-results-panel"
+      data-results-status={snapshot.status}
+      data-results-revision={snapshot.computedRevision ?? undefined}
       headingLevel={3}
       headingRef={headingRef}
       headingProps={{ tabIndex: -1 }}
@@ -2317,13 +2432,9 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
                 aria-hidden="true"
               />
               <span>
-                Results are updating for revision{" "}
-                {snapshot.requestedRevision ??
-                  event.resultsRevision ??
-                  "latest"}
-                .
+                Results are updating.
                 {snapshot.results
-                  ? " Showing the last successful snapshot meanwhile."
+                  ? " Showing the last calculated results meanwhile."
                   : ""}
               </span>
             </span>
@@ -2331,18 +2442,11 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
         )}
         {snapshot.status === "failed" && (
           <Alert variant="danger" role="alert">
-            Result calculation failed. The worker will retry; the last
-            successful snapshot remains visible.
-          </Alert>
-        )}
-        {snapshot.status === "fresh" && (
-          <Alert variant="secondary" role="status">
-            Results are current at revision{" "}
-            {snapshot.computedRevision ?? "latest"}
-            {snapshot.generatedAt
-              ? ` · generated ${new Date(snapshot.generatedAt).toLocaleString()}`
-              : ""}
-            .
+            The results could not be calculated. It will be retried
+            automatically
+            {snapshot.results
+              ? "; the last calculated results stay on screen."
+              : "."}
           </Alert>
         )}
         {blockedSlotIndices.length > 0 && (
@@ -2492,7 +2596,9 @@ function finalizeHint(event, selection, recommendedCount = 0) {
  * The disclosure lives outside the keyed content, so a re-pick resets the
  * step's own state without closing it. `picker` (the Recommended times)
  * sits outside the keyed content too: choosing one of them re-keys the
- * content but keeps the list open and the chosen chip focused.
+ * content but keeps the list open and the chosen chip focused. So does the
+ * location the organizer types, which belongs to the meeting rather than to
+ * one candidate time: comparing times must not cost them what they typed.
  */
 export function FinalizeScalePanel(props) {
   const { event, headingRef, picker = null, onOpenChange } = props;
@@ -2500,6 +2606,8 @@ export function FinalizeScalePanel(props) {
   const finalized = isFinalized(event);
   const [open, setOpen] = useState(() => Boolean(selection));
   const [seen, setSeen] = useState(props.selection);
+  // Until something is typed, the field shows the event's own location.
+  const [typedLocation, setTypedLocation] = useState(null);
   if (props.selection !== seen) {
     setSeen(props.selection);
     if (props.selection) setOpen(true);
@@ -2530,14 +2638,15 @@ export function FinalizeScalePanel(props) {
         key={selectionKey(selection) || "no-selection"}
         {...props}
         selection={selection}
+        location={typedLocation ?? (event.location || "")}
+        onLocationChange={setTypedLocation}
       />
     </TimeTableSection>
   );
 }
 
-function FinalizeStepIndicator({ selection, review, finalized }) {
+function FinalizeStepIndicator({ selection, reviewed, finalized }) {
   const hasSelection = Boolean(selection);
-  const hasReview = Boolean(review);
   const steps = [
     {
       label: "Select a time",
@@ -2546,13 +2655,13 @@ function FinalizeStepIndicator({ selection, review, finalized }) {
     },
     {
       label: "Review attendance",
-      done: finalized || hasReview,
-      active: !finalized && hasSelection && !hasReview,
+      done: finalized || reviewed,
+      active: !finalized && hasSelection && !reviewed,
     },
     {
       label: "Finalize meeting",
       done: finalized,
-      active: !finalized && hasReview,
+      active: !finalized && reviewed,
     },
   ];
   return (
@@ -2598,17 +2707,21 @@ function SelectionMetrics({ metrics }) {
     <p className="final-candidate__metrics mb-0">
       Up to {percentOf(metrics.weighted)}% weighted ·{" "}
       {percentOf(metrics.unweighted)}% unweighted across this window (its lowest
-      slot; people must be free for all of it). Exact attendance counts appear
-      after Review attendance.
+      slot; people must be free for all of it).
     </p>
   );
 }
 
-const ATTENDANCE_STATUS_LABELS = {
-  available: "Fully available",
-  partial: "Partly available",
-  unavailable: "Not available",
-};
+// What one counted person's answers mean for the window as a whole. A
+// "partial" is either free for all of it but only if needed somewhere (their
+// lowest slot is 0.5), or free for only some of it (their lowest slot is 0).
+function attendanceAvailability({ status, minimumAvailability }) {
+  if (status === "available") return "Fully available";
+  if (status === "unavailable") return "Not available";
+  return minimumAvailability > 0
+    ? "Available if needed"
+    : "Available for part of it";
+}
 
 const EXCLUSION_REASON_LABELS = {
   organizerExcluded: "Excluded by organizer",
@@ -2616,15 +2729,40 @@ const EXCLUSION_REASON_LABELS = {
   invalidResponse: "Invalid response",
 };
 
+function AttendanceTiles({ review, className = "" }) {
+  return (
+    <div
+      role="group"
+      className={`metric-tiles attendance-review ${className}`.trim()}
+      aria-label="Attendance review"
+    >
+      {[
+        ["Available", review.availableParticipantTotal],
+        ["Partial", review.partialParticipantTotal],
+        ["Unavailable", review.unavailableParticipantTotal],
+        ["Unanswered", review.unansweredParticipantTotal],
+        ["Excluded", review.excludedParticipantTotal],
+      ].map(([label, value]) => (
+        <div key={label} className="metric-tile attendance-review__item">
+          <span className="metric-tile__label">{label}</span>
+          <strong className="metric-tile__value attendance-review__value">
+            {value || 0}
+          </strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // Per-person breakdown behind the attendance count tiles: counted responses
 // first, then people who never answered, then anyone left out of results.
-function AttendanceReviewTable({ review }) {
+function AttendanceReviewTable({ review, className = "" }) {
   const rows = [
     ...(review.participants || []).map((participant) => ({
       key: `counted:${participant.participantId}`,
       name: participant.name,
       response: "Submitted",
-      availability: `${ATTENDANCE_STATUS_LABELS[participant.status]} · ${Math.round(participant.minimumAvailability * 100)}%`,
+      availability: attendanceAvailability(participant),
     })),
     ...(review.unansweredParticipants || []).map((participant) => ({
       key: `unanswered:${participant.participantId}`,
@@ -2643,7 +2781,7 @@ function AttendanceReviewTable({ review }) {
   if (rows.length === 0) return null;
   return (
     <div
-      className="table-responsive attendance-table mt-3"
+      className={`table-responsive attendance-table ${className}`.trim()}
       role="region"
       aria-label="Attendance by person"
       tabIndex={0}
@@ -2682,24 +2820,23 @@ function FinalizeScalePanelContent({
   setEvent,
   getToken,
   selection,
+  location,
+  onLocationChange,
   onDeliveryRequest,
   emptyPrompt = "Pick a time on the calendar.",
 }) {
-  const [location, setLocation] = useState(event.location || "");
-  const [review, setReview] = useState(null);
-  // The confirmation email the reviewed meeting would send, from the same
-  // reply as `review`: { payload, recipientCount, email, sample }, where
-  // `payload` is the meeting reviewed and the one Finalize sends. A new
-  // selection mounts this step afresh, and a location edit clears the
-  // review and drops any reply still on its way, so Finalize is only
-  // offered with a preview of the meeting being finalized.
-  const [confirmationPreview, setConfirmationPreview] = useState(null);
-  // Counts reviews asked for and location edits; a reply is applied only
-  // while its number is still the latest.
-  const reviewRequestRef = useRef(0);
-  // { error } while the confirmation email is reviewed before finalizing.
+  // The attendance for the picked time: read as soon as it is picked, and
+  // again when the results move on or the organizer asks. `key` says which
+  // request an outcome answers, so a reply (or a failure) for a time or a
+  // revision of the results that has since gone is never shown as current.
+  const [attendance, setAttendance] = useState(null);
+  const [attendanceFailure, setAttendanceFailure] = useState(null);
+  const [retries, setRetries] = useState(0);
+  // { error, proposed, recipientCount, email, sample } while the confirmation
+  // email is reviewed before finalizing: `proposed` is the meeting the email
+  // was asked for, and the one Finalize sends.
   const [finalizeDialog, setFinalizeDialog] = useState(null);
-  const [reviewing, setReviewing] = useState(false);
+  const [preparing, setPreparing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
@@ -2709,28 +2846,69 @@ function FinalizeScalePanelContent({
   const handOffFocus = useRef(false);
   const downloadRef = useRef(null);
 
-  const payload = useMemo(() => {
-    if (!selection) return null;
-    return {
-      startsAt: selection.startsAt,
-      endsAt: selection.endsAt,
-      channel: selection.channel,
-      location: location.trim(),
-    };
-  }, [location, selection]);
+  const code = event.code;
+  const { startsAt, endsAt, channel } = selection || {};
+  const meeting = event.finalMeeting;
+  const canFinalize = ["active", "closed"].includes(event.status);
+  const finalized = isFinalized(event);
+  const reviewable = canFinalize && !finalized && Boolean(startsAt && endsAt);
+  const attendanceKey = `${channel}|${startsAt}|${endsAt}|${event.resultsRevision ?? ""}|${retries}`;
+  const attendanceReady = attendance?.key === attendanceKey;
+  const attendanceError =
+    attendanceFailure?.key === attendanceKey ? attendanceFailure.message : "";
+  const reviewing = reviewable && !attendanceReady && !attendanceError;
 
-  const preview = async () => {
-    if (!payload?.startsAt || !payload?.endsAt) return;
-    const reviewed = payload;
-    reviewRequestRef.current += 1;
-    const request = reviewRequestRef.current;
-    const current = () => request === reviewRequestRef.current;
-    setReviewing(true);
+  useEffect(() => {
+    if (!reviewable || attendanceReady || attendanceError) return undefined;
+    let stale = false;
+    const timer = setTimeout(async () => {
+      try {
+        const token = await getToken();
+        const data = await previewFinalMeeting(
+          code,
+          { startsAt, endsAt, channel },
+          token,
+        );
+        if (stale) return;
+        setAttendance({
+          key: attendanceKey,
+          review: data?.attendance || data?.finalMeeting?.attendance || null,
+        });
+      } catch (requestError) {
+        if (stale) return;
+        setAttendanceFailure({
+          key: attendanceKey,
+          message:
+            requestError.message || "Unable to review this meeting time.",
+        });
+      }
+    }, 0);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+  }, [
+    reviewable,
+    attendanceReady,
+    attendanceError,
+    attendanceKey,
+    getToken,
+    code,
+    startsAt,
+    endsAt,
+    channel,
+  ]);
+
+  // Finalize meeting: asks what the confirmation would say for the meeting as
+  // it stands, the location typed included, and opens the review of that
+  // email. The dialog finalizes exactly the meeting it was asked about.
+  const openFinalize = async () => {
+    const proposed = { startsAt, endsAt, channel, location: location.trim() };
+    setPreparing(true);
     setError("");
     try {
       const token = await getToken();
-      const data = await previewFinalMeeting(event.code, reviewed, token);
-      if (!current()) return;
+      const data = await previewFinalMeeting(code, proposed, token);
       // A reply without the count (an older server) doesn't say who the
       // confirmation goes to, so it can't stand for "nobody".
       if (!isCount(data?.recipientCount)) {
@@ -2738,50 +2916,38 @@ function FinalizeScalePanelContent({
           "Unable to check who would get the confirmation email. Try again.",
         );
       }
-      setReview(data.attendance || data.finalMeeting?.attendance || null);
-      setConfirmationPreview({
-        payload: reviewed,
+      setFinalizeDialog({
+        error: "",
+        proposed,
         recipientCount: data.recipientCount,
         email: data.email ?? null,
         sample: data.sample ?? null,
       });
-      setStatus("Attendance review is current for this candidate.");
     } catch (requestError) {
-      if (!current()) return;
       setError(requestError.message || "Unable to review this meeting time.");
     } finally {
-      setReviewing(false);
+      setPreparing(false);
     }
   };
 
-  // A location edit makes any review, and any reply still on its way, out of
-  // date.
-  const changeLocation = (value) => {
-    reviewRequestRef.current += 1;
-    setLocation(value);
-    setReview(null);
-    setConfirmationPreview(null);
-    setStatus("");
-  };
-
-  const confirmationRecipients = confirmationPreview?.recipientCount ?? 0;
+  const confirmationRecipients = finalizeDialog?.recipientCount ?? 0;
 
   // Runs once the confirmation email was reviewed and confirmed; a failure
   // stays on the dialog's confirmation step, and trying again reuses the
   // same idempotency key. It finalizes the meeting that was reviewed.
   const confirm = async () => {
-    const reviewed = confirmationPreview?.payload;
-    if (!review || !reviewed) return;
+    const proposed = finalizeDialog?.proposed;
+    if (!proposed) return;
     if (!confirmationKey.current) confirmationKey.current = crypto.randomUUID();
     setConfirming(true);
     setError("");
-    setFinalizeDialog({ error: "" });
+    setFinalizeDialog((dialog) => dialog && { ...dialog, error: "" });
     try {
       const token = await getToken();
       const data = await confirmFinalMeeting(
-        event.code,
+        code,
         {
-          ...reviewed,
+          ...proposed,
           expectedVersion: event.version,
           idempotencyKey: confirmationKey.current,
         },
@@ -2789,7 +2955,12 @@ function FinalizeScalePanelContent({
       );
       handOffFocus.current = isFinalized(data.event);
       setEvent(data.event);
-      setReview(data.finalMeeting?.attendance || review);
+      if (data.finalMeeting?.attendance) {
+        setAttendance({
+          key: attendanceKey,
+          review: data.finalMeeting.attendance,
+        });
+      }
       // Invitation delivery is tracked in the workspace banner with every
       // other email run, so it survives re-picks and refreshes.
       const delivery =
@@ -2810,9 +2981,13 @@ function FinalizeScalePanelContent({
       confirmationKey.current = "";
       setFinalizeDialog(null);
     } catch (requestError) {
-      setFinalizeDialog({
-        error: requestError.message || "Unable to finalize this meeting.",
-      });
+      setFinalizeDialog(
+        (dialog) =>
+          dialog && {
+            ...dialog,
+            error: requestError.message || "Unable to finalize this meeting.",
+          },
+      );
     } finally {
       setConfirming(false);
     }
@@ -2823,7 +2998,7 @@ function FinalizeScalePanelContent({
     setError("");
     try {
       const token = await getToken();
-      const { blob, filename } = await downloadFinalCalendar(event.code, token);
+      const { blob, filename } = await downloadFinalCalendar(code, token);
       const href = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = href;
@@ -2841,9 +3016,6 @@ function FinalizeScalePanelContent({
     }
   };
 
-  const meeting = event.finalMeeting;
-  const canFinalize = ["active", "closed"].includes(event.status);
-  const finalized = isFinalized(event);
   // Finalizing swaps the review workspace (and, above it, the Recommended
   // and Other times lists) for the confirmed meeting. Focus that was in
   // Finalize when that happened (this tab's Finalize meeting, or a chip when
@@ -2868,40 +3040,68 @@ function FinalizeScalePanelContent({
     if (!active || active === document.body) downloadRef.current?.focus();
   }, [finalized, focusWasInside]);
 
+  const notices = (status || error) && (
+    <div className="d-flex flex-column gap-2">
+      {status && (
+        <Alert variant="success" role="status">
+          {status}
+        </Alert>
+      )}
+      {error && (
+        <Alert variant="danger" role="alert">
+          {error}
+        </Alert>
+      )}
+    </div>
+  );
+  const attendanceReview = attendance?.review ?? null;
+
   return (
     <div className="finalize-block__body">
       <FinalizeStepIndicator
         selection={selection}
-        review={review}
+        reviewed={reviewable && attendanceReady}
         finalized={finalized}
       />
       {finalized ? (
-        <div className="finalized-meeting">
-          <div className="finalized-meeting__summary">
-            <strong className="finalized-meeting__time">
-              {formatInTimezone(meeting.startsAt, event.timezone)} –{" "}
-              {formatInTimezone(meeting.endsAt, event.timezone)}
-            </strong>
-            <span className="finalized-meeting__meta">
-              <span className="icon-inline me-1" aria-hidden="true">
-                <CalendarCheckIcon />
+        <>
+          <div className="finalized-meeting">
+            <div className="finalized-meeting__summary">
+              <strong className="finalized-meeting__time">
+                {formatInTimezone(meeting.startsAt, event.timezone)} –{" "}
+                {formatInTimezone(meeting.endsAt, event.timezone)}
+              </strong>
+              <span className="finalized-meeting__meta">
+                <span className="icon-inline me-1" aria-hidden="true">
+                  <CalendarCheckIcon />
+                </span>
+                {meeting.channel === "virtual" ? "Virtual" : "In person"} ·{" "}
+                {meeting.location || "Location TBD"}
               </span>
-              {meeting.channel === "virtual" ? "Virtual" : "In person"} ·{" "}
-              {meeting.location || "Location TBD"}
-            </span>
+            </div>
+            <div className="finalized-meeting__actions">
+              <AppButton
+                ref={downloadRef}
+                variant="outlined"
+                icon={<DownloadIcon />}
+                onClick={download}
+                disabled={downloading}
+              >
+                {downloading ? "Preparing…" : "Download calendar (.ics)"}
+              </AppButton>
+            </div>
           </div>
-          <div className="finalized-meeting__actions">
-            <AppButton
-              ref={downloadRef}
-              variant="outlined"
-              icon={<DownloadIcon />}
-              onClick={download}
-              disabled={downloading}
-            >
-              {downloading ? "Preparing…" : "Download calendar (.ics)"}
-            </AppButton>
-          </div>
-        </div>
+          {notices && <div className="mt-3">{notices}</div>}
+          {attendanceReview && (
+            <>
+              <AttendanceTiles review={attendanceReview} className="mt-3" />
+              <AttendanceReviewTable
+                review={attendanceReview}
+                className="mt-3"
+              />
+            </>
+          )}
+        </>
       ) : selection ? (
         <div className="finalize-block__workspace d-flex flex-column gap-3">
           <div className="final-candidate">
@@ -2937,39 +3137,69 @@ function FinalizeScalePanelContent({
               </p>
             )}
           </div>
+          {reviewable &&
+            (attendanceError ? (
+              <Alert variant="danger" role="alert">
+                <div className="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                  <span>{attendanceError}</span>
+                  <AppButton
+                    variant="outlined"
+                    size="sm"
+                    onClick={() => setRetries((count) => count + 1)}
+                  >
+                    Try again
+                  </AppButton>
+                </div>
+              </Alert>
+            ) : (
+              <div className="d-flex flex-column gap-2">
+                {attendanceReview && (
+                  <AttendanceTiles review={attendanceReview} />
+                )}
+                <p className="text-secondary small mb-0" role="status">
+                  {reviewing
+                    ? "Reviewing attendance…"
+                    : "Attendance review is current for this candidate."}
+                </p>
+              </div>
+            ))}
           <FormField label="Location or meeting link">
             <input
               type="text"
               className="form-control"
               value={location}
               maxLength={500}
+              disabled={preparing || confirming}
               onChange={(changeEvent) =>
-                changeLocation(changeEvent.target.value)
+                onLocationChange(changeEvent.target.value)
               }
             />
           </FormField>
           <div className="finalize-block__actions d-flex flex-wrap gap-2">
             <AppButton
-              variant="outlined"
-              onClick={preview}
-              disabled={!canFinalize || reviewing || confirming}
-            >
-              {reviewing ? "Reviewing…" : "Review attendance"}
-            </AppButton>
-            <AppButton
               variant="filled"
               icon={<FinalizeIcon />}
-              onClick={() => setFinalizeDialog({ error: "" })}
-              disabled={!canFinalize || !review || reviewing || confirming}
+              busy={preparing}
+              onClick={openFinalize}
+              disabled={
+                !canFinalize || !attendanceReady || preparing || confirming
+              }
             >
-              {confirming ? "Finalizing…" : "Finalize meeting"}
+              {confirming
+                ? "Finalizing…"
+                : preparing
+                  ? "Preparing…"
+                  : "Finalize meeting"}
             </AppButton>
           </div>
           {!canFinalize && (
             <Alert variant="warning" role="note">
-              Reactivate this event before reviewing and finalizing a meeting
-              time.
+              Reactivate this event before finalizing a meeting time.
             </Alert>
+          )}
+          {notices}
+          {attendanceReview && !attendanceError && (
+            <AttendanceReviewTable review={attendanceReview} />
           )}
         </div>
       ) : (
@@ -2981,46 +3211,6 @@ function FinalizeScalePanelContent({
         >
           <p className="mb-0">{emptyPrompt}</p>
         </EmptyState>
-      )}
-
-      {review && (
-        <>
-          <div
-            role="group"
-            className="metric-tiles attendance-review mt-3"
-            aria-label="Attendance review"
-          >
-            {[
-              ["Available", review.availableParticipantTotal],
-              ["Partial", review.partialParticipantTotal],
-              ["Unavailable", review.unavailableParticipantTotal],
-              ["Unanswered", review.unansweredParticipantTotal],
-              ["Excluded", review.excludedParticipantTotal],
-            ].map(([label, value]) => (
-              <div key={label} className="metric-tile attendance-review__item">
-                <span className="metric-tile__label">{label}</span>
-                <strong className="metric-tile__value attendance-review__value">
-                  {value || 0}
-                </strong>
-              </div>
-            ))}
-          </div>
-          <AttendanceReviewTable review={review} />
-        </>
-      )}
-      {(status || error) && (
-        <div className="d-flex flex-column gap-2 mt-3">
-          {status && (
-            <Alert variant="success" role="status">
-              {status}
-            </Alert>
-          )}
-          {error && (
-            <Alert variant="danger" role="alert">
-              {error}
-            </Alert>
-          )}
-        </div>
       )}
 
       {finalizeDialog && (
@@ -3038,8 +3228,8 @@ function FinalizeScalePanelContent({
               </p>
             )
           }
-          email={confirmationPreview?.email ?? null}
-          emailNote={shownFor(confirmationPreview?.sample)}
+          email={finalizeDialog.email}
+          emailNote={shownFor(finalizeDialog.sample)}
           error={finalizeDialog.error}
           busy={confirming}
           allowEmpty

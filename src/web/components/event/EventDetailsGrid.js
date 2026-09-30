@@ -13,7 +13,12 @@ import {
   startingAvailabilityValue,
 } from "@/components/ui/Availability";
 import { DAY_LABELS } from "@/lib/constants";
-import { formatDateTimeInTimezone, formatMode, formatTime } from "@/lib/format";
+import {
+  formatDateList,
+  formatDateTimeInTimezone,
+  formatMode,
+  formatTime,
+} from "@/lib/format";
 
 function InfoCard({ label, value }) {
   return (
@@ -62,20 +67,26 @@ function blockedSlotCount(blockedSlots) {
   );
 }
 
+function eventDayText(event) {
+  if (
+    event?.daySelectionType === "specific_dates" &&
+    Array.isArray(event?.specificDates)
+  ) {
+    return formatDateList(event.specificDates);
+  }
+  return Array.isArray(event?.days)
+    ? event.days
+        .map((day) => DAY_LABELS[day])
+        .filter(Boolean)
+        .join(", ")
+    : "";
+}
+
 function OrganizerEventDetails({ event, extraCards }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsId = useId();
   const mode = event?.mode || "inperson";
-  const dayText =
-    event?.daySelectionType === "specific_dates" &&
-    Array.isArray(event?.specificDates)
-      ? event.specificDates.join(", ")
-      : Array.isArray(event?.days)
-        ? event.days
-            .map((day) => DAY_LABELS[day])
-            .filter(Boolean)
-            .join(", ")
-        : "";
+  const dayText = eventDayText(event);
   const timeWindow = `${formatTime(event?.startTime)} - ${formatTime(
     event?.endTime,
   )}${event?.crossesMidnight ? " (next day)" : ""}`;
@@ -84,9 +95,11 @@ function OrganizerEventDetails({ event, extraCards }) {
     blockedCount > 0 ? ` · ${blockedCount} slots blocked` : ""
   }`;
   const responseDeadline = event?.responseDeadline
-    ? formatDateTimeInTimezone(event.responseDeadline, event?.timezone, {
-        timeZoneName: "short",
-      })
+    ? `Deadline ${formatDateTimeInTimezone(
+        event.responseDeadline,
+        event?.timezone,
+        { timeZoneName: "short" },
+      )}`
     : "No deadline";
   const extraValue = (label, fallback) =>
     extraCards.find((card) => card.label === label)?.value ?? fallback;
@@ -199,16 +212,7 @@ function OrganizerEventDetails({ event, extraCards }) {
  */
 function EventDetailsGrid({ event, extraCards = [], variant = "default" }) {
   const mode = event?.mode || "inperson";
-  const dayText =
-    event?.daySelectionType === "specific_dates" &&
-    Array.isArray(event?.specificDates)
-      ? event.specificDates.join(", ")
-      : Array.isArray(event?.days)
-        ? event.days
-            .map((d) => DAY_LABELS[d])
-            .filter(Boolean)
-            .join(", ")
-        : "";
+  const dayText = eventDayText(event);
   const finalMeeting = event?.finalMeeting;
   if (variant === "organizer") {
     return <OrganizerEventDetails event={event} extraCards={extraCards} />;

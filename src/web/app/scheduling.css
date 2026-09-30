@@ -605,6 +605,13 @@
   grid-template-columns: repeat(auto-fit, minmax(5.5rem, 1fr));
 }
 
+/* On a phone the narrow tiles would break "UNAVAILABLE" mid-word. */
+@media (max-width: 575.98px) {
+  .finalize-block .metric-tiles {
+    grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  }
+}
+
 /* The attendance table has no height cap: a scroll area inside the step was
    hard to use, and the page scrolls anyway. */
 
@@ -613,7 +620,13 @@
 }
 
 .finalize-block__actions .btn {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+}
+
+@media (max-width: 575.98px) {
+  .finalize-block__actions .btn {
+    flex: 1 1 100%;
+  }
 }
 
 /* Selected candidate summary in the finalize step */

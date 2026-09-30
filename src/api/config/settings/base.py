@@ -156,13 +156,9 @@ AUTH_RATE_LIMITS = {
         "ip": {"limit": 20, "window": 3600, "block": 3600},
         "identity": {"limit": 5, "window": 3600, "block": 3600},
     },
-    "temp_access_code_request": {
-        "ip": {"limit": 2000, "window": 3600, "block": 3600},
-        "identity": {"limit": 5, "window": 3600, "block": 3600},
-    },
-    "temp_access_code_verify": {
+    "temp_access_open": {
         "ip": {"limit": 3000, "window": 600, "block": 900},
-        "identity": {"limit": 10, "window": 600, "block": 900},
+        "identity": {"limit": 20, "window": 600, "block": 900},
     },
     "password_login": {
         "ip": {"limit": 30, "window": 300, "block": 900},

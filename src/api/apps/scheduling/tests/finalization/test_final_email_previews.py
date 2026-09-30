@@ -242,6 +242,42 @@ class FinalEmailPreviewTests(TestCase):
                     {"recipientCount": 0, "email": None, "sample": None},
                 )
 
+    def test_archiving_a_finalized_event_keeps_its_meeting_until_it_is_reopened(self):
+        self.confirm()
+        EmailDeliveryJob.objects.filter(
+            message_type=EmailMessageLog.MessageType.FINAL_CONFIRMATION
+        ).update(status=EmailDeliveryJob.Status.SENT)
+
+        archived = self.client.put(
+            f"/events/lifecycle?code={self.event.code}",
+            {"status": "archived", "expectedVersion": self.event.version},
+            format="json",
+        )
+
+        self.assertEqual(archived.status_code, 200, archived.data)
+        self.assertEqual(archived.data["event"]["status"], "archived")
+        self.assertEqual(archived.data["cancellationEnqueued"], 0)
+        self.assertTrue(archived.data["event"]["finalMeeting"]["active"])
+        self.assertFalse(
+            EmailDeliveryJob.objects.filter(
+                message_type=EmailMessageLog.MessageType.FINAL_CANCELLATION
+            ).exists()
+        )
+
+        # The meeting still stands, so reopening the archived event is
+        # previewed and cancelled exactly like reopening a finalized one.
+        self.event.refresh_from_db()
+        preview = self.lifecycle_preview({"status": "active"})
+        self.assertEqual(preview.data["cancellation"]["recipientCount"], 2)
+        reopened = self.client.put(
+            f"/events/lifecycle?code={self.event.code}",
+            {"status": "active", "expectedVersion": self.event.version},
+            format="json",
+        )
+        self.assertEqual(reopened.status_code, 202, reopened.data)
+        self.assertEqual(reopened.data["cancellationEnqueued"], 2)
+        self.assertIsNone(reopened.data["event"]["finalMeeting"])
+
     def test_reopening_a_closed_event_without_a_meeting_cancels_nothing(self):
         self.event.status = Event.Status.CLOSED
         self.event.save(update_fields=["status", "updated_at"])

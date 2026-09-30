@@ -19,6 +19,7 @@ export default function ParticipantTable({
   total = participants.length,
   conflicts = {},
   readOnly = false,
+  openLink = false,
   onToggleSelect,
   onTogglePage,
   onSelectAllMatching,
@@ -65,12 +66,18 @@ export default function ParticipantTable({
         aria-label="Participant table"
         tabIndex={0}
       >
-        <table className="table align-middle participants-table">
+        {/* Roles are explicit because the narrow-screen layout changes the
+            display of table parts, and some browsers then drop the semantics. */}
+        <table role="table" className="table align-middle participants-table">
           <caption className="visually-hidden">Participants</caption>
-          <thead>
-            <tr>
+          <thead role="rowgroup">
+            <tr role="row">
               {selectable && (
-                <th scope="col" className="participants-table__select">
+                <th
+                  scope="col"
+                  role="columnheader"
+                  className="participants-table__select"
+                >
                   <MixedCheckbox
                     className="form-check-input"
                     aria-label="Select everyone on this page"
@@ -81,27 +88,40 @@ export default function ParticipantTable({
                   />
                 </th>
               )}
-              <th scope="col" className="participants-table__name">
+              <th
+                scope="col"
+                role="columnheader"
+                className="participants-table__name"
+              >
                 Name
               </th>
-              <th scope="col" className="participants-table__groups">
+              <th
+                scope="col"
+                role="columnheader"
+                className="participants-table__groups"
+              >
                 Groups
               </th>
-              <th scope="col" className="participants-table__response">
+              <th
+                scope="col"
+                role="columnheader"
+                className="participants-table__response"
+              >
                 Response
               </th>
-              <th scope="col" className="participants-table__invitation">
-                Invitation
-              </th>
-              <th scope="col" className="participants-table__actions">
+              <th
+                scope="col"
+                role="columnheader"
+                className="participants-table__actions"
+              >
                 <span className="visually-hidden">Actions</span>
               </th>
             </tr>
           </thead>
-          <tbody>
+          <tbody role="rowgroup">
             {helper && (
-              <tr className="participants-table__helper">
-                <td colSpan={columns}>
+              <tr role="row" className="participants-table__helper">
+                <td role="cell" colSpan={columns}>
                   <p className="small text-secondary mb-0" role="status">
                     {helper}
                   </p>
@@ -115,6 +135,7 @@ export default function ParticipantTable({
                 selected={selectedIds.has(participant.id)}
                 selectable={selectable}
                 readOnly={readOnly}
+                openLink={openLink}
                 conflict={conflicts[participant.id] ?? null}
                 onToggleSelect={onToggleSelect}
                 onOpen={onOpen}
