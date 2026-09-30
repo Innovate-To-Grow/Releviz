@@ -17,8 +17,7 @@ Member = get_user_model()
 
 @override_settings(ROOT_URLCONF="config.urls")
 class MemberAdminInlineVisibilityTest(TestCase):
-    """Inline sections must render for any staff member granted the ``authn`` app
-    (not only superusers), and must be hidden from staff without that grant."""
+    """Every active admin can use member inlines regardless of legacy app grants."""
 
     # noinspection PyPep8Naming
     def setUp(self):
@@ -41,7 +40,7 @@ class MemberAdminInlineVisibilityTest(TestCase):
             password="staff123",
             is_staff=True,
             is_active=True,
-            admin_apps=["authn"],
+            admin_apps=[],
         )
         ContactEmail.objects.create(
             member=self.staff_user,
@@ -80,15 +79,12 @@ class MemberAdminInlineVisibilityTest(TestCase):
         resp = self.client.get(self._change_url())
         self._assert_inlines_visible(resp)
 
-    def test_staff_user_with_authn_access_sees_inlines(self):
-        """A non-superuser staff member granted the ``authn`` app sees the inlines —
-        per-app access, not per-model Django permissions (apps.core.utils.access)."""
+    def test_staff_user_without_app_grants_sees_inlines(self):
         self.client.force_login(self.staff_user)
         resp = self.client.get(self._change_url())
         self._assert_inlines_visible(resp)
 
-    def test_staff_user_without_authn_access_is_forbidden(self):
-        """A staff member without the ``authn`` grant cannot open the Member change page."""
+    def test_staff_user_with_unrelated_legacy_grant_sees_inlines(self):
         other_app_staff = Member.objects.create_user(
             password="staff123",
             is_staff=True,
@@ -103,7 +99,18 @@ class MemberAdminInlineVisibilityTest(TestCase):
         )
         self.client.force_login(other_app_staff)
         resp = self.client.get(self._change_url())
-        self.assertEqual(resp.status_code, 403)
+        self._assert_inlines_visible(resp)
+
+    def test_ordinary_and_inactive_members_cannot_open_inlines(self):
+        for fields in ({"is_staff": False}, {"is_staff": True, "is_active": False}):
+            with self.subTest(fields=fields):
+                member = Member.objects.create_user(
+                    password="member123", admin_apps=["authn"], **fields
+                )
+                self.client.force_login(member)
+                response = self.client.get(self._change_url())
+                self.assertEqual(response.status_code, 302)
+                self.assertIn("/admin/login/", response["Location"])
 
 
 @override_settings(ROOT_URLCONF="config.urls", ADMIN_REQUIRE_CONFIRMATION=False)

@@ -73,6 +73,13 @@ from the ALB. Django admin is at `https://api.releviz.com/admin/`, not on the fr
 short-lived in-memory JWT access tokens, an `HttpOnly` refresh cookie tied to a revocable server
 session, optional browser-side password encryption, account recovery, and session management.
 
+**Administrators.** There is one administrator role. Enable **Administrator** on a member to grant
+access to every backend admin module and permission to manage other administrators. Existing staff
+and superuser accounts are migrated into this same role; legacy **Admin apps** selections no longer
+limit access. Disabling **Administrator** removes both admin entry and Django's full-permission flag.
+Inactive accounts cannot access the admin, and audit records retain their read-only restrictions.
+Full and temporary account access, and event organizer/participant roles, remain separate.
+
 Email-code requests allow 2,000 attempts per shared IP per hour, and verification allows
 3,000 attempts per shared IP per ten minutes. This accommodates a 1,000-participant event
 behind one campus network, including one resend and up to three verification attempts each.

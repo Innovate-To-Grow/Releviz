@@ -122,7 +122,6 @@ class Command(BaseCommand):
                 (
                     member.is_active,
                     member.is_staff,
-                    member.is_superuser,
                     member.has_usable_password(),
                     contact.email_type == "primary",
                     contact.verified,
@@ -133,14 +132,14 @@ class Command(BaseCommand):
                     "refusing to modify it in --create-only mode."
                 )
             return
-        if not (member.is_active and member.is_staff and member.is_superuser):
+        if not (member.is_active and member.is_staff):
             raise CommandError(
-                f"Email {email} belongs to a member who is not an active staff superuser; "
+                f"Email {email} belongs to a member who is not an active administrator; "
                 "refusing to promote or replace that account."
             )
         if not contact.verified:
             raise CommandError(
-                f"Email {email} belongs to an active staff superuser, but the contact is not verified; "
+                f"Email {email} belongs to an active administrator, but the contact is not verified; "
                 "refusing to verify or otherwise modify that account."
             )
 

@@ -357,15 +357,10 @@ UNFOLD = {
             "models": [
                 "authn.member",
                 "authn.contactemail",
-                "authn.emailauthchallenge",
             ],
             "items": [
                 {"title": "Members", "link": "/admin/authn/member/"},
                 {"title": "Emails", "link": "/admin/authn/contactemail/"},
-                {
-                    "title": "Login Challenges",
-                    "link": "/admin/authn/emailauthchallenge/",
-                },
             ],
         },
         {

@@ -217,10 +217,8 @@ class ConfirmOnSaveMixin:
         return HttpResponseRedirect(confirm_url)
 
     def _confirm_change_view(self, request):
-        # ``admin_view`` only enforces is_staff; re-check per-app access so a
-        # staff member without this model's app cannot reach the change/delete
-        # confirmation (and its data diff). Execution is additionally gated by
-        # the underlying ``changeform_view``/``delete_view`` permission checks.
+        # Re-check model access before showing the confirmation and its data diff.
+        # Execution also checks the underlying change/delete permissions.
         if not self.has_view_permission(request):
             raise PermissionDenied(
                 f"You do not have permission to view {self.opts.verbose_name_plural}."
@@ -508,8 +506,8 @@ class ConfirmOnSaveMixin:
         return self.opts.verbose_name
 
     def _confirm_action_view(self, request):
-        # See _confirm_change_view: gate the bulk-action confirmation on per-app
-        # access (execution re-checks via response_action / the action itself).
+        # Gate bulk-action confirmation on model access. Execution re-checks via
+        # response_action and the action itself.
         if not self.has_view_permission(request):
             raise PermissionDenied(
                 f"You do not have permission to view {self.opts.verbose_name_plural}."

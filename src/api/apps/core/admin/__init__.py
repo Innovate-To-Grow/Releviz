@@ -15,6 +15,7 @@ from .common import (
     truncate_text,
 )
 from .mixins import (
+    AppAccessPermissionMixin,
     ConfirmOnSaveMixin,
     DataExportMixin,
     ExcelExportMixin,
@@ -32,6 +33,7 @@ __all__ = [
     "BaseModelAdmin",
     "ReadOnlyModelAdmin",
     # Mixins
+    "AppAccessPermissionMixin",
     "ConfirmOnSaveMixin",
     "TimestampedAdminMixin",
     "DataExportMixin",
