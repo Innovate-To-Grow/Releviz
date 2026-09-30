@@ -57,7 +57,10 @@ def apply_registration_details(member, details: dict, *, email: str) -> None:
     member.first_name = details["first_name"]
     member.last_name = details["last_name"]
     member.email = email
-    _validate_password_strength(details, member)
+    try:
+        validate_password(details["password"], user=member)
+    except DjangoValidationError as exc:
+        raise serializers.ValidationError({"password": list(exc.messages)}) from exc
     member.set_password(details["password"])
 
 

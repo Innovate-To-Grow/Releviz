@@ -649,6 +649,21 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         self.assertFalse(self.temporary.has_usable_password())
         self.assertEqual((self.temporary.first_name, self.temporary.last_name), ("Temp", "Member"))
 
+    def test_starting_an_upgrade_rejects_a_weak_password_before_any_code_is_sent(self):
+        with patch("apps.authn.services.email.send_email.send_verification_email") as send:
+            weak = self._start_upgrade(self.temp_client(), "password")
+
+        self.assertEqual(weak.status_code, 400)
+        self.assertIn("password", weak.data)
+        send.assert_not_called()
+        self.assertFalse(
+            EmailAuthChallenge.objects.filter(
+                member=self.temporary, purpose=EmailAuthChallenge.Purpose.REGISTER
+            ).exists()
+        )
+        self.temporary.refresh_from_db()
+        self.assertEqual(self.temporary.access_level, "temporary")
+
     def test_link_holder_restarting_an_upgrade_cannot_replace_the_persons_password(self):
         with (
             patch("apps.authn.services.email.challenges._random_code", return_value="111111"),
