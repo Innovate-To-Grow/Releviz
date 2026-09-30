@@ -201,9 +201,9 @@ class EmailProviderConfigAdmin(AppAccessPermissionMixin, ModelAdmin):
 class ReadOnlyRecordAdminMixin:
     """Audit and outbox records: nobody adds, edits or deletes one here.
 
-    ``has_delete_permission`` keeps the per-app check, because Django also asks
-    it when the event or member a record belongs to is deleted, and the record
-    goes with it. Deleting a record on its own is refused below instead.
+    ``has_delete_permission`` keeps the administrator check, because Django also
+    asks it when the event or member a record belongs to is deleted, and the
+    record goes with it. Deleting a record on its own is refused below instead.
     """
 
     def has_add_permission(self, request):
@@ -269,7 +269,6 @@ class EmailDeliveryJobAdmin(ReadOnlyRecordAdminMixin, AppAccessPermissionMixin, 
         "message_id",
         "provider_message_id",
         "event__code",
-        "member__email",
         "member__contact_emails__email_address",
         "invitation__email",
     )
@@ -334,7 +333,7 @@ class EmailDeliveryRequestAdmin(ReadOnlyRecordAdminMixin, AppAccessPermissionMix
     search_fields = (
         "event__code",
         "event__name",
-        "requested_by__email",
+        "requested_by__contact_emails__email_address",
         "idempotency_key",
         "request_fingerprint",
     )

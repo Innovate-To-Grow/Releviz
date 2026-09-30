@@ -23,6 +23,72 @@ function shortDate(date) {
   });
 }
 
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+// How the event pages print a list of specific dates (YYYY-MM-DD): in
+// order, consecutive days as one run ("Oct 5–9, 12–16, 2026"), a month named
+// once for the runs that follow in it, a run across months spelled out
+// ("Oct 30 – Nov 2, 2026"), and each year once after its last date; a run
+// across New Year names both years.
+function dateListText(dates) {
+  const days = [...new Set(dates)].sort().map((date) => {
+    const [year, month, day] = date.split("-").map(Number);
+    return { year, month, day, ms: Date.UTC(year, month - 1, day) };
+  });
+  const runs = [];
+  for (const day of days) {
+    const run = runs[runs.length - 1];
+    if (run && day.ms === run.end.ms + DAY_MS) run.end = day;
+    else runs.push({ start: day, end: day });
+  }
+  const monthDay = ({ month, day }) => `${MONTHS[month - 1]} ${day}`;
+  const years = [];
+  let parts = [];
+  let previousMonth = null;
+  const closeYear = (year) => {
+    if (parts.length) years.push(`${parts.join(", ")}, ${year}`);
+    parts = [];
+    previousMonth = null;
+  };
+  runs.forEach(({ start, end }, index) => {
+    const before = runs[index - 1];
+    if (before && before.end.year !== start.year) closeYear(before.end.year);
+    if (start.year !== end.year) {
+      closeYear(start.year);
+      years.push(
+        `${monthDay(start)}, ${start.year} – ${monthDay(end)}, ${end.year}`,
+      );
+    } else if (start.month !== end.month) {
+      parts.push(`${monthDay(start)} – ${monthDay(end)}`);
+      previousMonth = null;
+    } else {
+      const span =
+        start.day === end.day ? `${start.day}` : `${start.day}–${end.day}`;
+      parts.push(
+        start.month === previousMonth
+          ? span
+          : `${MONTHS[start.month - 1]} ${span}`,
+      );
+      previousMonth = start.month;
+    }
+  });
+  if (runs.length) closeYear(runs[runs.length - 1].end.year);
+  return years.join(", ");
+}
+
 // An instant as the UTC basic format ICS files use: YYYYMMDDTHHMMSSZ.
 function icsUtc(value) {
   return new Date(value)
@@ -82,6 +148,7 @@ function nextUsDstDates(now = Date.now()) {
 
 module.exports = {
   DAY_MS,
+  dateListText,
   icsUtc,
   isoDate,
   nextUsDstDates,

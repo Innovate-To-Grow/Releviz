@@ -4,45 +4,19 @@ Base admin classes for consistent admin interface across the project.
 
 from unfold.admin import ModelAdmin
 
-from apps.core.utils.access import user_can_access_app
-
-from ..mixins import ConfirmOnSaveMixin, DataExportMixin, TimestampedAdminMixin
-
-
-class AppAccessPermissionMixin:
-    """
-    Per-Django-app access control (see apps.core.utils.access.user_can_access_app):
-    a staff member may manage this model only if their ``admin_apps`` includes
-    this model's app label; superusers (Releviz Master) are always granted.
-
-    Every project model admin needs it: Django's default checks per-model
-    permissions, which no member is ever given.
-    """
-
-    def _has_app_access(self, request) -> bool:
-        return user_can_access_app(request.user, self.opts.app_label)
-
-    def has_module_permission(self, request):
-        return self._has_app_access(request)
-
-    def has_view_permission(self, request, obj=None):
-        return self._has_app_access(request)
-
-    def has_add_permission(self, request):
-        return self._has_app_access(request)
-
-    def has_change_permission(self, request, obj=None):
-        return self._has_app_access(request)
-
-    def has_delete_permission(self, request, obj=None):
-        return self._has_app_access(request)
-
-
-class BaseModelAdmin(
+from ..mixins import (
+    AppAccessPermissionMixin,
     ConfirmOnSaveMixin,
     DataExportMixin,
     TimestampedAdminMixin,
+)
+
+
+class BaseModelAdmin(
     AppAccessPermissionMixin,
+    ConfirmOnSaveMixin,
+    DataExportMixin,
+    TimestampedAdminMixin,
     ModelAdmin,
 ):
     """
@@ -53,7 +27,8 @@ class BaseModelAdmin(
     - Common readonly fields for ProjectControlModel
     - Timestamp readonly fields
     - Standard list display configuration
-    - Per-Django-app access control (see AppAccessPermissionMixin)
+    - Shared administrator access control: every active administrator may
+      manage models across every app (see apps.core.utils.access.user_can_access_app).
     """
 
     # Common readonly fields for ProjectControlModel

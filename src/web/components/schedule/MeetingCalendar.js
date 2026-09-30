@@ -33,6 +33,7 @@ import {
   cellMetrics,
   cellState,
   confirmedBlock,
+  countsNobody,
   defaultView,
   formatRangeLabel,
   groupKind,
@@ -235,8 +236,10 @@ function EmptyCell({ columnIndex, headerLabel }) {
  * blocks while `showRankedWindows` is true (the recommended times in the
  * Time Table's Finalize step are open), and picking a cell inside one still
  * yields that recommended time either way. Clicking (or pressing Enter/Space on) any startable cell selects a
- * window of the event's meeting duration beginning there. Only a slot the
- * organizer blocked (`data-blocked-slot`) is neutral: no share, no tone. An
+ * window of the event's meeting duration beginning there. A slot the
+ * organizer blocked (`data-blocked-slot`) is neutral: no share, no tone. So is
+ * every slot while there is no results snapshot yet or it counts nobody (all
+ * its shares are 0, which would read as "nobody is free"). An
  * open slot whose window would run into a block is unpickable too
  * (`data-state="blocked"`) but keeps its share, like a tail cell.
  *
@@ -416,7 +419,9 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     0,
   );
   const counted = results?.countedResponseTotal;
-  const neutral = !results?.channels?.[channel];
+  const hasSnapshot = Boolean(results?.channels?.[channel]);
+  const nobodyCounted = hasSnapshot && countsNobody(results);
+  const neutral = !hasSnapshot || nobodyCounted;
 
   // Per-cell view models, keyed by slot index. Recomputed only when the data
   // behind them changes; hover/focus never touch this map.
@@ -471,11 +476,13 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
         const cellNeutral = neutral || blockedSlot;
         const availabilityText = blockedSlot
           ? null
-          : neutral
+          : !hasSnapshot
             ? "No availability snapshot yet."
-            : `Weighted ${weightedPercent ?? 0}%, unweighted ${unweightedPercent ?? 0}%${
-                Number.isFinite(counted) ? ` of ${counted} responses` : ""
-              }.`;
+            : nobodyCounted
+              ? "No responses counted yet."
+              : `Free in this slot: weighted ${weightedPercent ?? 0}%, unweighted ${unweightedPercent ?? 0}%${
+                  Number.isFinite(counted) ? ` of ${counted} responses` : ""
+                }.`;
         const rank = blockRankByIndex.get(slot.index);
         const rankText = `${rank != null ? ` Inside recommended time #${rank}.` : ""}${
           confirmedIndices.has(slot.index)
@@ -534,6 +541,8 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     kind,
     now,
     neutral,
+    hasSnapshot,
+    nobodyCounted,
     counted,
     durationMinutes,
     pickLocked,
@@ -1278,7 +1287,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
                 className="meeting-calendar__legend-gradient"
                 aria-hidden="true"
               />
-              <span>0% → 100% of responses free ({metric})</span>
+              <span>0% → 100% of responses free in a slot ({metric})</span>
             </li>
             {showRankedWindows && (
               <li className="meeting-calendar__legend-item">
@@ -1324,7 +1333,9 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
       )}
       {!painting && k >= 1 && neutral && (
         <p className="meeting-calendar__note">
-          Availability shading appears once the first results snapshot is ready.
+          {nobodyCounted
+            ? "No responses are counted yet, so nothing is shaded. Shading appears as people submit their schedules."
+            : "Availability shading appears once the first results snapshot is ready."}
           {pickLocked ? "" : " You can already pick any window."}
         </p>
       )}

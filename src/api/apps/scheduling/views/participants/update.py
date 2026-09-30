@@ -11,17 +11,14 @@ from rest_framework.views import APIView
 
 from apps.scheduling.models import Event, EventInvitation, Participant, ScheduleEditRecord
 from apps.scheduling.payloads import api_participant
-from apps.scheduling.permissions import organizer_may_edit_response, weight_for_participant
+from apps.scheduling.permissions import organizer_may_edit_response
 from apps.scheduling.services.availability import validate_availability
 from apps.scheduling.services.events import response_write_error
 from apps.scheduling.services.invitations import (
     mark_invitation_for_member,
     mark_invitation_response_withdrawn,
 )
-from apps.scheduling.services.results import (
-    participant_is_excluded,
-    request_event_results_recompute,
-)
+from apps.scheduling.services.results import request_event_results_recompute
 from apps.scheduling.services.roster_groups import (
     memberships_differ,
     parse_group_cell,
@@ -218,16 +215,16 @@ class ParticipantUpdateView(APIView):
                     },
                     status=409,
                 )
-        if is_response_mutation:
-            weight = weight_for_participant(event, participant)
-            if participant_is_excluded(participant, weight):
-                return Response(
-                    {
-                        "error": "Excluded participants cannot change availability",
-                        "errorCode": "participant_excluded",
-                    },
-                    status=403,
-                )
+        # Only removal from the event locks a response. Someone left out of the
+        # results still saves and submits; the results simply do not count them.
+        if is_response_mutation and participant.hidden:
+            return Response(
+                {
+                    "error": "Excluded participants cannot change availability",
+                    "errorCode": "participant_excluded",
+                },
+                status=403,
+            )
 
         updates = {}
         for field, label in (

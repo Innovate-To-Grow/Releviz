@@ -11,6 +11,7 @@ const {
   beforeUnloadIsBlocked,
   datetimeLocalHoursFromNow,
   dispatchEmailJobs,
+  emailsSentTo,
   expandAdvancedOptions,
   expectDashboard,
   fillTextbox,
@@ -23,6 +24,7 @@ const {
   readSession,
   recomputeEventResults,
   registerAccount,
+  runBackendCommand,
   selectOption,
   temporaryAccessPathFromEmail,
 } = require("./helpers/releviz");
@@ -42,8 +44,44 @@ const {
 } = require("./helpers/participants");
 const {
   currentResultsRevision,
-  reviewAttendance,
+  waitForAttendanceReview,
 } = require("./helpers/workspace");
+
+// The row's one badge: submitted, or how far its invitation has got.
+function responseBadge(row) {
+  return row.locator(".participants-table__response");
+}
+
+// Picks an option in the Filter popover's single Response group, then closes
+// the popover so it cannot cover the list.
+async function chooseResponseFilter(page, label) {
+  await page
+    .locator("#organizer-roster")
+    .getByRole("button", { name: /^Filter/ })
+    .click();
+  await page
+    .getByRole("group", { name: "Response", exact: true })
+    .getByRole("radio", { name: label, exact: true })
+    .click();
+  await page.keyboard.press("Escape");
+}
+
+// The group menu is a popover that scripts keep anchored to its trigger on
+// every scroll. Opening it with the trigger mid-screen keeps the whole menu
+// in view, so clicking an item needs no scroll of its own: WebKit reports a
+// scroll a frame late, and a click right after one could land where the item
+// was. The dialog is then waited for, so a lost click fails here, not later.
+async function openGroupsPanel(page) {
+  const trigger = page.getByRole("button", { name: "Group: Everyone" });
+  await trigger.evaluate((element) =>
+    element.scrollIntoView({ block: "center", behavior: "instant" }),
+  );
+  await trigger.click();
+  await page.getByRole("button", { name: "Manage groups…" }).click();
+  const panel = page.getByRole("dialog", { name: "Groups", exact: true });
+  await expect(panel).toBeVisible();
+  return panel;
+}
 
 function assertDatabaseState(payload) {
   const script = `
@@ -311,7 +349,7 @@ import django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.e2e")
 django.setup()
 
-from apps.authn.models import ContactEmail
+from apps.authn.models import ContactEmail, EmailAuthChallenge
 from apps.mail.models import EmailDeliveryJob
 from apps.scheduling.models import Event, EventInvitation, Participant, TemporaryEventSession, UserEvent, Weight
 
@@ -337,6 +375,13 @@ print(json.dumps({
     "hasUsablePassword": member.has_usable_password(),
     "invitationMemberId": str(invitation.member_id),
     "invitationFirstSent": invitation.first_sent_at is not None,
+    "invitationStatus": invitation.status,
+    "invitationOpened": invitation.opened_at is not None,
+    "invitationAccepted": invitation.accepted_at is not None,
+    "tempAccessChallengeCount": EmailAuthChallenge.objects.filter(
+        member=member,
+        purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
+    ).count(),
     "invitationJobCount": EmailDeliveryJob.objects.filter(
         event=event,
         invitation=invitation,
@@ -498,11 +543,15 @@ test.describe("Releviz account and scheduling flow", () => {
       subject: `Share your availability for ${eventName}`,
       heading: "You're invited",
       link: { name: "Share your availability", href: previewLink },
+      notice:
+        "This private link is only for you and only grants access to this event. Please do not forward it.",
       text: [
         `Link: ${previewLink}`,
-        "Open the link and enter the six-digit code sent to this email address.",
+        "Open the link to share your availability. It is private to you and only grants access to this event, so please do not forward it.",
       ],
     });
+    // The link alone opens the schedule, so the email promises no code.
+    expect(invitationEnvelope.text).not.toMatch(/six-digit|verification code/i);
     await expect(
       importInviteDialog.getByText(
         "Shown for Temporary Taylor. Each person gets their own private link.",
@@ -605,7 +654,14 @@ test.describe("Releviz account and scheduling flow", () => {
       temporaryEmail,
     );
     expect(invitationEmail).not.toContain("invitation=preview");
+    expect(invitationEmail).toContain(
+      "It is private to you and only grants access to this event, so please do not forward it.",
+    );
+    expect(invitationEmail).not.toMatch(/six-digit|verification code/i);
     await expect(eventDeliveryProgress.getByText("1 sent")).toBeVisible({
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
+    await expect(responseBadge(participantCard)).toHaveText("Invited", {
       timeout: LIVE_SYNC_TIMEOUT_MS,
     });
     const sentRoster = await apiJson(
@@ -636,28 +692,104 @@ test.describe("Releviz account and scheduling flow", () => {
     });
     await expect(organizerDrawer).toBeVisible();
 
+    // A link that matches no invitation opens nothing, and says so without
+    // hinting at why: an unknown token and, further down, a link whose person
+    // has since upgraded look the same.
+    const strangerContext = await browser.newContext();
+    const strangerPage = await strangerContext.newPage();
+    await strangerPage.goto(
+      `/temp-access?code=${eventCode}&invitation=${crypto.randomUUID()}`,
+    );
+    await expect(
+      strangerPage.getByRole("heading", {
+        name: "This invitation link isn't active",
+      }),
+    ).toBeVisible();
+    await expect(
+      strangerPage.getByText(
+        "It may have been replaced by a newer invitation, or the organizer changed the address it was sent to.",
+      ),
+    ).toBeVisible();
+    await expect(
+      strangerPage.getByRole("heading", { name: eventName }),
+    ).toHaveCount(0);
+    await strangerContext.close();
+
+    // The emailed link is the credential: opening it lands straight on
+    // Taylor's schedule, with no code to type and no second email.
     const temporaryContext = await browser.newContext();
     const temporaryPage = await temporaryContext.newPage();
-    const accessCodeStartedAt = Date.now() - 1000;
+    // The first attempt to open the link fails on the way. The page keeps the
+    // link and offers to try again, and the retry opens the schedule.
+    let failNextOpen = true;
+    await temporaryPage.route("**/events/temp-access/open", async (route) => {
+      if (failNextOpen) {
+        failNextOpen = false;
+        await route.fulfill({ status: 503, json: {} });
+        return;
+      }
+      await route.continue();
+    });
+    const openedAt = Date.now();
     await temporaryPage.goto(accessPath);
     await expect(
-      temporaryPage.getByRole("heading", { name: "Check your email" }),
+      temporaryPage.getByText(
+        "We could not open your invitation. Check your connection and try again.",
+      ),
     ).toBeVisible();
-    const accessCode = await latestVerificationCode(
-      temporaryEmail,
-      accessCodeStartedAt,
-      "temp_event_access",
-    );
-    await temporaryPage.getByLabel("Verification code").fill(accessCode);
-    await temporaryPage
-      .getByRole("button", { name: "Verify and open schedule" })
-      .click();
+    await expect(temporaryPage.getByLabel("Verification code")).toHaveCount(0);
+    await temporaryPage.getByRole("button", { name: "Try again" }).click();
     await expect(
       temporaryPage.getByRole("heading", { name: eventName }),
     ).toBeVisible();
     await expect(
       temporaryPage.getByText("You are responding as Temporary Taylor"),
     ).toBeVisible();
+    await expect(temporaryPage.getByLabel("Verification code")).toHaveCount(0);
+    await expect(
+      temporaryPage.getByRole("heading", { name: "Check your email" }),
+    ).toHaveCount(0);
+    await expect(temporaryPage).toHaveURL(
+      new RegExp(`/temp-access\\?code=${eventCode}$`),
+    );
+    expect(await emailsSentTo(temporaryEmail, openedAt)).toEqual([]);
+    // Opening records that the link was opened. It is not accepting the
+    // invitation: that waits for Taylor's own first save or submit.
+    const openedState = temporaryAccountState({
+      code: eventCode,
+      email: temporaryEmail,
+    });
+    expect(openedState).toEqual(
+      expect.objectContaining({
+        invitationStatus: "opened",
+        invitationOpened: true,
+        invitationAccepted: false,
+        tempAccessChallengeCount: 0,
+        tempSessionCount: 1,
+      }),
+    );
+    // The organizer's row does not move on to Started for an opened link.
+    await expect(responseBadge(participantCard)).toHaveText("Invited");
+
+    // Opening the same link again in the same browser lands on the schedule
+    // again, still with no code, and keeps the session it has.
+    await temporaryPage.goto(accessPath);
+    await expect(
+      temporaryPage.getByRole("heading", { name: eventName }),
+    ).toBeVisible();
+    await expect(
+      temporaryPage.getByText("You are responding as Temporary Taylor"),
+    ).toBeVisible();
+    await expect(temporaryPage.getByLabel("Verification code")).toHaveCount(0);
+    expect(await emailsSentTo(temporaryEmail, openedAt)).toEqual([]);
+    expect(
+      temporaryAccountState({ code: eventCode, email: temporaryEmail }),
+    ).toEqual(
+      expect.objectContaining({
+        tempSessionCount: 1,
+        activeTempSessionCount: 1,
+      }),
+    );
 
     await expect(participantSummary(page)).toContainText("0 submitted");
     let revisionBeforeResponse = -1;
@@ -693,9 +825,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(participantSummary(page)).toContainText("1 submitted", {
       timeout: 20_000,
     });
-    await expect(
-      participantCard.locator(".participants-table__response"),
-    ).toHaveText("Submitted");
+    await expect(responseBadge(participantCard)).toHaveText("Submitted");
     await expect
       .poll(() => currentResultsRevision(page), { timeout: 20_000 })
       .toBeGreaterThan(revisionBeforeResponse);
@@ -755,6 +885,11 @@ test.describe("Releviz account and scheduling flow", () => {
         accessLevel: "temporary",
         contactVerified: false,
         userEventVisible: true,
+        // Taylor's own first save is what accepted the invitation, and no
+        // emailed code was ever issued along the way.
+        invitationStatus: "submitted",
+        invitationAccepted: true,
+        tempAccessChallengeCount: 0,
         tempSessionCount: 1,
         activeTempSessionCount: 1,
         revokedTempSessionCount: 0,
@@ -947,6 +1082,20 @@ test.describe("Releviz account and scheduling flow", () => {
       beforeUpgrade.availabilityInperson,
     );
 
+    // Taylor answers with the account now, so the old private link opens
+    // nothing, and says no more than any other link that matches nothing.
+    const oldLinkPage = await temporaryContext.newPage();
+    await oldLinkPage.goto(accessPath);
+    await expect(
+      oldLinkPage.getByRole("heading", {
+        name: "This invitation link isn't active",
+      }),
+    ).toBeVisible();
+    await expect(
+      oldLinkPage.getByRole("heading", { name: eventName }),
+    ).toHaveCount(0);
+    await oldLinkPage.close();
+
     // Add and send invitation adds the person without emailing them and
     // opens the invitation review above the panel. Closing the review
     // leaves them added and uninvited, with Send invitation on the result.
@@ -983,6 +1132,14 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByRole("region", { name: "Selected people" }),
     ).toHaveCount(0);
+    // The list keeps saying that person has not been emailed, for as long
+    // as that is true.
+    const notInvitedBanner = page
+      .getByRole("status")
+      .filter({ hasText: /been invited yet/ });
+    await expect(notInvitedBanner).toContainText(
+      "1 person hasn't been invited yet. Nobody is emailed until you send invitations.",
+    );
 
     const rosterAfterAdd = await apiJson(
       request,
@@ -1000,7 +1157,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const addedCard = page.locator(
       `[data-roster-participant-id="${addedParticipant.id}"]`,
     );
-    await expect(addedCard.getByText("Not sent")).toBeVisible();
+    await expect(responseBadge(addedCard)).toHaveText("Not invited");
     const addedState = temporaryAccountState({
       code: eventCode,
       email: addedEmail,
@@ -1037,11 +1194,12 @@ test.describe("Releviz account and scheduling flow", () => {
     await expectToast(page, "Queued 1 invitation.");
     await expect(selectionBar).toHaveCount(0);
     await expect(eventDeliveryProgress).toBeVisible();
+    await expect(notInvitedBanner).toHaveCount(0);
 
     dispatchEmailJobs();
     // Delivery moves the invitation, which the live sync picks up as a
     // roster change.
-    await expect(addedCard.getByText("Sent", { exact: true })).toBeVisible({
+    await expect(responseBadge(addedCard)).toHaveText("Invited", {
       timeout: LIVE_SYNC_TIMEOUT_MS,
     });
     const rosterAfterSend = await apiJson(
@@ -1123,9 +1281,16 @@ test.describe("Releviz account and scheduling flow", () => {
       "No email · you enter their schedule",
     );
     await expect(managedRow).not.toContainText(organizerEmail);
+    // One Response column carries the whole person; there is no separate
+    // Invitation column, and nobody is invited here.
+    const rosterTable = page.locator("table.participants-table");
     await expect(
-      managedRow.locator(".participants-table__invitation"),
-    ).toHaveText("No email");
+      rosterTable.getByRole("columnheader", { name: "Response", exact: true }),
+    ).toHaveCount(1);
+    await expect(
+      rosterTable.getByRole("columnheader", { name: "Invitation" }),
+    ).toHaveCount(0);
+    await expect(responseBadge(managedRow)).toHaveText("Not submitted");
     await expect(
       managedRow.getByRole("button", { name: "Edit schedule" }),
     ).toBeVisible();
@@ -1184,6 +1349,7 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(dashboard.payload.participating).toEqual([]);
     const samRow = participantRow(page, "Sam No Email");
     await expect(samRow).toContainText("No email", { timeout: 20_000 });
+    await expect(responseBadge(samRow)).toHaveText("Not submitted");
     await expect(samRow.locator(".participants-table__groups")).toHaveText(
       "Every group",
     );
@@ -1221,9 +1387,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await addPerson(addPanel, participantName, participantEmail);
     const fullRow = participantRow(page, participantName);
     await expect(fullRow).toContainText(participantEmail);
-    await expect(fullRow.locator(".participants-table__invitation")).toHaveText(
-      "Not sent",
-    );
+    await expect(responseBadge(fullRow)).toHaveText("Not invited");
     // The result's Open link goes to the person panel, which says how the
     // row is answered and opens the schedule editor from there.
     await addPanel.getByRole("button", { name: "Open", exact: true }).click();
@@ -1254,8 +1418,10 @@ test.describe("Releviz account and scheduling flow", () => {
       organizerDrawer.getByText("Schedule submitted."),
     ).toBeVisible();
 
-    // Entering the response is not an acceptance: the row stays Not sent
-    // and the organizer keeps the right to edit it.
+    // Entering the response is not an acceptance: the invitation stays
+    // not sent and the organizer keeps the right to edit it. The row itself
+    // reads Submitted, which outranks every invitation stage.
+    await expect(responseBadge(fullRow)).toHaveText("Submitted");
     const rosterAfterSubmit = await apiJson(
       request,
       "GET",
@@ -1429,9 +1595,9 @@ test.describe("Releviz account and scheduling flow", () => {
     const ownRow = participantRow(page, "Owen Organizer");
     await expect(ownRow).toContainText("Owen Organizer (you)");
     await expect(ownRow).toContainText("From your account");
-    await expect(ownRow.locator(".participants-table__invitation")).toHaveText(
-      "—",
-    );
+    await expect(responseBadge(ownRow)).toHaveText("Submitted", {
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
     await expect(
       ownRow.getByRole("button", { name: "Edit my schedule" }),
     ).toBeVisible();
@@ -1453,9 +1619,93 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(adaPanel).toHaveCount(0);
     const adaRow = participantRow(page, "Ada Typo");
     await expect(adaRow).toContainText(fixedEmail);
-    await expect(adaRow.locator(".participants-table__invitation")).toHaveText(
-      "Not sent",
+    await expect(responseBadge(adaRow)).toHaveText("Not invited");
+
+    // The Filter popover has one Response group, and choosing an option
+    // leaves one Response chip. Ben's queued invitation counts as not sent
+    // until it is delivered, so wait for it to land first.
+    dispatchEmailJobs();
+    const benRow = participantRow(page, "Ben Leaving");
+    await expect(responseBadge(benRow)).toHaveText("Invited", {
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
+    const filterButton = page
+      .locator("#organizer-roster")
+      .getByRole("button", { name: /^Filter/ });
+    await filterButton.click();
+    const responseGroup = page.getByRole("group", {
+      name: "Response",
+      exact: true,
+    });
+    await expect(responseGroup.locator("label")).toHaveText([
+      "Any",
+      "Submitted",
+      "Not submitted",
+      "Not invited yet",
+      "Sending invite",
+      "Invite failed",
+      "Invited",
+      "Started",
+    ]);
+    await expect(
+      page.getByRole("group", { name: "Invitation", exact: true }),
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    await chooseResponseFilter(page, "Not invited yet");
+    await expect(participantSummary(page)).toContainText(
+      "Showing 1 of 3 people",
     );
+    await expect(adaRow).toBeVisible();
+    await expect(benRow).toHaveCount(0);
+    await expect(ownRow).toHaveCount(0);
+    await expect(
+      page.getByRole("button", {
+        name: "Remove filter Response: Not invited yet",
+      }),
+    ).toBeVisible();
+    // The pair of API filters behind the option is one active filter.
+    await expect(filterButton).toContainText("1 active");
+
+    await chooseResponseFilter(page, "Invited");
+    await expect(participantSummary(page)).toContainText(
+      "Showing 1 of 3 people",
+    );
+    await expect(benRow).toBeVisible();
+    await expect(adaRow).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: /^Remove filter Response:/ }),
+    ).toHaveCount(1);
+    await expect(
+      page.getByRole("button", { name: "Remove filter Response: Invited" }),
+    ).toBeVisible();
+
+    await chooseResponseFilter(page, "Submitted");
+    await expect(participantSummary(page)).toContainText(
+      "Showing 1 of 3 people",
+    );
+    await expect(ownRow).toBeVisible();
+    await expect(benRow).toHaveCount(0);
+
+    // Not submitted is everyone who has not submitted, invited or not.
+    await chooseResponseFilter(page, "Not submitted");
+    await expect(participantSummary(page)).toContainText(
+      "Showing 2 of 3 people",
+    );
+    await expect(adaRow).toBeVisible();
+    await expect(benRow).toBeVisible();
+    await expect(ownRow).toHaveCount(0);
+
+    // The chip clears both API filters behind the option at once.
+    await page
+      .getByRole("button", { name: "Remove filter Response: Not submitted" })
+      .click();
+    await expect(participantSummary(page)).toContainText("3 people");
+    await expect(participantSummary(page)).not.toContainText("Showing");
+    await expect(
+      page.getByRole("button", { name: /^Remove filter Response:/ }),
+    ).toHaveCount(0);
+    await expect(ownRow).toBeVisible();
 
     // A group is created from the Group filter, and one selected person is
     // put in it through the selection bar's picker.
@@ -1504,12 +1754,7 @@ test.describe("Releviz account and scheduling flow", () => {
 
     // One group alone counts in the results; the banner brings everyone
     // back.
-    await page.getByRole("button", { name: "Group: Everyone" }).click();
-    await page.getByRole("button", { name: "Manage groups…" }).click();
-    const groupsPanel = page.getByRole("dialog", {
-      name: "Groups",
-      exact: true,
-    });
+    const groupsPanel = await openGroupsPanel(page);
     const teamRow = groupsPanel.locator("tr", { hasText: "Team A" });
     await expect(teamRow).toContainText("1 person");
     await teamRow.getByRole("button", { name: "Actions for Team A" }).click();
@@ -1617,10 +1862,15 @@ test.describe("Releviz account and scheduling flow", () => {
       "busy",
     );
     await page.getByLabel("Meeting Duration").fill("60");
-    await expandAdvancedOptions(page);
+    // The deadline is a main setting: filling it needs no Advanced options.
     await page
       .getByLabel("Response Deadline")
       .fill(datetimeLocalHoursFromNow(48));
+    // Reminders are counted back from it and stay folded away until asked for.
+    await expandAdvancedOptions(page);
+    await expect(
+      page.getByLabel("Reminder Hours Before Deadline"),
+    ).toBeVisible();
     await page.getByRole("button", { name: "Create Event" }).click();
     await page.waitForURL(/\/event\?code=/);
     const eventCode = new URL(page.url()).searchParams.get("code");
@@ -2291,9 +2541,11 @@ test.describe("Releviz account and scheduling flow", () => {
     // Pat answers with their own account, so the row follows the name they
     // just saved in Settings.
     await expect(registeredParticipantCard).toContainText("Pat Availability");
-    await expect(
-      registeredParticipantCard.locator(".participants-table__response"),
-    ).toHaveText("Submitted");
+    await expect(responseBadge(registeredParticipantCard)).toHaveText(
+      "Submitted",
+    );
+    // Manual was emailed and reminded but has not answered.
+    await expect(responseBadge(manualParticipantCard)).toHaveText("Invited");
 
     // A weight for everyone in E2E Group: filter to the group, select the
     // page, and set it from the selection bar.
@@ -2335,8 +2587,7 @@ test.describe("Releviz account and scheduling flow", () => {
 
     // The Groups panel manages a whole group at once: its shared weight is
     // now mixed, and setting it re-applies one weight to every member.
-    await page.getByRole("button", { name: "Group: Everyone" }).click();
-    await page.getByRole("button", { name: "Manage groups…" }).click();
+    await openGroupsPanel(page);
     const groupRow = groupsPanel.locator("tr", { hasText: "E2E Group" });
     await expect(groupRow).toContainText("2 people");
     const groupWeight = groupsPanel.getByRole("spinbutton", {
@@ -2383,8 +2634,7 @@ test.describe("Releviz account and scheduling flow", () => {
 
     // Groups exist on their own: create an empty one from the Groups panel,
     // then add one selected person to it without leaving E2E Group.
-    await page.getByRole("button", { name: "Group: Everyone" }).click();
-    await page.getByRole("button", { name: "Manage groups…" }).click();
+    await openGroupsPanel(page);
     await groupsPanel.getByRole("button", { name: "+ New group" }).click();
     await groupsPanel.getByLabel("New group name").fill("E2E Second");
     await groupsPanel
@@ -2501,8 +2751,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expectToast(page, "Updated groups for 1 person.");
     await expect(manualGroupsCell).toContainText("E2E Throwaway");
     await page.getByLabel("Select Manual Participant").uncheck();
-    await page.getByRole("button", { name: "Group: Everyone" }).click();
-    await page.getByRole("button", { name: "Manage groups…" }).click();
+    await openGroupsPanel(page);
     const throwawayGroupRow = groupsPanel.locator("tr", {
       hasText: "E2E Throwaway",
     });
@@ -2645,9 +2894,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByText("Group availability for a 60-minute meeting."),
     ).toBeVisible();
-    await expect(
-      page.getByText(/Results are current at revision/),
-    ).toBeVisible();
+    await expect(page.locator('[data-results-status="fresh"]')).toBeVisible();
     await openRecommendedTimes(page);
     await page
       .getByRole("button", { name: "Choose this time" })
@@ -2661,7 +2908,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(page.locator(".final-candidate")).toContainText(
       "Recommended #1",
     );
-    await reviewAttendance(page);
+    await waitForAttendanceReview(page);
     await expect(page.getByText("Available", { exact: true })).toBeVisible();
     // The count tiles are backed by a per-person breakdown: a header row plus
     // one row for each roster entry.
@@ -2914,7 +3161,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(page.locator("#organizer-finalize")).toContainText(
       "Recommended #2",
     );
-    await reviewAttendance(page);
+    await waitForAttendanceReview(page);
     // The review follows the new pick: its confirmation is for Recommended #2.
     await page
       .locator("#organizer-finalize")
@@ -3010,6 +3257,72 @@ test.describe("Releviz account and scheduling flow", () => {
       calendar_uid: calendarUid,
     });
     await participantContext.close();
+  });
+
+  test("sends a passed response deadline straight to the field that fixes it", async ({
+    page,
+  }) => {
+    const runId = `${Date.now()}-${Math.round(Math.random() * 100_000)}`;
+
+    await registerAccount(page, `deadline-${runId}@example.com`, "Dana", "Due");
+    await page.getByRole("link", { name: "Create New Event" }).click();
+    await fillTextbox(page, "Event Name", `Deadline ${runId}`);
+    await selectOption(page, "Event timezone", "UTC");
+    await page.getByRole("button", { name: "Create Event" }).click();
+    await page.waitForURL(/\/event\?code=/);
+    const eventCode = new URL(page.url()).searchParams.get("code");
+    expect(eventCode).toMatch(/^[A-Z0-9]+$/);
+
+    // The deadline passes while the event is still active. Whole minutes,
+    // like the form's own field, so saving other settings stays possible.
+    runBackendCommand(
+      "shell",
+      "-c",
+      `from datetime import timedelta
+from django.utils import timezone
+from apps.scheduling.models import Event
+past = timezone.now().replace(second=0, microsecond=0) - timedelta(hours=2)
+assert Event.objects.filter(code="${eventCode}").update(response_deadline=past) == 1`,
+    );
+    await page.reload();
+
+    const lifecycle = page
+      .getByRole("status")
+      .filter({ hasText: "so people can no longer respond" });
+    await expect(lifecycle).toBeVisible();
+    await expect(page.locator("#organizer-overview")).toContainText(
+      /Deadline .*UTC/,
+    );
+    const banner = page
+      .locator("#organizer-roster")
+      .getByRole("status")
+      .filter({ hasText: "The response deadline (" });
+    await expect(banner).toContainText(/\(.*UTC\) has passed/);
+
+    // Either notice opens the settings with the deadline field ready to type
+    // in; the deadline is a main setting, so Advanced options stay folded.
+    const deadline = page.getByLabel("Response Deadline");
+    await expect(deadline).toHaveCount(0);
+    await banner.getByRole("button", { name: "Change deadline" }).click();
+    await expect(deadline).toBeFocused();
+    await expect(
+      page.getByText("Uses the event timezone (UTC)."),
+    ).toBeVisible();
+    await expect(
+      page.locator("details").filter({ hasText: "Advanced options" }),
+    ).not.toHaveAttribute("open", "");
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(deadline).toHaveCount(0);
+    await lifecycle.getByRole("button", { name: "Change deadline" }).click();
+    await expect(deadline).toBeFocused();
+
+    await deadline.fill(datetimeLocalHoursFromNow(72));
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await expect(
+      page.getByText("This event is active and accepting responses."),
+    ).toBeVisible();
+    await expect(banner).toHaveCount(0);
+    await expect(lifecycle).toHaveCount(0);
   });
 
   test("edits, resets, duplicates, archives, and deletes organizer events", async ({
@@ -3182,7 +3495,17 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(copyRoster.response.status()).toBe(200);
     expect(copyRoster.payload.participants).toEqual([]);
 
+    // Archiving says what it does first, and can be backed out of.
     await updatedCard.getByRole("button", { name: "Archive" }).click();
+    const archiveDialog = page.getByRole("dialog", {
+      name: "Archive this event?",
+    });
+    await expect(archiveDialog).toContainText("People can no longer respond.");
+    await archiveDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(archiveDialog).toHaveCount(0);
+    await expect(updatedCard.getByText("Status: active")).toBeVisible();
+    await updatedCard.getByRole("button", { name: "Archive" }).click();
+    await archiveDialog.getByRole("button", { name: "Archive event" }).click();
     await expect(page.getByText(`${updatedName} was archived.`)).toBeVisible();
     await expect(updatedCard.getByText("Status: archived")).toBeVisible();
     await expect(

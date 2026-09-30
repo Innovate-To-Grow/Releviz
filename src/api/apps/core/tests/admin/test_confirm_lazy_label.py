@@ -2,8 +2,7 @@
 
 compute_add_diff / compute_change_diff store each changed field's form label in a
 diff that ConfirmOnSaveMixin writes into request.session (JSON-serialized). Form
-labels are frequently lazy gettext proxies (e.g. AbstractUser's "first name", or
-the admin_apps field's _("Admin apps")), which raise
+labels are frequently lazy gettext proxies (e.g. AbstractUser's "first name"), which raise
 ``TypeError: Object of type __proxy__ is not JSON serializable`` at session save —
 a 500 on every add/change with ADMIN_REQUIRE_CONFIRMATION on. The labels must be
 str()-resolved (as compute_delete_diff already does).
@@ -22,14 +21,14 @@ from apps.core.tests.helpers import make_member
 
 
 class _LazyLabelForm(forms.Form):
-    admin_apps = forms.MultipleChoiceField(
-        label=_("Admin apps"), required=False, choices=[("cms", "cms")]
+    topics = forms.MultipleChoiceField(
+        label=_("Topics"), required=False, choices=[("news", "News")]
     )
 
 
 class ConfirmDiffLazyLabelTest(TestCase):
     def test_add_diff_label_is_plain_str_and_json_serializable(self):
-        form = _LazyLabelForm(data={"admin_apps": ["cms"]})
+        form = _LazyLabelForm(data={"topics": ["news"]})
         self.assertTrue(form.is_valid(), form.errors)
         diff = compute_add_diff(form)
         self.assertTrue(diff)

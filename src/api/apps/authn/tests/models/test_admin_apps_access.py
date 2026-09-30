@@ -1,6 +1,6 @@
-"""Tests for the per-app admin access primitives on ``Member``.
+"""Legacy app grants persist without restricting the unified admin role.
 
-Covers ``Member.admin_apps`` (the JSONField grant list) and
+Covers ``Member.admin_apps`` (the legacy JSONField grant list) and
 ``Member.can_access_app()`` (the thin wrapper around
 ``apps.core.utils.access.user_can_access_app``).
 """
@@ -38,13 +38,13 @@ class MemberCanAccessAppTests(TestCase):
         member = _member(is_staff=True, admin_apps=["cms"])
         self.assertTrue(member.can_access_app("cms"))
 
-    def test_ungranted_app_returns_false_for_staff(self):
+    def test_ungranted_app_returns_true_for_staff(self):
         member = _member(is_staff=True, admin_apps=["cms"])
-        self.assertFalse(member.can_access_app("event"))
+        self.assertTrue(member.can_access_app("event"))
 
-    def test_empty_grant_returns_false_for_staff(self):
+    def test_empty_grant_returns_true_for_staff(self):
         member = _member(is_staff=True)
-        self.assertFalse(member.can_access_app("cms"))
+        self.assertTrue(member.can_access_app("cms"))
 
     def test_superuser_can_access_any_app_regardless_of_grant(self):
         superuser = Member.objects.create_superuser(

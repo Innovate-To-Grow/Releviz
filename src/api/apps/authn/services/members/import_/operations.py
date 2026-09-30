@@ -17,7 +17,6 @@ def bulk_update_members(
     result: ImportResult,
     claimed_contact_emails: set[str],
     update_member_allowed: Callable[[object], bool] | None = None,
-    update_staff: bool = True,
 ):
     emails = [row["primary_email"] for row in rows]
     contacts = (
@@ -42,16 +41,14 @@ def bulk_update_members(
             continue
         try:
             with transaction.atomic():
-                update_single_member(
-                    member, parsed, claimed_contact_emails, update_staff=update_staff
-                )
+                update_single_member(member, parsed, claimed_contact_emails)
             result.updated_count += 1
         except Exception as exc:  # noqa: BLE001
             result.skipped_count += 1
             result.errors.append(f"Row {parsed['row']}: {exc}")
 
 
-def update_single_member(member, parsed, claimed_contact_emails, update_staff=True):
+def update_single_member(member, parsed, claimed_contact_emails):
     previous_name = member.get_full_name()
     if parsed["first_name"]:
         member.first_name = parsed["first_name"]
@@ -61,7 +58,7 @@ def update_single_member(member, parsed, claimed_contact_emails, update_staff=Tr
         member.middle_name = parsed["middle_name"]
     if parsed["is_active"] is not None:
         member.is_active = parsed["is_active"]
-    if update_staff and parsed["is_staff"] is not None:
+    if parsed["is_staff"] is not None:
         member.is_staff = parsed["is_staff"]
     member.save()
     # The events this person answers show the account's new name.

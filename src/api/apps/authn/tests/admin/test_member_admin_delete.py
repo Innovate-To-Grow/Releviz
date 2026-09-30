@@ -1,19 +1,21 @@
 """Deleting a member in the admin.
 
 The Contact Email admin refuses to delete a primary email on its own, and that
-refusal used to count against the member it belongs to, so nobody, not even a
-superuser, could delete a member with one. The admin delete also goes through
-the account-deletion service, so it leaves what deleting the account in
-Settings leaves.
+refusal used to count against the member it belongs to, so no administrator
+could delete a member with one. The admin delete also goes through the
+account-deletion service, so it leaves what deleting the account in Settings
+leaves.
 """
 
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from apps.authn.models import ContactEmail, Member
+from apps.scheduling.admin import ParticipantAdmin
 from apps.scheduling.models import Event, EventResultInvalidation, Participant
 
 DAY = timedelta(days=1)
@@ -42,15 +44,8 @@ def _event(code, organizer):
 class MemberAdminDeleteTests(TestCase):
     def setUp(self):
         cache.clear()
-        self.superuser = Member.objects.create_superuser(
-            password="StrongPass123!", first_name="Super", last_name="User", is_active=True
-        )
-        self.authn_admin = _member(
-            "authn-admin@example.com",
-            first_name="Authn",
-            last_name="Admin",
-            is_staff=True,
-            admin_apps=["authn"],
+        self.administrator = _member(
+            "admin@example.com", first_name="Ada", last_name="Admin", is_staff=True
         )
         self.target = _member("target@example.com", first_name="Tara", last_name="Target")
         ContactEmail.objects.create(
@@ -94,14 +89,14 @@ class MemberAdminDeleteTests(TestCase):
             contact_email="target@example.com",
             organizer_managed=True,
         )
-        answered = _event("ADMDEL2", self.superuser)
+        answered = _event("ADMDEL2", self.administrator)
         Participant.objects.create(
             member=self.target, event=answered, participant_name="Tara Target"
         )
         return organized, managed, answered
 
-    def test_superuser_deletes_a_member_with_their_primary_email(self):
-        self.client.force_login(self.superuser)
+    def test_administrator_deletes_a_member_with_their_primary_email(self):
+        self.client.force_login(self.administrator)
         response = self.client.get(self._delete_url(self.target))
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.context["perms_lacking"])
@@ -117,46 +112,45 @@ class MemberAdminDeleteTests(TestCase):
 
     def test_a_primary_email_alone_still_cannot_be_deleted(self):
         primary = ContactEmail.objects.get(email_address="target@example.com")
-        self.client.force_login(self.superuser)
+        self.client.force_login(self.administrator)
         url = reverse("admin:authn_contactemail_delete", args=[primary.pk])
         self.assertEqual(self.client.post(url, {"post": "yes"}).status_code, 403)
         self.assertTrue(ContactEmail.objects.filter(pk=primary.pk).exists())
 
-    def test_authn_admin_deletes_a_regular_member_but_not_a_privileged_one(self):
-        staff = _member("staff@example.com", is_staff=True, admin_apps=["core"])
-        self.client.force_login(self.authn_admin)
+    def test_an_administrator_deletes_a_regular_member_and_another_administrator(self):
+        # Every administrator manages the other administrators' accounts.
+        other = _member("other-admin@example.com", is_staff=True)
+        self.client.force_login(self.administrator)
 
-        self.assertEqual(
-            self.client.post(self._delete_url(staff), {"post": "yes"}).status_code, 403
-        )
+        response = self.client.post(self._delete_url(other), {"post": "yes"})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(Member.objects.filter(pk=other.pk).exists())
         response = self.client.post(self._delete_url(self.target), {"post": "yes"})
 
         self.assertEqual(response.status_code, 302)
         self.assertFalse(Member.objects.filter(pk=self.target.pk).exists())
         self.assertFalse(self._target_emails().exists())
-        self.assertTrue(Member.objects.filter(pk=staff.pk).exists())
 
-    def test_only_the_contact_emails_are_waived_for_an_authn_admin(self):
-        # The target's events and answers belong to the scheduling app, which
-        # this admin was not granted: those still stop the delete.
+    def test_only_the_contact_emails_are_waived(self):
+        # Any other related record the admin may not delete still stops the delete.
         self._organizer_and_participant()
-        self.client.force_login(self.authn_admin)
+        self.client.force_login(self.administrator)
 
-        response = self.client.get(self._delete_url(self.target))
+        with patch.object(ParticipantAdmin, "has_delete_permission", return_value=False):
+            response = self.client.get(self._delete_url(self.target))
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("participant", response.context["perms_lacking"])
+            self.assertNotIn("Contact Email", response.context["perms_lacking"])
+            self.assertEqual(
+                self.client.post(self._delete_url(self.target), {"post": "yes"}).status_code, 403
+            )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("participant", response.context["perms_lacking"])
-        self.assertIn("event", response.context["perms_lacking"])
-        self.assertNotIn("Contact Email", response.context["perms_lacking"])
-        self.assertEqual(
-            self.client.post(self._delete_url(self.target), {"post": "yes"}).status_code, 403
-        )
         self.assertTrue(Member.objects.filter(pk=self.target.pk).exists())
         self.assertEqual(self._target_emails().count(), 2)
 
     def test_bulk_delete_takes_the_members_with_their_primary_emails(self):
         other = _member("target-other@example.com")
-        self.client.force_login(self.superuser)
+        self.client.force_login(self.administrator)
 
         response = self._bulk_delete([self.target, other])
 
@@ -164,19 +158,10 @@ class MemberAdminDeleteTests(TestCase):
         self.assertFalse(Member.objects.filter(pk__in=[self.target.pk, other.pk]).exists())
         self.assertFalse(self._target_emails().exists())
 
-    def test_bulk_delete_with_a_privileged_account_is_refused_for_a_non_superuser(self):
-        staff = _member("staff@example.com", is_staff=True)
-        self.client.force_login(self.authn_admin)
-
-        self.assertEqual(self._bulk_delete([self.target, staff]).status_code, 403)
-
-        self.assertEqual(Member.objects.filter(pk__in=[self.target.pk, staff.pk]).count(), 2)
-        self.assertEqual(self._target_emails().count(), 2)
-
     def test_delete_goes_through_account_deletion(self):
         organized, managed, answered = self._organizer_and_participant()
         invalidations = EventResultInvalidation.objects.filter(event=answered).count()
-        self.client.force_login(self.superuser)
+        self.client.force_login(self.administrator)
 
         self.client.post(self._delete_url(self.target), {"post": "yes"})
 
@@ -192,7 +177,7 @@ class MemberAdminDeleteTests(TestCase):
         organized, managed, answered = self._organizer_and_participant()
         other = _member("target-other@example.com")
         invalidations = EventResultInvalidation.objects.filter(event=answered).count()
-        self.client.force_login(self.superuser)
+        self.client.force_login(self.administrator)
 
         self.assertEqual(self._bulk_delete([self.target, other]).status_code, 302)
 
@@ -208,7 +193,7 @@ class MemberAdminDeleteTests(TestCase):
         # The list shows newest first: the organizer's deletion removes the
         # managed person before the loop reaches them.
         Member.objects.filter(pk=managed.pk).update(date_joined=self.target.date_joined - DAY)
-        self.client.force_login(self.superuser)
+        self.client.force_login(self.administrator)
 
         self.assertEqual(self._bulk_delete([managed, self.target]).status_code, 302)
 
@@ -216,8 +201,8 @@ class MemberAdminDeleteTests(TestCase):
         self.assertFalse(Event.objects.filter(pk=organized.pk).exists())
 
     @override_settings(ADMIN_REQUIRE_CONFIRMATION=True)
-    def test_superuser_deletes_a_member_through_the_typed_confirmation(self):
-        self.client.force_login(self.superuser)
+    def test_administrator_deletes_a_member_through_the_typed_confirmation(self):
+        self.client.force_login(self.administrator)
         confirm_url = reverse("admin:authn_member_confirm_change")
 
         response = self.client.post(self._delete_url(self.target), {"post": "yes"})
@@ -232,9 +217,9 @@ class MemberAdminDeleteTests(TestCase):
         self.assertFalse(self._target_emails().exists())
 
     @override_settings(ADMIN_REQUIRE_CONFIRMATION=True)
-    def test_superuser_bulk_deletes_members_through_the_typed_confirmation(self):
+    def test_administrator_bulk_deletes_members_through_the_typed_confirmation(self):
         other = _member("target-other@example.com")
-        self.client.force_login(self.superuser)
+        self.client.force_login(self.administrator)
         confirm_url = reverse("admin:authn_member_confirm_action")
 
         response = self._bulk_delete([self.target, other])

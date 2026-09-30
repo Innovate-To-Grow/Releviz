@@ -2,7 +2,13 @@
  * @jest-environment jsdom
  */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
@@ -62,7 +68,10 @@ describe("ContinueWithEmailPage", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     login.mockResolvedValue({});
-    requestEmailAuthCode.mockResolvedValue({ message: CODE_SENT_MESSAGE });
+    requestEmailAuthCode.mockResolvedValue({
+      message: CODE_SENT_MESSAGE,
+      resend_after: 0,
+    });
     verifyEmailAuthCode.mockResolvedValue({});
     useAuth.mockReturnValue({
       user: null,
@@ -71,6 +80,139 @@ describe("ContinueWithEmailPage", () => {
       requestEmailAuthCode,
       verifyEmailAuthCode,
     });
+  });
+
+  afterEach(() => jest.useRealTimers());
+
+  test("counts down successful requests while code verification stays available", async () => {
+    jest.useFakeTimers();
+    requestEmailAuthCode.mockResolvedValueOnce({
+      message: CODE_SENT_MESSAGE,
+      resend_after: 60,
+    });
+    render(<ContinueWithEmailPage />);
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "ada@example.com" },
+    });
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "Continue" })),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Resend code in 60s" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText(/Check your spam or junk folder/),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Verification Code"), {
+      target: { value: "123456" },
+    });
+    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+    act(() => jest.advanceTimersByTime(59000));
+    expect(
+      screen.getByRole("button", { name: "Resend code in 1s" }),
+    ).toBeDisabled();
+    act(() => jest.advanceTimersByTime(1000));
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "Resend code" })),
+    );
+    expect(requestEmailAuthCode).toHaveBeenCalledTimes(2);
+  });
+
+  test("uses a throttled request's wait without blocking another email or losing the first wait", async () => {
+    jest.useFakeTimers();
+    requestEmailAuthCode.mockRejectedValueOnce(
+      Object.assign(new Error("Please wait."), {
+        status: 429,
+        retryAfterSeconds: 125,
+      }),
+    );
+    render(<ContinueWithEmailPage />);
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "ada@example.com" },
+    });
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "Continue" })),
+    );
+    expect(
+      screen.getByRole("button", { name: "Resend code in 125s" }),
+    ).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Verification Code"), {
+      target: { value: "123456" },
+    });
+    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(
+      screen.getByRole("button", { name: "Request code in 125s" }),
+    ).toBeDisabled();
+    submitForm(screen.getByLabelText("Email"));
+    expect(requestEmailAuthCode).toHaveBeenCalledTimes(1);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Enter a code you already have" }),
+    );
+    expect(screen.getByLabelText("Verification Code")).toHaveValue("");
+    expect(
+      screen.getByRole("button", { name: "Resend code in 125s" }),
+    ).toBeDisabled();
+    expect(requestEmailAuthCode).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in with password instead" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in with a verification code" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Enter a code you already have" }),
+    );
+    expect(screen.getByLabelText("Verification Code")).toBeInTheDocument();
+    expect(requestEmailAuthCode).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "bob@example.com" },
+    });
+    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: " ADA@EXAMPLE.COM " },
+    });
+    expect(
+      screen.getByRole("button", { name: "Request code in 125s" }),
+    ).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "bob@example.com" },
+    });
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "Continue" })),
+    );
+    expect(requestEmailAuthCode).toHaveBeenLastCalledWith(
+      expect.objectContaining({ email: "bob@example.com" }),
+    );
+    expect(screen.getByRole("button", { name: "Resend code" })).toBeEnabled();
+    expect(screen.getByLabelText("Verification Code")).toHaveValue("");
+  });
+
+  test("a resend throttle restarts the wait and fallback timing handles older servers", async () => {
+    jest.useFakeTimers();
+    requestEmailAuthCode
+      .mockResolvedValueOnce({ message: CODE_SENT_MESSAGE, resend_after: 0 })
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Please wait."), { status: 429 }),
+      );
+    render(<ContinueWithEmailPage />);
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "ada@example.com" },
+    });
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "Continue" })),
+    );
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "Resend code" })),
+    );
+    expect(
+      screen.getByRole("button", { name: "Resend code in 60s" }),
+    ).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Resend code in 60s" }));
+    expect(requestEmailAuthCode).toHaveBeenCalledTimes(2);
   });
 
   describe("code mode", () => {
@@ -148,7 +290,7 @@ describe("ContinueWithEmailPage", () => {
       ).toBeInTheDocument();
       expect(
         screen.getByText(
-          "Enter the 6-digit code we sent to continue signing in or setting up your account.",
+          "Enter the 6-digit code from your email to continue signing in or setting up your account.",
         ),
       ).toBeInTheDocument();
       expect(screen.getByText("Sending to")).toBeInTheDocument();
@@ -181,6 +323,10 @@ describe("ContinueWithEmailPage", () => {
 
       submitForm(codeInput);
       expect(verifyEmailAuthCode).toHaveBeenCalledTimes(1);
+      await userEvent.click(
+        screen.getByRole("button", { name: "Resend code" }),
+      );
+      expect(requestEmailAuthCode).toHaveBeenCalledTimes(1);
     });
 
     test("uses the login source for non-event destinations and skips the info alert without a message", async () => {
@@ -244,8 +390,11 @@ describe("ContinueWithEmailPage", () => {
 
     test("resends the code and replaces the info message", async () => {
       requestEmailAuthCode
-        .mockResolvedValueOnce({ message: CODE_SENT_MESSAGE })
-        .mockResolvedValueOnce({ message: "A new code is on its way." });
+        .mockResolvedValueOnce({ message: CODE_SENT_MESSAGE, resend_after: 0 })
+        .mockResolvedValueOnce({
+          message: "A new code is on its way.",
+          resend_after: 0,
+        });
       render(<ContinueWithEmailPage next={EVENT_NEXT} />);
 
       await sendCode();
@@ -271,7 +420,7 @@ describe("ContinueWithEmailPage", () => {
 
     test("surfaces a throttled resend and stays on the code step", async () => {
       requestEmailAuthCode
-        .mockResolvedValueOnce({ message: CODE_SENT_MESSAGE })
+        .mockResolvedValueOnce({ message: CODE_SENT_MESSAGE, resend_after: 0 })
         .mockRejectedValueOnce(
           new Error("Too many verification attempts. Please try again later."),
         );
@@ -443,7 +592,7 @@ describe("ContinueWithEmailPage", () => {
         screen.getByRole("button", { name: "Sign in with password instead" }),
       ).toBeDisabled();
 
-      finishRequest({ message: CODE_SENT_MESSAGE });
+      finishRequest({ message: CODE_SENT_MESSAGE, resend_after: 0 });
       expect(await screen.findByLabelText("Verification Code")).toHaveFocus();
       expect(screen.getByRole("button", { name: "Resend code" })).toBeEnabled();
       expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
@@ -452,7 +601,7 @@ describe("ContinueWithEmailPage", () => {
     test("locks the code step while a resend is in flight and keeps the sent address", async () => {
       let finishResend;
       requestEmailAuthCode
-        .mockResolvedValueOnce({ message: CODE_SENT_MESSAGE })
+        .mockResolvedValueOnce({ message: CODE_SENT_MESSAGE, resend_after: 0 })
         .mockImplementationOnce(
           () =>
             new Promise((resolve) => {
@@ -472,7 +621,7 @@ describe("ContinueWithEmailPage", () => {
         screen.getByRole("button", { name: "Resend code" }),
       ).toBeDisabled();
 
-      finishResend({ message: "A new code is on its way." });
+      finishResend({ message: "A new code is on its way.", resend_after: 0 });
       await screen.findByText("A new code is on its way.");
       expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
 

@@ -150,6 +150,20 @@ def _reseed_untouched_participants(event, previous_default) -> int:
     return len(untouched)
 
 
+def _has_answer_to_lose(participant, starting_schedule) -> bool:
+    """Whether a reset would throw away something this participant entered.
+
+    A submitted response always counts, even one equal to the starting schedule (all busy is
+    a deliberate answer). Otherwise only a schedule that differs from the starting one counts:
+    the reset would put the same thing back.
+    """
+    return (
+        participant.submitted
+        or participant.availability_inperson != starting_schedule
+        or participant.availability_virtual != starting_schedule
+    )
+
+
 @transaction.atomic
 def update_event(*, organizer, code, data) -> EventUpdateResult:
     event = Event.objects.select_for_update().filter(code=code).first()
@@ -197,16 +211,21 @@ def update_event(*, organizer, code, data) -> EventUpdateResult:
     geometry_changed = bool(GEOMETRY_FIELDS.intersection(changed_fields))
     participants = list(event.participants.select_for_update().all()) if geometry_changed else []
     if participants and not reset_responses:
-        raise EventManagementError(
-            "These schedule changes would invalidate saved availability. "
-            "Confirm that participant responses may be reset.",
-            status_code=409,
-            event=event,
-            extra={
-                "requiresResponseReset": True,
-                "participantCount": len(participants),
-            },
-        )
+        # Everyone is re-seeded for the new geometry below, but only people who entered
+        # something need the organizer's confirmation first.
+        starting_schedule = default_availability(event)
+        answered = sum(_has_answer_to_lose(person, starting_schedule) for person in participants)
+        if answered:
+            raise EventManagementError(
+                "These schedule changes would invalidate saved availability. "
+                "Confirm that participant responses may be reset.",
+                status_code=409,
+                event=event,
+                extra={
+                    "requiresResponseReset": True,
+                    "participantCount": answered,
+                },
+            )
     # A geometry change already re-seeds everyone below, so only a standalone flip of the
     # starting schedule needs the old default captured before the event is updated.
     previous_default = (

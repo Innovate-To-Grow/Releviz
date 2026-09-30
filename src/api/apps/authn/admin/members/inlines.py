@@ -79,11 +79,7 @@ class NoneSafeUUIDInlineFormSet(BaseInlineFormSet):
 
 
 class StaffPermissionInlineMixin:
-    """Grant inline permissions per-app, matching BaseModelAdmin.
-
-    These inlines belong to the Member admin, so access is gated on the ``authn`` app
-    grant (see apps.core.utils.access.user_can_access_app) rather than bare ``is_staff``.
-    """
+    """Grant inline permissions to active administrators, matching BaseModelAdmin."""
 
     def _has_app_access(self, request):
         return user_can_access_app(request.user, self.model._meta.app_label)

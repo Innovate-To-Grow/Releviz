@@ -505,7 +505,8 @@ test.describe("Editing on the /edit page", () => {
 
     // 3) A schedule change asks for a response reset, and only that: the
     // current event rides along on the refusal, but nothing offers to
-    // reload it and discard the edit.
+    // reload it and discard the edit, no red error repeats the question, and
+    // the keyboard lands on the confirmation.
     await gotoEdit(page, code, sameName);
     await page.getByLabel("End Time").fill("17:30");
     put = eventUpdate(page, code);
@@ -513,6 +514,7 @@ test.describe("Editing on the /edit page", () => {
     response = await put;
     expect(response.status()).toBe(409);
     expect(await response.json()).toMatchObject({
+      error: RESET_ERROR,
       requiresResponseReset: true,
       participantCount: 1,
     });
@@ -520,7 +522,8 @@ test.describe("Editing on the /edit page", () => {
     await expect(resetAlert).toContainText(
       "Saving will clear draft and submitted availability for 1 participant. Invitations and participant membership will remain.",
     );
-    await expect(formError).toHaveText(RESET_ERROR);
+    await expect(formError).toHaveCount(0);
+    await expect(page.getByLabel(RESET_CONFIRMATION)).toBeFocused();
     await expect(staleNotice).toHaveCount(0);
     await expect(reloadButton).toHaveCount(0);
     const saveButton = page.getByRole("button", { name: "Save changes" });
@@ -1484,7 +1487,7 @@ test.describe("Duplicating events", () => {
     // deadline is not carried over.
     const archivedPanel = page.getByRole("region", { name: /^Archived \(1\)/ });
     await expect(archivedPanel).toContainText(
-      "Archived events are read-only. Duplicate one to start again, or delete it permanently.",
+      "Archived events are read-only. Open one and choose Reactivate event to bring it back, duplicate it to start again, or delete it permanently.",
     );
     posted = mutationResponse(page, "POST", "/events/duplicate");
     await archivedPanel

@@ -454,11 +454,13 @@ describe("RosterPanel states", () => {
     jest.useFakeTimers();
     try {
       const deadline = new Date(Date.now() + 30000).toISOString();
+      const onEditDeadline = jest.fn();
       render(
         <RosterPanel
           event={{ ...event, responseDeadline: deadline }}
           setEvent={jest.fn()}
           getToken={jest.fn().mockResolvedValue("token")}
+          onEditDeadline={onEditDeadline}
         />,
       );
       await act(async () => {
@@ -475,9 +477,8 @@ describe("RosterPanel states", () => {
       expect(
         screen.getByText(/The response deadline .* has passed/),
       ).toBeInTheDocument();
-      expect(
-        screen.getByRole("link", { name: "Change deadline" }),
-      ).toHaveAttribute("href", "/edit?code=ROSTER1");
+      fireEvent.click(screen.getByRole("button", { name: "Change deadline" }));
+      expect(onEditDeadline).toHaveBeenCalledTimes(1);
       expect(
         screen.queryByRole("button", { name: "Email" }),
       ).not.toBeInTheDocument();
@@ -560,7 +561,7 @@ describe("RosterPanel states", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
     // Counting a left-out person in again is a roster change, so it waits
-    // for the deadline to move.
+    // for the deadline to move; their schedule stays editable.
     fireEvent.click(
       within(rowFor("Left Out")).getByRole("button", { name: "Edit schedule" }),
     );
@@ -568,11 +569,14 @@ describe("RosterPanel states", () => {
       name: "Edit Left Out's schedule",
     });
     expect(within(dialog).getByRole("status")).toHaveTextContent(
-      "Left Out is left out of the results, so their schedule can't change.",
+      "Left Out is left out of the results, so their answers don't count.",
     );
     expect(
       within(dialog).getByRole("button", { name: "Count them again" }),
     ).toBeDisabled();
+    expect(
+      within(dialog).getByRole("button", { name: "Submit on behalf" }),
+    ).toBeEnabled();
   });
 
   test("reports a failed load with a retry and clears it after a silent reload", async () => {
@@ -706,7 +710,11 @@ describe("RosterPanel search, filters and paging", () => {
     await waitFor(() =>
       expect(fetchRoster).toHaveBeenLastCalledWith(
         "ROSTER1",
-        expect.objectContaining({ search: "zed", submitted: "false" }),
+        expect.objectContaining({
+          search: "zed",
+          submitted: "false",
+          invitationStatus: "",
+        }),
         "token",
       ),
     );
@@ -739,8 +747,8 @@ describe("RosterPanel search, filters and paging", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Filter" }));
     fireEvent.click(
-      within(screen.getByRole("group", { name: "Invitation" })).getByLabelText(
-        "Failed",
+      within(screen.getByRole("group", { name: "Response" })).getByLabelText(
+        "Invite failed",
       ),
     );
     expect(
@@ -757,6 +765,165 @@ describe("RosterPanel search, filters and paging", () => {
     expect(
       screen.queryByRole("list", { name: "Active filters" }),
     ).not.toBeInTheDocument();
+  });
+
+  test("the Response filter is one choice that sets both API parameters and one chip", async () => {
+    await renderPanel();
+    await screen.findByText(/^Temp Person/);
+    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    expect(screen.queryByRole("group", { name: "Invitation" })).toBeNull();
+    const response = () => screen.getByRole("group", { name: "Response" });
+    const lastQuery = () => fetchRoster.mock.calls.at(-1)[1];
+
+    fireEvent.click(within(response()).getByLabelText("Invited"));
+    await waitFor(() =>
+      expect(lastQuery()).toEqual(
+        expect.objectContaining({
+          submitted: "false",
+          invitationStatus: "sent",
+          page: 1,
+        }),
+      ),
+    );
+    expect(screen.getByRole("button", { name: /^Filter/ })).toHaveTextContent(
+      "Filter1 active",
+    );
+    const chips = within(
+      screen.getByRole("list", { name: "Active filters" }),
+    ).getAllByRole("button", { name: /^Remove filter/ });
+    expect(chips.map((chip) => chip.getAttribute("aria-label"))).toEqual([
+      "Remove filter Response: Invited",
+    ]);
+    expect(within(response()).getByLabelText("Invited")).toBeChecked();
+
+    // Another choice replaces both parameters, it does not add to them.
+    fireEvent.click(within(response()).getByLabelText("Submitted"));
+    await waitFor(() =>
+      expect(lastQuery()).toEqual(
+        expect.objectContaining({ submitted: "true", invitationStatus: "" }),
+      ),
+    );
+    expect(
+      screen.getAllByRole("button", { name: /^Remove filter/ }),
+    ).toHaveLength(1);
+    fireEvent.click(within(response()).getByLabelText("Not invited yet"));
+    await waitFor(() =>
+      expect(lastQuery()).toEqual(
+        expect.objectContaining({
+          submitted: "false",
+          invitationStatus: "not_sent",
+        }),
+      ),
+    );
+    fireEvent.click(screen.getByLabelText("Left out"));
+    await waitFor(() =>
+      expect(lastQuery()).toEqual(
+        expect.objectContaining({
+          submitted: "false",
+          invitationStatus: "not_sent",
+          included: "false",
+        }),
+      ),
+    );
+    expect(screen.getByRole("button", { name: /^Filter/ })).toHaveTextContent(
+      "Filter2 active",
+    );
+    closePopover();
+
+    // Removing the one chip resets both parameters and leaves Results alone.
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Remove filter Response: Not invited yet",
+      }),
+    );
+    await waitFor(() =>
+      expect(lastQuery()).toEqual(
+        expect.objectContaining({
+          submitted: "",
+          invitationStatus: "",
+          included: "false",
+          page: 1,
+        }),
+      ),
+    );
+    expect(
+      screen.queryByRole("button", { name: /^Remove filter Response/ }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Remove filter Results: Left out" }),
+    ).toBeInTheDocument();
+  });
+
+  test("Clear all resets the Response filter's two parameters with the rest", async () => {
+    await renderPanel();
+    await screen.findByText(/^Temp Person/);
+    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Response" })).getByLabelText(
+        "Started",
+      ),
+    );
+    await waitFor(() =>
+      expect(fetchRoster).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        expect.objectContaining({
+          submitted: "false",
+          invitationStatus: "accepted",
+        }),
+        "token",
+      ),
+    );
+    closePopover();
+    fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
+    await waitFor(() =>
+      expect(fetchRoster).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        expect.objectContaining({ submitted: "", invitationStatus: "" }),
+        "token",
+      ),
+    );
+    expect(screen.queryByRole("list", { name: "Active filters" })).toBeNull();
+  });
+
+  test("selecting everyone matching a Response filter sends its raw API parameters", async () => {
+    fetchRoster.mockResolvedValue({
+      ...rosterResponse([participant(), second]),
+      pagination: { page: 1, pageSize: 2, total: 30, pages: 15 },
+    });
+    await renderPanel();
+    await screen.findByText(/^Temp Person/);
+    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Response" })).getByLabelText(
+        "Not invited yet",
+      ),
+    );
+    await waitFor(() =>
+      expect(fetchRoster).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        expect.objectContaining({ invitationStatus: "not_sent" }),
+        "token",
+      ),
+    );
+    closePopover();
+    fireEvent.click(screen.getByLabelText("Select everyone on this page"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select all 30 matching" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(menuItem("Count in results"));
+    fireEvent.submit(
+      await screen.findByRole("dialog", { name: "Apply to 30 people?" }),
+    );
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenCalledWith(
+        "ROSTER1",
+        expect.objectContaining({
+          filter: { submitted: "false", invitationStatus: "not_sent" },
+        }),
+        "token",
+      ),
+    );
   });
 
   test("filters by group from the popover and manages groups from its footer", async () => {
@@ -1197,6 +1364,97 @@ describe("RosterPanel selection and bulk changes", () => {
 });
 
 describe("RosterPanel invitations", () => {
+  test("tells an invite-only organizer that nobody is emailed until they send invitations", async () => {
+    sendRosterInvitations
+      .mockResolvedValueOnce({
+        preview: true,
+        requestedCount: 1,
+        willSend: 1,
+        skipped: { alreadyInvited: 0, noEmail: 0, organizer: 0, inFlight: 0 },
+        email: invitationEmail("Second Person <second@example.com>"),
+        sample: { name: "Second Person", email: "second@example.com" },
+      })
+      .mockResolvedValueOnce({
+        queuedCount: 1,
+        skipped: { alreadyInvited: 0, noEmail: 0 },
+        deliveryRequest: { id: "delivery-1", recipientCount: 1 },
+      });
+    await renderPanel();
+    // The default listing has one person who was never invited.
+    expect(
+      await screen.findByText(
+        "1 person hasn't been invited yet. Nobody is emailed until you send invitations.",
+      ),
+    ).toBeInTheDocument();
+
+    // The action is the Email menu's "invite everyone not invited yet".
+    fireEvent.click(screen.getByRole("button", { name: "Send invitations…" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Send invitations",
+    });
+    await within(dialog).findByText("1 will get an invitation now");
+    expect(sendRosterInvitations).toHaveBeenCalledWith(
+      "ROSTER1",
+      {
+        filter: { invitationStatus: "not_sent" },
+        preview: true,
+        resend: false,
+      },
+      "token",
+    );
+
+    // Once they are invited the notice goes away by itself.
+    fetchRoster.mockResolvedValue(
+      rosterResponse([participant(), { ...second, invitationStatus: "sent" }]),
+    );
+    confirmEmail(dialog, "Send 1 invitation");
+    await waitFor(() =>
+      expect(screen.queryByText(/been invited yet/)).not.toBeInTheDocument(),
+    );
+  });
+
+  test.each([
+    ["an invite-only event", {}, "Not invited"],
+    ["an open-link event", { accessMode: "open_link" }, "Not submitted"],
+  ])(
+    "labels someone who never got an invitation in %s",
+    async (_name, overrides, label) => {
+      fetchRoster.mockResolvedValue(
+        rosterResponse([participant({ invitationStatus: "not_sent" })]),
+      );
+      await renderPanel({ event: { ...event, ...overrides } });
+      const row = document.querySelector("[data-roster-participant-id='p-1']");
+      expect(row.querySelector(".status-badge")).toHaveTextContent(label);
+    },
+  );
+
+  test.each([
+    [
+      "an open-link event, where the link works without an invitation",
+      {},
+      { accessMode: "open_link" },
+    ],
+    ["a closed event", {}, { status: "closed" }],
+    [
+      "an event whose response deadline has passed",
+      {},
+      { responseDeadline: "2020-01-01T00:00:00Z" },
+    ],
+    ["a list where everyone is already invited", { everyoneInvited: true }, {}],
+  ])(
+    "leaves the not-invited notice out of %s",
+    async (_name, options, overrides) => {
+      if (options.everyoneInvited) {
+        fetchRoster.mockResolvedValue(rosterResponse([participant()]));
+      }
+      await renderPanel({ event: { ...event, ...overrides } });
+      expect(screen.queryByText(/been invited yet/)).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Send invitations…" }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
   test("previews and sends invitations to the selected people", async () => {
     const onDeliveryRequestChange = jest.fn();
     sendRosterInvitations
@@ -2958,25 +3216,34 @@ describe("RosterPanel schedule drawer", () => {
     );
   });
 
-  test("locks a left-out person's schedule until they count again", async () => {
+  test("submits a left-out person's schedule and counts them again", async () => {
     fetchRoster.mockResolvedValue(
       rosterResponse([participant({ included: false })]),
     );
     patchRosterParticipant.mockResolvedValue({
       participant: participant({ included: true, version: 5 }),
     });
+    updateParticipant.mockResolvedValue({
+      participant: { submitted: 1, version: 5 },
+    });
     await renderPanel();
     const dialog = await openEditor();
     expect(within(dialog).getByRole("status")).toHaveTextContent(
-      "Temp Person is left out of the results, so their schedule can't change.",
+      "Temp Person is left out of the results, so their answers don't count.",
     );
     expect(within(dialog).getByTestId("channel-editor")).toHaveAttribute(
       "data-readonly",
-      "true",
+      "false",
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Submit on behalf" }),
     );
     expect(
-      within(dialog).getByRole("button", { name: "Save draft" }),
-    ).toBeDisabled();
+      await within(dialog).findByText("Schedule submitted."),
+    ).toBeInTheDocument();
+    expect(updateParticipant.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ submitted: 1, expectedVersion: 4 }),
+    );
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Count them again" }),
     );
@@ -2995,6 +3262,32 @@ describe("RosterPanel schedule drawer", () => {
     expect(
       within(dialog).getByRole("button", { name: "Save draft" }),
     ).toBeEnabled();
+  });
+
+  test("counting a left-out person in hands the new version to the drawer", async () => {
+    fetchRoster.mockResolvedValue(
+      rosterResponse([participant({ included: false })]),
+    );
+    patchRosterParticipant.mockResolvedValue({
+      participant: participant({ included: true, version: 5 }),
+    });
+    await renderPanel();
+    const dialog = await openEditor();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Count them again" }),
+    );
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenCalledWith(
+        "ROSTER1",
+        "p-1",
+        { included: true, expectedVersion: 4 },
+        "token",
+      ),
+    );
+    expect(
+      await findToast("Temp Person now counts in the results."),
+    ).toBeInTheDocument();
+    expect(updateParticipant).not.toHaveBeenCalled();
 
     // Counting them in moved the version on; the drawer's next save runs
     // against it instead of meeting its own change as a conflict.
@@ -3530,7 +3823,7 @@ describe("RosterPanel live sync and ref", () => {
       expect.objectContaining({ id: "recovered" }),
     );
     const row = rowFor("Temp Person");
-    expect(within(row).getByText("Failed")).toBeInTheDocument();
+    expect(within(row).getByText("Invite failed")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Search participants"), {
       target: { value: "zed" },
@@ -3557,7 +3850,9 @@ describe("RosterPanel live sync and ref", () => {
       ),
     );
     expect(
-      screen.getByRole("button", { name: "Remove filter Invitation: Failed" }),
+      screen.getByRole("button", {
+        name: "Remove filter Response: Invite failed",
+      }),
     ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Participants" })).toHaveFocus();
     expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();

@@ -4,7 +4,6 @@ const {
   createEvent,
   importRosterApi,
   latestEmailFor,
-  latestVerificationCode,
   newRunId,
   registerAccountViaApi,
   runDjangoJson,
@@ -39,7 +38,7 @@ const { wakeLiveSync } = require("./helpers/workspace");
 // Invitations from the organizer's Participants section and what becomes of
 // them: the send review's skip rules and "Email them again too" from every
 // entry point (the Email menu's invite-everyone, the selection bar, a row's
-// ⋯ menu, the person panel), the invitation badges from Not sent to Accepted,
+// ⋯ menu, the person panel), the Response badges from Not invited to Started,
 // throttled and refused sends, the event delivery card (its states, Show
 // failed, Retry failed recipients with its review, Dismiss and its restore),
 // and the API-only paths (adding a person with an invitation, the legacy
@@ -66,9 +65,11 @@ function previewLinkFor(page, event, path = "/temp-access") {
   return `${new URL(page.url()).origin}${path}?code=${event.code}&invitation=preview`;
 }
 
-// The Invitation column of a row.
-function invitationCell(page, name) {
-  return participantRow(page, name).locator(".participants-table__invitation");
+// A row's one Response badge: Submitted once there is an answer, otherwise
+// how far the invitation got (Not invited, Sending invite…, Invite failed,
+// Invited, Started), or Not submitted for people nobody invites.
+function responseBadge(page, name) {
+  return participantRow(page, name).locator(".participants-table__response");
 }
 
 function listRows(page) {
@@ -116,7 +117,7 @@ function invitationSection(panel) {
 function failedFilterChip(page) {
   return page
     .locator("#organizer-roster")
-    .getByRole("button", { name: "Remove filter Invitation: Failed" });
+    .getByRole("button", { name: "Remove filter Response: Invite failed" });
 }
 
 async function openRowMenu(page, name) {
@@ -335,15 +336,15 @@ test.describe("Sending invitations", () => {
 
     await gotoParticipants(page, event);
     for (const [name, badge] of [
-      ["Pia Pending", "Not sent"],
-      ["Rex Ready", "Not sent"],
-      ["Fay Failed", "Failed"],
-      ["Sid Sending", "Sending…"],
-      ["Ola Sent", "Sent"],
-      ["Quinn NoEmail", "No email"],
-      [ORGANIZER, "—"],
+      ["Pia Pending", "Not invited"],
+      ["Rex Ready", "Not invited"],
+      ["Fay Failed", "Invite failed"],
+      ["Sid Sending", "Sending invite…"],
+      ["Ola Sent", "Invited"],
+      ["Quinn NoEmail", "Not submitted"],
+      [ORGANIZER, "Not submitted"],
     ]) {
-      await expect(invitationCell(page, name)).toHaveText(badge);
+      await expect(responseBadge(page, name)).toHaveText(badge);
     }
 
     // The event has reminders off, so the menu says so and offers no run.
@@ -442,11 +443,13 @@ test.describe("Sending invitations", () => {
       "0 failed",
     ]);
     for (const name of ["Pia Pending", "Rex Ready", "Fay Failed"]) {
-      await expect(invitationCell(page, name)).toHaveText("Sent", {
+      await expect(responseBadge(page, name)).toHaveText("Invited", {
         timeout: LIVE_SYNC_TIMEOUT_MS,
       });
     }
-    await expect(invitationCell(page, "Sid Sending")).toHaveText("Sending…");
+    await expect(responseBadge(page, "Sid Sending")).toHaveText(
+      "Sending invite…",
+    );
 
     // Nobody is left to invite: the review says who is skipped and why, and
     // offers nothing to send.
@@ -768,7 +771,9 @@ test.describe("Sending invitations", () => {
     await expect(panel).toHaveCount(0);
 
     // Sid's resend is still on its way, so there is nothing to send yet.
-    await expect(invitationCell(page, "Sid Sending")).toHaveText("Sending…");
+    await expect(responseBadge(page, "Sid Sending")).toHaveText(
+      "Sending invite…",
+    );
     panel = await openPersonPanel(page, "Sid Sending");
     section = invitationSection(panel);
     await expect(section.locator(".status-badge")).toHaveText("Sending…");
@@ -970,7 +975,7 @@ test.describe("Sending invitations", () => {
     expect(invitationJobCount(event.code, pia)).toBe(0);
   });
 
-  test("a respondent's own link moves their invitation from Sent to Accepted for the organizer, while a response entered for them does not", async ({
+  test("a respondent's own save moves their invitation from Invited to Started for the organizer, while opening the link or a response entered for them does not", async ({
     page,
     request,
     browser,
@@ -1006,18 +1011,16 @@ test.describe("Sending invitations", () => {
       await waitForInvitationStatus(request, event.code, token, email, "sent");
     }
     await gotoParticipants(page, event);
-    await expect(invitationCell(page, "Pia Pending")).toHaveText("Sent");
-    await expect(invitationCell(page, "Rex Ready")).toHaveText("Sent");
+    await expect(responseBadge(page, "Pia Pending")).toHaveText("Invited");
+    await expect(responseBadge(page, "Rex Ready")).toHaveText("Invited");
 
     // A response the organizer enters for Rex moves his invitation on (so
-    // reminders skip him) but is not his acceptance.
+    // reminders skip him) but is not his acceptance: his row reads
+    // Submitted, and his invitation still reads Sent in his panel.
     await submitOnBehalf(request, token, event, byEmail.get(rex));
-    await expect(
-      participantRow(page, "Rex Ready").locator(
-        ".participants-table__response",
-      ),
-    ).toHaveText("Submitted", { timeout: LIVE_SYNC_TIMEOUT_MS });
-    await expect(invitationCell(page, "Rex Ready")).toHaveText("Sent");
+    await expect(responseBadge(page, "Rex Ready")).toHaveText("Submitted", {
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
     expect(await invitationFor(request, token, event.code, rex)).toEqual(
       expect.objectContaining({ status: "submitted", acceptedAt: null }),
     );
@@ -1025,22 +1028,22 @@ test.describe("Sending invitations", () => {
       (await rosterByEmail(request, event.code, token)).get(rex)
         .invitationStatus,
     ).toBe("sent");
+    let panel = await openPersonPanel(page, "Rex Ready");
+    await expect(invitationSection(panel).locator(".status-badge")).toHaveText(
+      /^Sent on .+$/,
+    );
+    await panel.getByRole("button", { name: "Cancel" }).click();
+    await expect(panel).toHaveCount(0);
 
     const context = await browser.newContext();
     try {
       const piaPage = await context.newPage();
-      // Opening the link asks for a code, which marks the invitation opened;
-      // the organizer still sees it as Sent.
-      const accessAt = Date.now() - 1000;
+      // The link alone opens Pia's schedule, which marks the invitation
+      // opened; the organizer still sees it as Invited.
       await piaPage.goto(temporaryAccessPathFromEmail(piaInvitation));
       await expect(
-        piaPage.getByRole("heading", { name: "Check your email" }),
+        piaPage.getByText("You are responding as Pia Pending"),
       ).toBeVisible();
-      const code = await latestVerificationCode(
-        pia,
-        accessAt,
-        "temp_event_access",
-      );
       expect(await invitationFor(request, token, event.code, pia)).toEqual(
         expect.objectContaining({
           status: "opened",
@@ -1052,25 +1055,28 @@ test.describe("Sending invitations", () => {
         (await rosterByEmail(request, event.code, token)).get(pia)
           .invitationStatus,
       ).toBe("sent");
-      await expect(invitationCell(page, "Pia Pending")).toHaveText("Sent");
+      await expect(responseBadge(page, "Pia Pending")).toHaveText("Invited");
 
-      // Verifying the code is Pia's own acceptance.
-      await piaPage.getByLabel("Verification code").fill(code);
+      // Pia's own first save is her acceptance.
+      const saved = piaPage.waitForResponse(
+        (response) =>
+          response.request().method() === "PUT" &&
+          response.url().includes("/events/temp-access/participant?"),
+      );
       await piaPage
-        .getByRole("button", { name: "Verify and open schedule" })
+        .getByRole("grid", { name: "Availability" })
+        .locator('[data-cell-idx="0"]')
         .click();
-      await expect(
-        piaPage.getByText("You are responding as Pia Pending"),
-      ).toBeVisible();
+      expect((await saved).status()).toBe(200);
     } finally {
       await context.close();
     }
-    await expect(invitationCell(page, "Pia Pending")).toHaveText("Accepted", {
+    await expect(responseBadge(page, "Pia Pending")).toHaveText("Started", {
       timeout: LIVE_SYNC_TIMEOUT_MS,
     });
     expect(await invitationFor(request, token, event.code, pia)).toEqual(
       expect.objectContaining({
-        status: "joined",
+        status: "draft_saved",
         acceptedAt: expect.any(String),
         joinedAt: expect.any(String),
       }),
@@ -1079,7 +1085,7 @@ test.describe("Sending invitations", () => {
       (await rosterByEmail(request, event.code, token)).get(pia)
         .invitationStatus,
     ).toBe("accepted");
-    const panel = await openPersonPanel(page, "Pia Pending");
+    panel = await openPersonPanel(page, "Pia Pending");
     const section = invitationSection(panel);
     await expect(section.locator(".status-badge")).toHaveText("Accepted");
     await expect(section.getByRole("button", { name: "Resend" })).toBeEnabled();
@@ -1151,7 +1157,9 @@ test.describe("Event delivery card", () => {
       card.getByRole("button", { name: "Show failed" }),
     ).toBeVisible();
     await expect(card.getByRole("button", { name: "Dismiss" })).toHaveCount(0);
-    await expect(invitationCell(page, "Fay Failed")).toHaveText("Sending…");
+    await expect(responseBadge(page, "Fay Failed")).toHaveText(
+      "Sending invite…",
+    );
 
     // The card follows the run on its own when Fay's email is given up on.
     // (Whether her row does too is the expected failure below.)
@@ -1173,7 +1181,7 @@ test.describe("Event delivery card", () => {
     await card.getByRole("button", { name: "Show failed" }).click();
     await expect(failedFilterChip(page)).toBeVisible();
     await expect(listRows(page)).toHaveCount(1);
-    await expect(invitationCell(page, "Fay Failed")).toHaveText("Failed");
+    await expect(responseBadge(page, "Fay Failed")).toHaveText("Invite failed");
     await expect(page.locator("#organizer-roster-heading")).toBeFocused();
     const panel = await openPersonPanel(page, "Fay Failed");
     await expect(invitationSection(panel).locator(".status-badge")).toHaveText(
@@ -1290,11 +1298,11 @@ test.describe("Event delivery card", () => {
     ).toBeVisible({ timeout: LIVE_SYNC_TIMEOUT_MS });
     await failedFilterChip(page).click();
     await expect(listRows(page)).toHaveCount(2);
-    await expect(invitationCell(page, "Fay Failed")).toHaveText("Sent");
-    await expect(invitationCell(page, "Gus Good")).toHaveText("Sent");
+    await expect(responseBadge(page, "Fay Failed")).toHaveText("Invited");
+    await expect(responseBadge(page, "Gus Good")).toHaveText("Invited");
   });
 
-  test("a row's Sending… badge turns Failed on its own once the email is given up on", async ({
+  test("a row's Sending invite… badge turns Invite failed on its own once the email is given up on", async ({
     page,
     request,
   }) => {
@@ -1321,7 +1329,9 @@ test.describe("Event delivery card", () => {
     await gotoParticipants(page, event);
     const card = deliveryCard(page);
     await expect(cardState(card)).toHaveText("In progress");
-    await expect(invitationCell(page, "Fay Failed")).toHaveText("Sending…");
+    await expect(responseBadge(page, "Fay Failed")).toHaveText(
+      "Sending invite…",
+    );
 
     // The worker gives up on it. The card hears of that on its own, and a
     // live-sync pass then runs for the list too.
@@ -1330,9 +1340,10 @@ test.describe("Event delivery card", () => {
       timeout: LIVE_SYNC_TIMEOUT_MS,
     });
     await wakeLiveSync(page);
-    await expect(invitationCell(page, "Fay Failed")).toHaveText("Failed", {
-      timeout: LIVE_SYNC_TIMEOUT_MS,
-    });
+    await expect(responseBadge(page, "Fay Failed")).toHaveText(
+      "Invite failed",
+      { timeout: LIVE_SYNC_TIMEOUT_MS },
+    );
   });
 
   test("a finished run can be dismissed for good, comes back from the server in a new tab, and a new run shows again", async ({

@@ -15,7 +15,6 @@ import {
   startingBrushValue,
 } from "@/components/ui/Availability";
 import BrandLogo from "@/components/ui/BrandLogo";
-import FormField from "@/components/ui/FormField";
 import LoadingState from "@/components/ui/LoadingState";
 import {
   RefreshIcon,
@@ -30,9 +29,8 @@ import StatusBadge from "@/components/ui/StatusBadge";
 import {
   fetchTempAccessSession,
   logoutTempAccess,
-  requestTempAccessCode,
+  openTempAccess,
   updateTempAccessParticipant,
-  verifyTempAccess,
 } from "@/lib/api/tempAccess";
 import { navigateTo, replaceUrl } from "@/lib/navigation";
 
@@ -102,6 +100,13 @@ function normalizedSchedule(values, length) {
 
 const BLOCKED_SLOTS_NOTE =
   "Grey striped times are blocked by the organizer and do not apply to this event.";
+const OPEN_THROTTLED_MESSAGE =
+  "Too many attempts. Wait a moment and try again.";
+const OPEN_FAILED_MESSAGE =
+  "We could not open your invitation. Check your connection and try again.";
+const SESSION_EXPIRED_MESSAGE =
+  "This temporary session has expired. Open the link in your invitation email again to continue.";
+const NO_INVITATION = { code: "", token: "" };
 
 // Organizer-blocked slots keep their index but never take availability: the
 // grid refuses to paint them, and bulk fills leave them at 0.
@@ -130,12 +135,9 @@ export default function TempAccessClient() {
   const eventCode = (searchParams.get("code") || "").trim();
   const urlInvitation = (searchParams.get("invitation") || "").trim();
 
-  const [phase, setPhase] = useState("loading");
-  const [invitationToken, setInvitationToken] = useState("");
-  const [verificationCode, setVerificationCode] = useState("");
-  const [verificationError, setVerificationError] = useState("");
-  const [requestState, setRequestState] = useState("idle");
-  const [requestMessage, setRequestMessage] = useState("");
+  const [phase, setPhase] = useState(urlInvitation ? "opening" : "loading");
+  const [openError, setOpenError] = useState("");
+  const [openAttempt, setOpenAttempt] = useState(0);
   const [access, setAccess] = useState(null);
   // The brush starts opposite to the event's starting level so people paint
   // over the times that differ from the default.
@@ -171,7 +173,10 @@ export default function TempAccessClient() {
   const autosavePendingRef = useRef(false);
   const autosaveRunnerRef = useRef(null);
   const draftSaveStateRef = useRef("idle");
-  const requestStartedRef = useRef("");
+  // Keeps the token when session storage is unavailable, so a retry or the
+  // re-render after the URL is stripped still opens the same invitation.
+  const invitationRef = useRef(NO_INVITATION);
+  const openStartedRef = useRef("");
 
   const applyParticipant = useCallback(
     (participant, event = access?.event) => {
@@ -262,7 +267,7 @@ export default function TempAccessClient() {
         endTemporaryAccess(
           accountUpgraded
             ? "This account now has full access. Sign in with the full account to continue."
-            : "This temporary session has expired. Reopen the invitation email to verify again.",
+            : SESSION_EXPIRED_MESSAGE,
         );
         return;
       }
@@ -284,8 +289,8 @@ export default function TempAccessClient() {
         if (sessionError.status === 401 || sessionError.status === 403) {
           endTemporaryAccess(
             error.status === 403
-              ? "This temporary access is no longer active. Sign in with the full account or reopen the invitation email."
-              : "This temporary session has expired. Reopen the invitation email to verify again.",
+              ? "This temporary access is no longer active. Sign in with the full account or open the link in your invitation email again."
+              : SESSION_EXPIRED_MESSAGE,
           );
           return;
         }
@@ -299,41 +304,17 @@ export default function TempAccessClient() {
     [applyAccessPayload, endTemporaryAccess, eventCode],
   );
 
-  const sendCode = useCallback(
-    async (token, { automatic = false } = {}) => {
-      if (!eventCode || !token) return false;
-      setRequestState("sending");
-      setRequestMessage("");
-      setVerificationError("");
-      try {
-        await requestTempAccessCode({
-          code: eventCode,
-          invitationToken: token,
-        });
-        setRequestState("sent");
-        setRequestMessage(
-          "If this access link is valid, a six-digit code has been sent to its email address.",
-        );
-        return true;
-      } catch {
-        setRequestState("error");
-        setRequestMessage(
-          automatic
-            ? "We could not start verification. Try sending the code again."
-            : "We could not send a new code. Wait a moment and try again.",
-        );
-        return false;
-      }
-    },
-    [eventCode],
-  );
-
   useEffect(() => {
     if (!eventCode) {
       return;
     }
 
-    const token = urlInvitation || readStoredInvitation(eventCode);
+    const remembered =
+      invitationRef.current.code === eventCode
+        ? invitationRef.current.token
+        : "";
+    const token =
+      urlInvitation || readStoredInvitation(eventCode) || remembered;
     if (urlInvitation) {
       storeInvitation(eventCode, urlInvitation);
       const url = new URL(window.location.href);
@@ -345,12 +326,34 @@ export default function TempAccessClient() {
       // An explicit (or just-stored) invitation represents an identity choice.
       // Never let an older same-event cookie silently replace that identity.
       if (token) {
-        setInvitationToken(token);
-        setPhase("code");
-        const requestKey = `${eventCode}:${token}`;
-        if (requestStartedRef.current !== requestKey) {
-          requestStartedRef.current = requestKey;
-          await sendCode(token, { automatic: true });
+        // React re-runs this effect (Strict Mode, and again once the URL is
+        // stripped), so one attempt for one link must send one request. Only
+        // the request that still owns this key may touch state, and it does
+        // not depend on this run staying mounted.
+        const requestKey = `${eventCode}:${token}:${openAttempt}`;
+        if (openStartedRef.current === requestKey) return;
+        openStartedRef.current = requestKey;
+        invitationRef.current = { code: eventCode, token };
+        setPhase("opening");
+        try {
+          const payload = await openTempAccess({
+            code: eventCode,
+            invitationToken: token,
+          });
+          if (openStartedRef.current !== requestKey) return;
+          applyAccessPayload(payload);
+          forgetInvitation(eventCode);
+          invitationRef.current = NO_INVITATION;
+        } catch (error) {
+          if (openStartedRef.current !== requestKey) return;
+          if (error.status === 404) {
+            setPhase("inactive");
+            return;
+          }
+          setOpenError(
+            error.status === 429 ? OPEN_THROTTLED_MESSAGE : OPEN_FAILED_MESSAGE,
+          );
+          setPhase("open-failed");
         }
         return;
       }
@@ -358,8 +361,6 @@ export default function TempAccessClient() {
       try {
         const payload = await fetchTempAccessSession(eventCode);
         if (!active) return;
-        forgetInvitation(eventCode);
-        setInvitationToken("");
         applyAccessPayload(payload);
         return;
       } catch {
@@ -372,7 +373,7 @@ export default function TempAccessClient() {
     return () => {
       active = false;
     };
-  }, [applyAccessPayload, eventCode, sendCode, urlInvitation]);
+  }, [applyAccessPayload, eventCode, openAttempt, urlInvitation]);
 
   useEffect(() => {
     const deadline = access?.event?.responseDeadline;
@@ -566,34 +567,6 @@ export default function TempAccessClient() {
     };
   }, []);
 
-  const verifyCode = async (event) => {
-    event.preventDefault();
-    if (!invitationToken || !/^\d{6}$/.test(verificationCode)) {
-      setVerificationError("Enter the six-digit code from your email.");
-      return;
-    }
-    setVerificationError("");
-    setRequestState("verifying");
-    try {
-      const payload = await verifyTempAccess({
-        code: eventCode,
-        invitationToken,
-        verificationCode,
-      });
-      forgetInvitation(eventCode);
-      setInvitationToken("");
-      setVerificationCode("");
-      applyAccessPayload(payload);
-    } catch (error) {
-      setRequestState("sent");
-      setVerificationError(
-        error.status === 429
-          ? "Too many attempts. Request a new code after waiting a moment."
-          : "That code could not be verified. Check the code or request a new one.",
-      );
-    }
-  };
-
   const paintCell = useCallback(
     (channel, index) => {
       const scheduleRef =
@@ -664,7 +637,7 @@ export default function TempAccessClient() {
     } catch (error) {
       if (error.status === 401 || error.status === 403) {
         endTemporaryAccess(
-          "This temporary access is no longer active. Reopen the invitation email or sign in with the full account.",
+          "This temporary access is no longer active. Open the link in your invitation email again or sign in with the full account.",
         );
         return;
       }
@@ -756,8 +729,41 @@ export default function TempAccessClient() {
     );
   }
 
-  if (phase === "loading") {
-    return <CenteredStatus title="Opening event access…" busy />;
+  if (phase === "loading" || phase === "opening") {
+    return (
+      <CenteredStatus
+        title="Opening event access…"
+        message={
+          phase === "opening"
+            ? "Opening your invitation…"
+            : "Please wait while we check this event link."
+        }
+        busy
+      />
+    );
+  }
+
+  if (phase === "inactive") {
+    return (
+      <CenteredStatus
+        title="This invitation link isn't active"
+        message="It may have been replaced by a newer invitation, or the organizer changed the address it was sent to. Ask the organizer to send it again, or sign in if you have a Releviz account."
+      />
+    );
+  }
+
+  if (phase === "open-failed") {
+    return (
+      <CenteredStatus title="Invitation not opened" failure={openError}>
+        <AppButton
+          fullWidth
+          autoFocus
+          onClick={() => setOpenAttempt((attempt) => attempt + 1)}
+        >
+          Try again
+        </AppButton>
+      </CenteredStatus>
+    );
   }
 
   if (
@@ -776,96 +782,12 @@ export default function TempAccessClient() {
         }
         message={
           phase === "logged-out"
-            ? "Reopen the invitation email whenever you need to access this event again."
+            ? "Open the link in your invitation email whenever you need to access this event again."
             : phase === "session-ended"
               ? sessionEndMessage
               : "Open the temporary access link in your invitation email. The link only works for its event."
         }
       />
-    );
-  }
-
-  if (phase === "code") {
-    return (
-      <main className="auth-page">
-        <section
-          className="auth-panel text-center"
-          aria-labelledby="temp-access-heading"
-        >
-          <BrandLogo
-            alt="Releviz"
-            className="brand-logo brand-logo--auth mx-auto"
-            priority
-          />
-          <div>
-            <span className="eyebrow">Temporary event access</span>
-            <h1 id="temp-access-heading">Check your email</h1>
-            <p className="text-secondary mb-0">
-              Enter the six-digit code sent to the email address connected to
-              this invitation. The code expires after 10 minutes.
-            </p>
-          </div>
-          {requestMessage && (
-            <Alert
-              variant={requestState === "error" ? "danger" : "info"}
-              role={requestState === "error" ? "alert" : "status"}
-              className="text-start"
-            >
-              {requestMessage}
-            </Alert>
-          )}
-          <form className="d-flex flex-column gap-3" onSubmit={verifyCode}>
-            <FormField
-              id="temporary-verification-code"
-              label="Verification code"
-              error={verificationError || null}
-            >
-              <input
-                className="form-control form-control-lg text-center"
-                value={verificationCode}
-                onChange={(event) =>
-                  setVerificationCode(
-                    event.target.value.replace(/\D/g, "").slice(0, 6),
-                  )
-                }
-                autoComplete="one-time-code"
-                inputMode="numeric"
-                pattern="[0-9]{6}"
-                maxLength={6}
-                autoFocus
-                required
-              />
-            </FormField>
-            <AppButton
-              type="submit"
-              fullWidth
-              busy={requestState === "verifying"}
-              disabled={
-                requestState === "sending" || requestState === "verifying"
-              }
-            >
-              {requestState === "verifying"
-                ? "Verifying…"
-                : "Verify and open schedule"}
-            </AppButton>
-          </form>
-          <AppButton
-            variant="outlined"
-            fullWidth
-            busy={requestState === "sending"}
-            disabled={
-              requestState === "sending" || requestState === "verifying"
-            }
-            onClick={() => void sendCode(invitationToken)}
-          >
-            {requestState === "sending" ? "Sending…" : "Send a new code"}
-          </AppButton>
-          <p className="small text-secondary mb-0">
-            This verification only grants access to this event. It does not sign
-            you in to a full Releviz account.
-          </p>
-        </section>
-      </main>
     );
   }
 
@@ -1139,6 +1061,8 @@ function CenteredStatus({
   title,
   message = "Please wait while we check this event link.",
   busy = false,
+  failure = "",
+  children = null,
 }) {
   return (
     <main className="auth-page">
@@ -1153,10 +1077,15 @@ function CenteredStatus({
           <h1>{title}</h1>
           {busy ? (
             <LoadingState label={message} className="p-0" />
+          ) : failure ? (
+            <Alert variant="danger" className="text-start">
+              {failure}
+            </Alert>
           ) : (
             <p className="text-secondary mb-0">{message}</p>
           )}
         </div>
+        {children}
       </section>
     </main>
   );

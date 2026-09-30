@@ -1,7 +1,7 @@
 """Email logs, delivery requests and delivery jobs are read-only in the admin.
 
 Every field of these audit and outbox records was read-only, yet the admin still
-offered Add and Delete, even to a superuser. Nobody adds, edits or deletes one
+offered Add and Delete to any administrator. Nobody adds, edits or deletes one
 now. Viewing them and requeueing an uncertain job still work, and the records
 still go with the event or member they belong to.
 """
@@ -27,8 +27,12 @@ def _url(record, view, *args):
 @override_settings(ROOT_URLCONF="config.urls", ADMIN_REQUIRE_CONFIRMATION=False)
 class MailRecordAdminReadOnlyTests(TestCase):
     def setUp(self):
-        self.superuser = Member.objects.create_superuser(
-            password="StrongPass123!", first_name="Super", last_name="User", is_active=True
+        self.administrator = Member.objects.create_user(
+            password="StrongPass123!",
+            first_name="Ada",
+            last_name="Admin",
+            is_staff=True,
+            is_active=True,
         )
         self.member = Member.objects.create_user(
             password="StrongPass123!", first_name="Rae", last_name="Recipient", is_active=True
@@ -42,7 +46,7 @@ class MailRecordAdminReadOnlyTests(TestCase):
         self.event = Event.objects.create(
             code="MAILRO1",
             name="Read-only mail",
-            organizer=self.superuser,
+            organizer=self.administrator,
             days=[1],
             start_minutes=9 * 60,
             end_minutes=10 * 60,
@@ -67,7 +71,7 @@ class MailRecordAdminReadOnlyTests(TestCase):
         )
         self.delivery_request = EmailDeliveryRequest.objects.create(
             event=self.event,
-            requested_by=self.superuser,
+            requested_by=self.administrator,
             operation=EmailDeliveryRequest.Operation.INVITATION,
             idempotency_key=uuid.uuid4(),
             request_fingerprint="f" * 64,
@@ -76,9 +80,9 @@ class MailRecordAdminReadOnlyTests(TestCase):
         )
         self.delivery_request.jobs.add(self.job)
         self.records = (self.log, self.job, self.delivery_request)
-        self.client.force_login(self.superuser)
+        self.client.force_login(self.administrator)
 
-    def test_nobody_adds_edits_or_deletes_a_record_not_even_a_superuser(self):
+    def test_no_administrator_adds_edits_or_deletes_a_record(self):
         for record in self.records:
             model = type(record)
             with self.subTest(model=model.__name__):
@@ -117,13 +121,11 @@ class MailRecordAdminReadOnlyTests(TestCase):
         self.job.refresh_from_db()
         self.assertEqual(self.job.subject, "Read only")
 
-    def test_mail_staff_still_view_records_and_requeue_an_uncertain_job(self):
+    def test_another_administrator_still_views_records_and_requeues_an_uncertain_job(self):
         EmailDeliveryJob.objects.filter(pk=self.job.pk).update(
             status=EmailDeliveryJob.Status.UNCERTAIN
         )
-        staff = Member.objects.create_user(
-            password="StrongPass123!", is_staff=True, is_active=True, admin_apps=["mail"]
-        )
+        staff = Member.objects.create_user(password="StrongPass123!", is_staff=True, is_active=True)
         self.client.force_login(staff)
         for record in self.records:
             with self.subTest(model=type(record).__name__):
@@ -149,7 +151,7 @@ class MailRecordAdminReadOnlyTests(TestCase):
 
     def test_bulk_delete_is_dropped_with_or_without_an_action_location(self):
         request = RequestFactory().get(_url(self.job, "changelist"))
-        request.user = self.superuser
+        request.user = self.administrator
         model_admin = admin.site.get_model_admin(EmailDeliveryJob)
 
         self.assertEqual(list(model_admin.get_actions(request)), ["retry_uncertain_deliveries"])

@@ -4,6 +4,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from django.conf import settings
 from django.test import RequestFactory, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -174,3 +175,72 @@ class DurableRateLimitTests(TestCase):
 
         self.assertEqual(response.status_code, 429)
         self.assertEqual(response["Retry-After"], "17")
+
+
+class ClassroomEmailRateLimitTests(TestCase):
+    """Exercise production defaults: classroom users can share one public IP."""
+
+    def test_full_event_can_request_and_verify_codes_behind_one_network(self):
+        request = RequestFactory().post(
+            "/authn/email-auth/request-code/", REMOTE_ADDR="198.51.100.50"
+        )
+        for scope in ("code_request", "code_verify", "temp_access_open"):
+            with self.subTest(scope=scope):
+                for index in range(1000):
+                    decision = consume_request_rate_limit(
+                        scope, request, f"student{index}@example.com"
+                    )
+                    self.assertTrue(decision.allowed, f"{scope} blocked student {index + 1}")
+
+    def test_one_student_cannot_bypass_identity_limits_by_switching_networks(self):
+        for scope, allowed_attempts in (
+            ("code_request", 5),
+            ("code_verify", 10),
+            ("temp_access_open", 20),
+        ):
+            with self.subTest(scope=scope):
+                for index in range(allowed_attempts + 1):
+                    request = RequestFactory().post("/", REMOTE_ADDR=f"198.51.100.{index + 1}")
+                    decision = consume_request_rate_limit(scope, request, "student@example.com")
+                    self.assertEqual(decision.allowed, index < allowed_attempts)
+                self.assertGreater(decision.retry_after, 0)
+
+    def test_shared_network_ceiling_still_blocks_excess_requests(self):
+        request = RequestFactory().post("/", REMOTE_ADDR="198.51.100.60")
+        for scope in ("code_request", "code_verify", "temp_access_open"):
+            with self.subTest(scope=scope):
+                self.assertTrue(
+                    consume_request_rate_limit(scope, request, "first@example.com").allowed
+                )
+                config = settings.AUTH_RATE_LIMITS[scope]["ip"]
+                AuthRateLimitBucket.objects.filter(scope=f"{scope}:ip").update(
+                    request_count=config["limit"] - 1
+                )
+                self.assertTrue(
+                    consume_request_rate_limit(scope, request, "last@example.com").allowed
+                )
+                blocked = consume_request_rate_limit(scope, request, "excess@example.com")
+                self.assertFalse(blocked.allowed)
+                self.assertEqual(blocked.retry_after, config["block"])
+
+    @patch("apps.authn.services.email.send_email.send_verification_email")
+    @patch("apps.authn.services.email.challenges._random_code", return_value="123456")
+    def test_classroom_can_complete_authentication_from_one_ip(self, _mock_code, mock_send):
+        client = APIClient()
+        for index in range(40):
+            email = f"classroom{index}@example.com"
+            sent = client.post(
+                "/authn/email-auth/request-code/",
+                {"email": email},
+                format="json",
+                REMOTE_ADDR="198.51.100.70",
+            )
+            self.assertEqual(sent.status_code, 202, sent.data)
+            verified = client.post(
+                "/authn/email-auth/verify-code/",
+                {"email": email, "code": "123456"},
+                format="json",
+                REMOTE_ADDR="198.51.100.70",
+            )
+            self.assertEqual(verified.status_code, 200, verified.data)
+        self.assertEqual(mock_send.call_count, 40)

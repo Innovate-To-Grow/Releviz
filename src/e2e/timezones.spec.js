@@ -7,7 +7,6 @@ const {
   finalizeViaApi,
   freshResults,
   latestEmailFor,
-  latestVerificationCode,
   newRunId,
   readSession,
   registerAccount,
@@ -22,7 +21,7 @@ const {
   chooseRecommendedTime,
   detailItem,
   overviewTile,
-  reviewAttendance,
+  waitForAttendanceReview,
 } = require("./helpers/workspace");
 const {
   addPersonApi,
@@ -131,8 +130,8 @@ function emailTimeRange(start, end, timeZone) {
 }
 
 // Adds and invites a new address (a temporary identity) and opens the
-// emailed link in a fresh Tokyo context, verifying the emailed code. Returns
-// the temporary page, its context and the invitation email.
+// emailed link in a fresh Tokyo context; the link alone opens the schedule.
+// Returns the temporary page, its context and the invitation email.
 async function openTemporaryAccess(
   browser,
   request,
@@ -154,18 +153,7 @@ async function openTemporaryAccess(
   );
   const context = await browser.newContext(CONTEXT_OPTIONS);
   const page = await context.newPage();
-  const codeRequestedAt = Date.now() - 1000;
   await page.goto(temporaryAccessPathFromEmail(invitation));
-  await expect(
-    page.getByRole("heading", { name: "Check your email" }),
-  ).toBeVisible();
-  const accessCode = await latestVerificationCode(
-    email,
-    codeRequestedAt,
-    "temp_event_access",
-  );
-  await page.getByLabel("Verification code").fill(accessCode);
-  await page.getByRole("button", { name: "Verify and open schedule" }).click();
   await expect(page.getByRole("heading", { name: event.name })).toBeVisible();
   await expect(page.getByText(`You are responding as ${name}`)).toBeVisible();
   return { context, page, invitation };
@@ -315,7 +303,7 @@ test.describe("Timezones", () => {
     await otherTimes.locator("> summary").click();
     await expect(otherTimes).toHaveAttribute("open", "");
     await expect(otherTimes.locator(".ranked-chips__intro")).toContainText(
-      `times are in ${EVENT_ZONE}.`,
+      `Times are in ${EVENT_ZONE}.`,
     );
     await otherTimes.locator("> summary").click();
     await expect(otherTimes).not.toHaveAttribute("open", "");
@@ -359,7 +347,7 @@ test.describe("Timezones", () => {
       EVENT_ZONE,
     );
     expect(when).toMatch(/, 9:00 AM to 10:00 AM E[SD]T$/);
-    await reviewAttendance(page);
+    await waitForAttendanceReview(page);
     await page
       .locator("#organizer-finalize")
       .getByRole("button", { name: "Finalize meeting" })

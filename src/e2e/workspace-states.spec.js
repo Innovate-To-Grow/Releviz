@@ -31,7 +31,7 @@ const {
   overviewDetail,
   overviewTile,
   pickCell,
-  reviewAttendance,
+  waitForAttendanceReview,
   wakeLiveSync,
 } = require("./helpers/workspace");
 const {
@@ -73,6 +73,21 @@ const RECOMMENDATION_RULE =
   "We recommend times someone can attend for the whole 60 minutes, at least half as available as the best, never overlapping.";
 const POINTER_HINT =
   "Point at one to find it on the calendar; click one to select it.";
+// The recommended list's shares are for the whole meeting.
+const SHARES_NOTE =
+  "Shares count each person for the whole 60 minutes, so they can be lower than the calendar's per-slot shading.";
+const UPDATING_WITH_RESULTS =
+  "Results are updating. Showing the last calculated results meanwhile.";
+
+// The Time Table while its results are current (at `revision`, if given):
+// the panel says so in data attributes rather than on screen.
+function freshResultsPanel(page, revision) {
+  return page.locator(
+    revision === undefined
+      ? '[data-results-status="fresh"]'
+      : `[data-results-status="fresh"][data-results-revision="${revision}"]`,
+  );
+}
 const DISCARDED_MARKS =
   "Unsaved blocked-time marks were discarded because the event changed.";
 
@@ -467,12 +482,16 @@ test.describe("Live sync", () => {
       ),
     ).toBeVisible();
 
-    // Archived elsewhere.
+    // Archived elsewhere, still holding the confirmed meeting.
     await setLifecycleViaApi(request, token, event.code, "archived");
     await expect(lifecycleBadge(page)).toHaveText("archived", {
       timeout: LIVE_SYNC_TIMEOUT_MS,
     });
-    await expect(controls.getByText("This event is archived.")).toBeVisible();
+    await expect(
+      controls.getByText(
+        "This event is archived. The confirmed meeting still stands.",
+      ),
+    ).toBeVisible();
     await expect(
       controls.getByRole("button", { name: "Archive event" }),
     ).toHaveCount(0);
@@ -629,9 +648,7 @@ print(json.dumps({
         : route.abort("connectionfailed"),
     );
     await openWorkspace(page, event);
-    await expect(
-      page.getByText(/Results are current at revision \d+/),
-    ).toBeVisible();
+    await expect(freshResultsPanel(page)).toBeVisible();
     // The snapshot is re-read only while the Time Table is on screen.
     await page.locator("#organizer-results").scrollIntoViewIfNeeded();
 
@@ -642,10 +659,10 @@ print(json.dumps({
     const wokenAt = await pageNow(page);
     await wakeLiveSync(page);
     await expect(
-      page.getByText(
-        `Results are updating for revision ${revision}. Showing the last successful snapshot meanwhile.`,
-        { exact: true },
-      ),
+      page.getByText(UPDATING_WITH_RESULTS, { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-results-status="refreshing"]'),
     ).toBeVisible();
 
     // With nothing pushed, the refreshing snapshot is re-read every 2 s.
@@ -706,9 +723,9 @@ print(json.dumps({
     letThrough = true;
     await connected;
     releaseSnapshot(event.code);
-    await expect(
-      page.getByText(`Results are current at revision ${revision} ·`),
-    ).toBeVisible({ timeout: LIVE_SYNC_TIMEOUT_MS });
+    await expect(freshResultsPanel(page, revision)).toBeVisible({
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
   });
 
   test("a failed live-sync pass pauses live updates with the error, and they resume on their own", async ({
@@ -841,14 +858,14 @@ test.describe("Time Table snapshot states", () => {
 
     // No snapshot has been computed yet: the calendar is neutral, the
     // recommended times are being calculated, and a pick has no counts.
-    const { revision: firstRevision } = holdSnapshot(event.code, {
-      empty: true,
-    });
+    holdSnapshot(event.code, { empty: true });
     await openWorkspace(page, event);
+    // With nothing calculated yet, there is nothing to show meanwhile.
     await expect(
-      panel.getByText(`Results are updating for revision ${firstRevision}.`, {
-        exact: true,
-      }),
+      panel.getByText("Results are updating.", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-results-status="refreshing"]'),
     ).toBeVisible();
     await expect(
       panel.getByText(
@@ -880,8 +897,8 @@ test.describe("Time Table snapshot states", () => {
       "No responses have been counted yet.",
     );
 
-    // A response arrives and the worker publishes: the fresh banner names
-    // the revision and when it was generated.
+    // A response arrives and the worker publishes. A current snapshot needs
+    // no notice: the panel names its revision in data attributes only.
     await submitResponse(request, token, event, {
       name: "Ada Snapshot",
       email: `ada-snapshot-${runId}@example.com`,
@@ -890,16 +907,11 @@ test.describe("Time Table snapshot states", () => {
     releaseSnapshot(event.code);
     const fresh = await resultsEnvelope(request, token, event.code);
     expect(fresh.status).toBe("fresh");
-    const generated = await page.evaluate(
-      (value) => new Date(value).toLocaleString(),
-      fresh.generatedAt,
-    );
-    await expect(
-      panel.getByText(
-        `Results are current at revision ${fresh.computedRevision} · generated ${generated}.`,
-        { exact: true },
-      ),
-    ).toBeVisible({ timeout: LIVE_SYNC_TIMEOUT_MS });
+    await expect(freshResultsPanel(page, fresh.computedRevision)).toBeVisible({
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
+    await expect(panel.getByText(/Results are current/)).toHaveCount(0);
+    await expect(panel.getByText(/Results are updating/)).toHaveCount(0);
     await expect(
       panel.getByText("Availability shading appears", { exact: false }),
     ).toHaveCount(0);
@@ -910,10 +922,7 @@ test.describe("Time Table snapshot states", () => {
     // A newer revision is being computed: the last snapshot stays listed.
     const { revision } = holdSnapshot(event.code, { dirty: true });
     await expect(
-      panel.getByText(
-        `Results are updating for revision ${revision}. Showing the last successful snapshot meanwhile.`,
-        { exact: true },
-      ),
+      panel.getByText(UPDATING_WITH_RESULTS, { exact: true }),
     ).toBeVisible({ timeout: LIVE_SYNC_TIMEOUT_MS });
     await expect(recommended.locator(".ranked-chip")).toHaveCount(1);
 
@@ -922,7 +931,7 @@ test.describe("Time Table snapshot states", () => {
     await expect(
       panel.getByRole("alert").filter({
         hasText:
-          "Result calculation failed. The worker will retry; the last successful snapshot remains visible.",
+          "The results could not be calculated. It will be retried automatically; the last calculated results stay on screen.",
       }),
     ).toBeVisible({ timeout: LIVE_SYNC_TIMEOUT_MS });
     await expect(recommended.locator(".ranked-chip")).toHaveCount(1);
@@ -933,9 +942,9 @@ test.describe("Time Table snapshot states", () => {
     });
     // The retry succeeds.
     recomputeEventResults(event.code);
-    await expect(
-      panel.getByText(`Results are current at revision ${revision} ·`),
-    ).toBeVisible({ timeout: LIVE_SYNC_TIMEOUT_MS });
+    await expect(freshResultsPanel(page, revision)).toBeVisible({
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
     await expect(panel.getByRole("alert")).toHaveCount(0);
 
     // The results cannot be loaded at all: the panel says why and keeps
@@ -953,13 +962,11 @@ test.describe("Time Table snapshot states", () => {
       .filter({ hasText: "Results are offline" });
     await expect(loadError).toBeVisible();
     await expect(
-      panel.getByText(`Results are updating for revision`, { exact: false }),
+      panel.getByText("Results are updating", { exact: false }),
     ).toBeVisible();
     failing = false;
     await expect(loadError).toHaveCount(0, { timeout: 10_000 });
-    await expect(
-      panel.getByText(`Results are current at revision ${revision} ·`),
-    ).toBeVisible();
+    await expect(freshResultsPanel(page, revision)).toBeVisible();
   });
 
   test("a weekly recommendation whose suggested date has passed is chosen at its next occurrence", async ({
@@ -1046,7 +1053,7 @@ print(json.dumps(result))
       }),
     ).toBeVisible();
     // The server accepts the moved instant for the attendance review.
-    await reviewAttendance(page);
+    await waitForAttendanceReview(page);
     await expect(attendanceTile(page, "Available")).toHaveText("2");
   });
 });
@@ -1099,13 +1106,13 @@ test.describe("Recommended times", () => {
       "33% weighted",
     ]);
     await expect(recommended.locator(".ranked-chips__intro")).toHaveText(
-      `${RECOMMENDATION_RULE} Every other upcoming time overlaps this one or scores 0% weighted. No time suits even half of the weighted group; this is the closest. ${POINTER_HINT}`,
+      `${RECOMMENDATION_RULE} ${SHARES_NOTE} Every other upcoming time overlaps this one or scores 0% weighted. No time suits even half of the weighted group; this is the closest. ${POINTER_HINT}`,
     );
     // Zed's Monday window is shaded by the unweighted share only and is
     // not outlined; Amy's Tuesday window is.
     await expect(grid.locator(`[data-cell-idx="${mon9}"]`)).toHaveAttribute(
       "aria-label",
-      /Weighted 0%, unweighted 25% of 4 responses\./,
+      /Free in this slot: weighted 0%, unweighted 25% of 4 responses\./,
     );
     await expect(grid.locator(`[data-cell-idx="${mon9}"]`)).not.toHaveAttribute(
       "aria-label",
@@ -1166,7 +1173,7 @@ test.describe("Recommended times", () => {
       expected,
     );
     await expect(recommended.locator(".ranked-chips__intro")).toHaveText(
-      `${RECOMMENDATION_RULE} Showing the top 10 of 40. ${POINTER_HINT}`,
+      `${RECOMMENDATION_RULE} ${SHARES_NOTE} Showing the top 10 of 40. Other times below lists every open time. ${POINTER_HINT}`,
     );
 
     const detail = recommended.locator(".ranked-chips__detail");
@@ -1346,7 +1353,7 @@ test.describe("Meeting calendar", () => {
     const bestCell = grid.locator(`[data-cell-idx="${mon10}"]`);
     await expect(bestCell).toHaveAttribute(
       "aria-label",
-      /Weighted 100%, unweighted 100% of 2 responses\..*Inside recommended time #1\./,
+      /Free in this slot: weighted 100%, unweighted 100% of 2 responses\..*Inside recommended time #1\./,
     );
     await expect(bestCell).toHaveCSS("background-color", "rgb(158, 197, 254)");
     const recommended = recommendedTimes(page);
@@ -1410,7 +1417,7 @@ test.describe("Meeting calendar", () => {
     await expect(passed).toHaveAttribute("aria-disabled", "true");
     await expect(passed).toHaveAttribute(
       "aria-label",
-      /Weighted 100%, unweighted 100% of 1 responses\. This time has passed\.$/,
+      /Free in this slot: weighted 100%, unweighted 100% of 1 responses\. This time has passed\.$/,
     );
     await passed.click({ force: true });
     await expect(finalizeSummary).toHaveText(/No time selected yet$/);

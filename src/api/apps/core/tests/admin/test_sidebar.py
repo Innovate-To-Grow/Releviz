@@ -1,9 +1,9 @@
 from django.conf import settings
 from django.contrib import admin
 from django.test import SimpleTestCase, TestCase
-from django.urls import reverse
+from django.urls import resolve, reverse
 
-from apps.core.tests.helpers import make_superuser
+from apps.core.tests.helpers import make_admin, make_superuser
 
 
 class AdminSidebarNavigationTest(SimpleTestCase):
@@ -187,6 +187,24 @@ class AdminSidebarNavigationTest(SimpleTestCase):
             self.assertNotIn("authn.membersheetsynclog", models_str)
             self.assertNotIn("auth.group", models_str)
 
+    def test_navigation_links_and_tab_models_are_registered(self):
+        registered_models = {model._meta.label_lower for model in admin.site._registry}
+        for tab in settings.UNFOLD["TABS"]:
+            for model_label in tab.get("models", []):
+                with self.subTest(model=model_label):
+                    self.assertIn(model_label, registered_models)
+
+        for collection in (
+            settings.UNFOLD["SIDEBAR"]["navigation"],
+            settings.UNFOLD["TABS"],
+        ):
+            for section in collection:
+                for item in section["items"]:
+                    with self.subTest(link=item["link"]):
+                        match = resolve(item["link"])
+                        self.assertEqual(match.namespace, "admin")
+                        self.assertTrue(match.url_name.endswith("_changelist"))
+
     def test_no_stale_model_references_in_sidebar(self):
         """Verify no sidebar items reference deleted model admin URLs."""
         all_links = set()
@@ -262,3 +280,41 @@ class AdminIndexNavigationTest(TestCase):
                 self.assertContains(response, 'href="/admin/scheduling/event/"')
                 self.assertContains(response, 'href="/admin/scheduling/participant/"')
                 self.assertContains(response, f'href="{active_href}" class="active"')
+
+
+class AdministratorNavigationTest(TestCase):
+    def test_administrators_see_every_section_regardless_of_legacy_app_grants(self):
+        for index, grants in enumerate(([], ["core"], ["authn"])):
+            self.client.force_login(make_admin(apps=grants, email=f"admin-{index}@example.com"))
+            response = self.client.get(reverse("admin:index"))
+            self.assertEqual(response.status_code, 200)
+            for url in (
+                "/admin/scheduling/event/",
+                "/admin/mail/emailproviderconfig/",
+                "/admin/authn/member/",
+                "/admin/core/awscredentialconfig/",
+            ):
+                with self.subTest(grants=grants, url=url):
+                    self.assertContains(response, f'href="{url}"')
+                    self.assertEqual(self.client.get(url).status_code, 200)
+
+    def test_administrator_without_app_grants_sees_both_site_settings_tabs(self):
+        self.client.force_login(make_admin())
+        aws_url = reverse("admin:core_awscredentialconfig_changelist")
+        rsa_url = reverse("admin:authn_rsakeypair_changelist")
+
+        for url in (aws_url, rsa_url):
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, f'href="{rsa_url}"')
+                self.assertContains(response, f'href="{aws_url}"')
+                self.assertNotContains(response, "/admin/authn/emailauthchallenge/")
+
+    def test_superuser_sees_both_site_settings_tabs(self):
+        self.client.force_login(make_superuser())
+        response = self.client.get(reverse("admin:core_awscredentialconfig_changelist"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'href="/admin/core/awscredentialconfig/"')
+        self.assertContains(response, 'href="/admin/authn/rsakeypair/"')

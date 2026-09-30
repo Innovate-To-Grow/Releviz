@@ -142,7 +142,7 @@ class TemporaryEventSessionAdmin(AppAccessPermissionMixin, ModelAdmin):
     )
     list_filter = ("revoked_at", "expires_at")
     search_fields = (
-        "member__email",
+        "member__contact_emails__email_address",
         "participant__participant_name",
         "participant__event__code",
         "invitation__email",

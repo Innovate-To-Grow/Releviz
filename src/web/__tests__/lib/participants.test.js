@@ -22,7 +22,10 @@ import {
   phoneError,
   pickerStateFromRows,
   reminderNextAt,
+  RESPONSE_FILTER_OPTIONS,
   responseBadge,
+  responseFilterKey,
+  responseFilterParams,
   weightError,
 } from "@/lib/participants";
 
@@ -178,14 +181,128 @@ describe("badges", () => {
     });
   });
 
-  test("response badge", () => {
-    expect(responseBadge(person({ submitted: true }))).toEqual({
-      status: "submitted",
-      label: "Submitted",
+  describe("response badge", () => {
+    test.each([
+      ["submitted", { submitted: true }, "submitted", "Submitted"],
+      [
+        "an organizer-managed person",
+        { organizerManaged: true },
+        "not-submitted",
+        "Not submitted",
+      ],
+      [
+        "the organizer's own row",
+        { isOrganizer: true },
+        "not-submitted",
+        "Not submitted",
+      ],
+      [
+        "a failed delivery",
+        { invitationDelivery: "failed", invitationStatus: "sent" },
+        "danger",
+        "Invite failed",
+      ],
+      [
+        "a queued delivery",
+        { invitationDelivery: "queued", invitationStatus: "sent" },
+        "info",
+        "Sending invite…",
+      ],
+      [
+        "an accepted invitation",
+        { invitationStatus: "accepted" },
+        "draft",
+        "Started",
+      ],
+      ["a sent invitation", { invitationStatus: "sent" }, "sent", "Invited"],
+      ["no invitation yet", {}, "not-sent", "Not invited"],
+      [
+        "an unknown delivery state",
+        { invitationDelivery: undefined },
+        "not-sent",
+        "Not invited",
+      ],
+    ])("%s", (_label, overrides, status, label) => {
+      expect(responseBadge(person(overrides))).toEqual({ status, label });
     });
-    expect(responseBadge(person())).toEqual({
-      status: "not-submitted",
-      label: "Not submitted",
+
+    test("an answer beats every invitation state", () => {
+      expect(
+        responseBadge(
+          person({
+            submitted: true,
+            organizerManaged: true,
+            invitationDelivery: "failed",
+            invitationStatus: "accepted",
+          }),
+        ),
+      ).toEqual({ status: "submitted", label: "Submitted" });
+    });
+
+    test("people nobody invites ignore leftover invitation state", () => {
+      const label = { status: "not-submitted", label: "Not submitted" };
+      expect(
+        responseBadge(
+          person({
+            organizerManaged: true,
+            invitationDelivery: "failed",
+            invitationStatus: "accepted",
+          }),
+        ),
+      ).toEqual(label);
+      expect(
+        responseBadge(
+          person({
+            isOrganizer: true,
+            invitationDelivery: "queued",
+            invitationStatus: "sent",
+          }),
+        ),
+      ).toEqual(label);
+    });
+
+    test.each([
+      ["never invited", {}, "Not submitted"],
+      ["sent", { invitationStatus: "sent" }, "Invited"],
+      ["accepted", { invitationStatus: "accepted" }, "Started"],
+      ["a failed delivery", { invitationDelivery: "failed" }, "Invite failed"],
+      [
+        "a queued delivery",
+        { invitationDelivery: "queued" },
+        "Sending invite…",
+      ],
+      ["submitted", { submitted: true }, "Submitted"],
+    ])(
+      "in an open-link event, someone %s reads %s",
+      (_label, overrides, label) => {
+        expect(responseBadge(person(overrides), { openLink: true }).label).toBe(
+          label,
+        );
+      },
+    );
+
+    test("delivery beats the invitation status", () => {
+      expect(
+        responseBadge(
+          person({
+            invitationDelivery: "failed",
+            invitationStatus: "accepted",
+          }),
+        ).label,
+      ).toBe("Invite failed");
+      expect(
+        responseBadge(
+          person({
+            invitationDelivery: "queued",
+            invitationStatus: "accepted",
+          }),
+        ).label,
+      ).toBe("Sending invite…");
+      expect(
+        responseBadge(
+          person({ invitationDelivery: "sent", invitationStatus: "accepted" }),
+        ).label,
+      ).toBe("Started");
     });
   });
 });
@@ -269,21 +386,118 @@ describe("sentences", () => {
   });
 });
 
+describe("response filter", () => {
+  test("offers eight options, each a pair of API parameters", () => {
+    expect(
+      RESPONSE_FILTER_OPTIONS.map(({ key, label, params }) => [
+        key,
+        label,
+        params,
+      ]),
+    ).toEqual([
+      ["", "Any", { submitted: "", invitationStatus: "" }],
+      ["submitted", "Submitted", { submitted: "true", invitationStatus: "" }],
+      [
+        "not_submitted",
+        "Not submitted",
+        { submitted: "false", invitationStatus: "" },
+      ],
+      [
+        "not_invited",
+        "Not invited yet",
+        { submitted: "false", invitationStatus: "not_sent" },
+      ],
+      [
+        "sending",
+        "Sending invite",
+        { submitted: "", invitationStatus: "queued" },
+      ],
+      [
+        "failed",
+        "Invite failed",
+        { submitted: "", invitationStatus: "failed" },
+      ],
+      ["invited", "Invited", { submitted: "false", invitationStatus: "sent" }],
+      [
+        "started",
+        "Started",
+        { submitted: "false", invitationStatus: "accepted" },
+      ],
+    ]);
+  });
+
+  test.each(RESPONSE_FILTER_OPTIONS.map((option) => [option.key, option]))(
+    "option %j round-trips through its parameters",
+    (key, option) => {
+      expect(responseFilterParams(key)).toEqual(option.params);
+      expect(responseFilterKey(option.params)).toBe(key);
+    },
+  );
+
+  test("params are copies and an unknown key means Any", () => {
+    const params = responseFilterParams("failed");
+    params.invitationStatus = "sent";
+    expect(responseFilterParams("failed").invitationStatus).toBe("failed");
+    expect(responseFilterParams("nope")).toEqual({
+      submitted: "",
+      invitationStatus: "",
+    });
+    expect(responseFilterParams(undefined)).toEqual({
+      submitted: "",
+      invitationStatus: "",
+    });
+  });
+
+  test("sending and failed ignore submitted so the banner count and list agree", () => {
+    expect(
+      responseFilterKey({ submitted: "true", invitationStatus: "failed" }),
+    ).toBe("failed");
+    expect(
+      responseFilterKey({ submitted: "false", invitationStatus: "failed" }),
+    ).toBe("failed");
+    expect(
+      responseFilterKey({ submitted: "true", invitationStatus: "queued" }),
+    ).toBe("sending");
+    expect(responseFilterKey({ invitationStatus: "queued" })).toBe("sending");
+  });
+
+  test("an invitation state wins over submitted", () => {
+    expect(
+      responseFilterKey({ submitted: "true", invitationStatus: "not_sent" }),
+    ).toBe("not_invited");
+    expect(responseFilterKey({ invitationStatus: "sent" })).toBe("invited");
+    expect(
+      responseFilterKey({ submitted: "true", invitationStatus: "accepted" }),
+    ).toBe("started");
+  });
+
+  test("falls back to submitted, then Any", () => {
+    expect(responseFilterKey({ submitted: "true" })).toBe("submitted");
+    expect(responseFilterKey({ submitted: "false" })).toBe("not_submitted");
+    expect(responseFilterKey({ submitted: true })).toBe("submitted");
+    expect(responseFilterKey({ submitted: false })).toBe("not_submitted");
+    expect(responseFilterKey({ invitationStatus: "bogus" })).toBe("");
+    expect(responseFilterKey({ submitted: null, invitationStatus: null })).toBe(
+      "",
+    );
+    expect(responseFilterKey()).toBe("");
+  });
+});
+
 describe("filter chips", () => {
   test("lists every active filter with its label", () => {
     expect(
       filterChips({
         search: " zed ",
         group: "Design",
-        submitted: "true",
+        submitted: "",
         invitationStatus: "failed",
         included: "false",
       }),
     ).toEqual([
       { key: "search", label: "Search: zed" },
       { key: "group", label: "Group: Design" },
-      { key: "submitted", label: "Response: Submitted" },
-      { key: "invitationStatus", label: "Invitation: Failed" },
+      { key: "response", label: "Response: Invite failed" },
       { key: "included", label: "Results: Left out" },
     ]);
   });
@@ -293,15 +507,34 @@ describe("filter chips", () => {
       filterChips({
         group: UNGROUPED,
         submitted: false,
-        invitationStatus: "queued",
+        invitationStatus: "",
         included: true,
       }),
     ).toEqual([
       { key: "group", label: "Group: No group" },
-      { key: "submitted", label: "Response: Not submitted" },
-      { key: "invitationStatus", label: "Invitation: Sending" },
+      { key: "response", label: "Response: Not submitted" },
       { key: "included", label: "Results: Counted" },
     ]);
+  });
+
+  test("the response filter is one chip whatever the two parameters are", () => {
+    const chip = (params) => filterChips(params).map((item) => item.label);
+    expect(chip({ submitted: "true" })).toEqual(["Response: Submitted"]);
+    expect(chip({ submitted: "false", invitationStatus: "not_sent" })).toEqual([
+      "Response: Not invited yet",
+    ]);
+    expect(chip({ invitationStatus: "queued" })).toEqual([
+      "Response: Sending invite",
+    ]);
+    expect(chip({ submitted: "false", invitationStatus: "sent" })).toEqual([
+      "Response: Invited",
+    ]);
+    expect(chip({ submitted: "false", invitationStatus: "accepted" })).toEqual([
+      "Response: Started",
+    ]);
+    expect(
+      filterChips({ submitted: "true", invitationStatus: "failed" }),
+    ).toHaveLength(1);
   });
 
   test("ignores blank, unknown and null values", () => {

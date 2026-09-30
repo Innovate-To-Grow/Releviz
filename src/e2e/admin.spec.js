@@ -39,7 +39,9 @@ const STAFF_PASSWORD = "Admin-E2E-Pass-2468!";
 
 // Creates members (with a verified primary email unless `verified: false`)
 // and returns { email: memberId }. `password: null` leaves the account
-// without a usable password, like one made by an email code.
+// without a usable password, like one made by an email code. `staff` makes
+// an administrator (the model keeps Django's superuser flag in step with it);
+// `apps` writes the legacy per-app grants, which no longer restrict anyone.
 function seedMembers(members) {
   return runDjangoJson(
     `
@@ -51,7 +53,6 @@ for spec in data["members"]:
         first_name=spec["first"],
         last_name=spec["last"],
         is_staff=spec.get("staff", False),
-        is_superuser=spec.get("superuser", False),
         is_active=spec.get("active", True),
         admin_apps=spec.get("apps", []),
     )
@@ -88,6 +89,7 @@ print(json.dumps({
     "last_name": member.last_name,
     "is_active": member.is_active,
     "is_staff": member.is_staff,
+    "is_superuser": member.is_superuser,
     "admin_apps": member.admin_apps,
 }))
 `,
@@ -721,7 +723,7 @@ print(json.dumps([
     }
   });
 
-  test("impersonation refuses staff and superuser accounts, and unknown, empty or expired tokens", async ({
+  test("impersonation refuses administrator accounts, and unknown, empty or expired tokens", async ({
     page,
     request,
   }) => {
@@ -745,7 +747,7 @@ print(json.dumps([
       );
       expect(refused.status()).toBe(403);
       await expect(
-        page.getByText("Staff and superuser accounts cannot be impersonated."),
+        page.getByText("Administrator accounts cannot be impersonated."),
       ).toBeVisible();
     }
 
@@ -1650,19 +1652,21 @@ async function adminStatus(page, path) {
   return response.status();
 }
 
-test.describe("Admin per-app access", () => {
-  test("a staff member granted only the member app manages members but cannot widen staff access or open other apps", async ({
+test.describe("Admin administrator role", () => {
+  test("an administrator reaches every app whatever its legacy app grants, and a member's page offers one Administrator toggle", async ({
     page,
   }) => {
+    // Every active staff member is an administrator with access to every
+    // app; the old per-app grants are kept on the row but restrict nothing.
     const runId = newRunId();
-    const adminEmail = `authn-admin-${runId}@example.com`;
-    const targetEmail = `authn-target-${runId}@example.com`;
-    const staffEmail = `authn-staff-${runId}@example.com`;
+    const adminEmail = `role-admin-${runId}@example.com`;
+    const targetEmail = `role-target-${runId}@example.com`;
+    const staffEmail = `role-staff-${runId}@example.com`;
     const ids = seedMembers([
       {
         email: adminEmail,
         first: "Ada",
-        last: "Authn",
+        last: "Admin",
         staff: true,
         apps: ["authn"],
         password: STAFF_PASSWORD,
@@ -1675,20 +1679,29 @@ test.describe("Admin per-app access", () => {
       password: STAFF_PASSWORD,
     });
 
-    await expect(
-      sidebarSection(page, "Members & Authentication"),
-    ).toBeVisible();
-    await expect(sidebarSection(page, "Scheduling")).toHaveCount(0);
-    await expect(sidebarSection(page, "Email Delivery")).toHaveCount(0);
+    for (const section of [
+      "Members & Authentication",
+      "Scheduling",
+      "Email Delivery",
+      "Site Settings",
+    ]) {
+      await expect(sidebarSection(page, section), section).toBeVisible();
+    }
+    // The scheduling and mail admins subclass Unfold's ModelAdmin directly,
+    // so the role must reach them as well as BaseModelAdmin.
+    const opened = page.waitForResponse(
+      `${BACKEND_URL}/admin/scheduling/event/`,
+    );
+    await page
+      .locator("#nav-sidebar-apps")
+      .getByRole("link", { name: "Events" })
+      .click();
+    expect((await opened).status()).toBe(200);
     for (const path of [
       "/admin/scheduling/event/",
       "/admin/mail/emailproviderconfig/",
       "/admin/core/awscredentialconfig/",
       "/admin/core/backgroundjob/",
-    ]) {
-      expect(await adminStatus(page, path), path).toBe(403);
-    }
-    for (const path of [
       "/admin/authn/member/",
       "/admin/authn/member/import-excel/",
       "/admin/authn/admininvitation/",
@@ -1700,16 +1713,21 @@ test.describe("Admin per-app access", () => {
     );
     expect(templateResponse.status()).toBe(200);
 
-    // Staff status and app grants are read-only for a non-superuser, and a
-    // forged value is dropped on save.
+    // The role is the one Administrator checkbox; the superuser flag and the
+    // app grants are not on the form, and forged values for them are
+    // dropped on save.
     const changeUrl = `${BACKEND_URL}/admin/authn/member/${ids[targetEmail]}/change/`;
     await page.goto(changeUrl);
     await expect(page.locator("#id_first_name")).toBeVisible();
-    await expect(page.locator('[name="is_staff"]')).toHaveCount(0);
+    await expect(page.locator('[name="is_staff"]')).toHaveCount(1);
+    await expect(
+      page.getByLabel("Administrator", { exact: true }),
+    ).not.toBeChecked();
+    await expect(page.locator('[name="is_superuser"]')).toHaveCount(0);
     await expect(page.locator('[name="admin_apps"]')).toHaveCount(0);
     await page.locator("#id_first_name").evaluate((input) => {
       for (const [name, value] of [
-        ["is_staff", "on"],
+        ["is_superuser", "on"],
         ["admin_apps", "authn"],
         ["admin_apps", "core"],
       ]) {
@@ -1731,10 +1749,12 @@ test.describe("Admin per-app access", () => {
     expect(memberState(targetEmail)).toMatchObject({
       first_name: "Marisol",
       is_staff: false,
+      is_superuser: false,
       admin_apps: [],
     });
 
-    // Member support tools stay limited to non-staff accounts.
+    // Member support tools stay limited to accounts that are not
+    // administrators.
     await page.goto(changeUrl);
     await expect(
       page.getByTitle("Login as this member on the frontend"),
@@ -1750,6 +1770,9 @@ test.describe("Admin per-app access", () => {
         `/admin/authn/member/${ids[staffEmail]}/impersonate/`,
       ),
     ).toBe(403);
+    await expect(
+      page.getByText("Administrator accounts cannot be impersonated."),
+    ).toBeVisible();
 
     // Setting a regular member's password is part of member support.
     expect(
@@ -1760,66 +1783,20 @@ test.describe("Admin per-app access", () => {
     ).toBe(200);
   });
 
-  test("a non-superuser member admin cannot set a superuser's password", async ({
+  test("an administrator who loses the role is sent back to sign in from the member admin, its tools and impersonation", async ({
     page,
   }) => {
-    // Setting the password would take over the superuser account that
-    // impersonation deliberately refuses.
+    // The custom member URLs sit behind the admin site's own check, so a
+    // session that is no longer an administrator's reaches none of them.
     const runId = newRunId();
-    const adminEmail = `password-admin-${runId}@example.com`;
-    const masterEmail = `password-master-${runId}@example.com`;
-    const ids = seedMembers([
-      {
-        email: adminEmail,
-        first: "Pax",
-        last: "Admin",
-        staff: true,
-        apps: ["authn"],
-        password: STAFF_PASSWORD,
-      },
-      {
-        email: masterEmail,
-        first: "Mae",
-        last: "Master",
-        staff: true,
-        superuser: true,
-        password: STAFF_PASSWORD,
-      },
-    ]);
-    try {
-      await adminPasswordLogin(page, {
-        email: adminEmail,
-        password: STAFF_PASSWORD,
-      });
-      expect(
-        await adminStatus(
-          page,
-          `/admin/authn/member/${ids[masterEmail]}/password/`,
-        ),
-      ).toBe(403);
-    } finally {
-      // Never leave a usable superuser behind.
-      updateMember(masterEmail, {
-        is_superuser: false,
-        is_staff: false,
-        is_active: false,
-      });
-    }
-  });
-
-  test("a staff member without the member app is refused the member admin, its tools and impersonation", async ({
-    page,
-  }) => {
-    const runId = newRunId();
-    const adminEmail = `core-admin-${runId}@example.com`;
-    const targetEmail = `core-target-${runId}@example.com`;
+    const adminEmail = `former-admin-${runId}@example.com`;
+    const targetEmail = `former-target-${runId}@example.com`;
     const ids = seedMembers([
       {
         email: adminEmail,
         first: "Cole",
-        last: "Core",
+        last: "Former",
         staff: true,
-        apps: ["core"],
         password: STAFF_PASSWORD,
       },
       { email: targetEmail, first: "Tess", last: "Target" },
@@ -1828,95 +1805,39 @@ test.describe("Admin per-app access", () => {
       email: adminEmail,
       password: STAFF_PASSWORD,
     });
-    await expect(sidebarSection(page, "Site Settings")).toBeVisible();
-    await expect(sidebarSection(page, "Members & Authentication")).toHaveCount(
-      0,
-    );
-    expect(await adminStatus(page, "/admin/core/awscredentialconfig/")).toBe(
-      200,
-    );
+    expect(await adminStatus(page, "/admin/authn/member/")).toBe(200);
 
-    // The custom member URLs re-check the app grant themselves.
-    for (const [path, reason] of [
-      ["/admin/authn/member/", null],
-      [`/admin/authn/member/${ids[targetEmail]}/change/`, null],
-      [`/admin/authn/member/${ids[targetEmail]}/password/`, null],
-      [
-        "/admin/authn/member/import-excel/",
-        "You do not have permission to import members.",
-      ],
-      [
-        "/admin/authn/member/export-excel/",
-        "You do not have permission to export members.",
-      ],
-      [
-        "/admin/authn/member/import-template/",
-        "You do not have permission to access member tooling.",
-      ],
-      [
-        `/admin/authn/member/${ids[targetEmail]}/impersonate/`,
-        "You do not have permission to impersonate members.",
-      ],
-      [
-        "/admin/authn/member/confirm-change/",
-        "You do not have permission to view users.",
-      ],
-      [
-        "/admin/authn/member/confirm-action/",
-        "You do not have permission to view users.",
-      ],
+    updateMember(adminEmail, { is_staff: false });
+    for (const path of [
+      "/admin/authn/member/",
+      `/admin/authn/member/${ids[targetEmail]}/change/`,
+      `/admin/authn/member/${ids[targetEmail]}/password/`,
+      "/admin/authn/member/import-excel/",
+      "/admin/authn/member/export-excel/",
+      "/admin/authn/member/import-template/",
+      `/admin/authn/member/${ids[targetEmail]}/impersonate/`,
+      "/admin/authn/member/confirm-change/",
+      "/admin/authn/member/confirm-action/",
+      "/admin/core/awscredentialconfig/",
     ]) {
-      expect(await adminStatus(page, path), path).toBe(403);
-      await expect(
-        page.getByRole("heading", { name: "Permission denied" }),
-      ).toBeVisible();
-      if (reason) await expect(page.getByText(reason)).toBeVisible();
+      await page.goto(`${BACKEND_URL}${path}`);
+      await expect(page, path).toHaveURL(
+        new RegExp(
+          `/admin/login/\\?next=${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+        ),
+      );
     }
+    expect(memberState(adminEmail)).toMatchObject({
+      is_staff: false,
+      is_superuser: false,
+    });
   });
 
-  test("a staff member granted the scheduling and mail apps can open their admin pages", async ({
+  test("an administrator can make a member an administrator through the member import", async ({
     page,
   }) => {
-    // The scheduling and mail admins subclass Unfold's ModelAdmin directly,
-    // so the admin_apps grant must reach them as well as BaseModelAdmin.
-    const runId = newRunId();
-    const email = `scheduling-admin-${runId}@example.com`;
-    seedMembers([
-      {
-        email,
-        first: "Sid",
-        last: "Scheduling",
-        staff: true,
-        apps: ["scheduling", "mail"],
-        password: STAFF_PASSWORD,
-      },
-    ]);
-    await adminPasswordLogin(page, { email, password: STAFF_PASSWORD });
-    await expect(sidebarSection(page, "Scheduling")).toBeVisible();
-    await expect(sidebarSection(page, "Email Delivery")).toBeVisible();
-    await expect(sidebarSection(page, "Members & Authentication")).toHaveCount(
-      0,
-    );
-
-    const opened = page.waitForResponse(
-      `${BACKEND_URL}/admin/scheduling/event/`,
-    );
-    await page
-      .locator("#nav-sidebar-apps")
-      .getByRole("link", { name: "Events" })
-      .click();
-    expect((await opened).status()).toBe(200);
-    expect(await adminStatus(page, "/admin/mail/emailproviderconfig/")).toBe(
-      200,
-    );
-    expect(await adminStatus(page, "/admin/authn/member/")).toBe(403);
-  });
-
-  test("a non-superuser member admin cannot grant staff status through the member import", async ({
-    page,
-  }) => {
-    // Staff status is read-only for a non-superuser everywhere, so the
-    // import's "Staff" column is ignored for them.
+    // The import's Staff column is the same Administrator role the member
+    // page offers every administrator, superuser flag included.
     const runId = newRunId();
     const adminEmail = `import-admin-${runId}@example.com`;
     const targetEmail = `import-target-${runId}@example.com`;
@@ -1926,34 +1847,41 @@ test.describe("Admin per-app access", () => {
         first: "Ivo",
         last: "Importer",
         staff: true,
-        apps: ["authn"],
         password: STAFF_PASSWORD,
       },
       { email: targetEmail, first: "Tomas", last: "Target" },
     ]);
-    await adminPasswordLogin(page, {
-      email: adminEmail,
-      password: STAFF_PASSWORD,
-    });
-    await page.goto(`${BACKEND_URL}/admin/authn/member/import-excel/`);
-    await startMemberImport(
-      page,
-      memberImportWorkbook(
-        [["Tomas", "Target", targetEmail, "TRUE", "TRUE"]],
-        [
-          "First Name",
-          "Last Name",
-          "Primary Email",
-          "Primary Verified",
-          "Staff",
-        ],
-      ),
-      { updateExisting: true },
-    );
-    await expect(
-      page.getByRole("heading", { name: "Import Results" }),
-    ).toBeVisible();
-    expect(memberState(targetEmail).is_staff).toBe(false);
+    try {
+      await adminPasswordLogin(page, {
+        email: adminEmail,
+        password: STAFF_PASSWORD,
+      });
+      await page.goto(`${BACKEND_URL}/admin/authn/member/import-excel/`);
+      await startMemberImport(
+        page,
+        memberImportWorkbook(
+          [["Tomas", "Target", targetEmail, "TRUE", "TRUE"]],
+          [
+            "First Name",
+            "Last Name",
+            "Primary Email",
+            "Primary Verified",
+            "Staff",
+          ],
+        ),
+        { updateExisting: true },
+      );
+      await expect(
+        page.getByRole("heading", { name: "Import Results" }),
+      ).toBeVisible();
+      expect(memberState(targetEmail)).toMatchObject({
+        is_staff: true,
+        is_superuser: true,
+      });
+    } finally {
+      // Never leave an extra administrator behind.
+      updateMember(targetEmail, { is_staff: false });
+    }
   });
 });
 

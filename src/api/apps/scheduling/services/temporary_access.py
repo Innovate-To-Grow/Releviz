@@ -1,4 +1,4 @@
-"""Event-scoped temporary access: codes, sessions, and cookies."""
+"""Event-scoped temporary access: the private invitation link, sessions, and cookies."""
 
 from __future__ import annotations
 
@@ -13,18 +13,9 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from apps.authn.models import EmailAuthChallenge
 from apps.authn.security import client_ip, request_user_agent, security_log_key
-from apps.authn.services import (
-    AuthChallengeInvalid,
-    issue_email_challenge,
-    verify_email_challenge,
-)
 from apps.scheduling.models import EventInvitation, Participant, TemporaryEventSession
-from apps.scheduling.services.invitations.status import (
-    mark_invitation_for_member,
-    mark_invitation_opened,
-)
+from apps.scheduling.services.invitations.status import mark_invitation_opened
 
 security_logger = logging.getLogger("releviz.security")
 
@@ -35,8 +26,16 @@ class TemporarySessionCredential:
     cookie_value: str
 
 
-def invitation_challenge_scope(invitation: EventInvitation) -> str:
-    return f"temp-event:{invitation.event_id}:invitation:{invitation.pk}"
+@dataclass(frozen=True)
+class TemporaryAccessOpening:
+    """What an opened invitation link leads to.
+
+    ``credential`` is None when the request's own cookie already carried a live
+    session for this invitation: the browser keeps the cookie it has.
+    """
+
+    session: TemporaryEventSession
+    credential: TemporarySessionCredential | None
 
 
 def temporary_access_rate_identity(event_code: str, access_token) -> str:
@@ -79,74 +78,32 @@ def _invitation_and_participant(*, event_code: str, access_token):
     return invitation, participant
 
 
-def request_temporary_access_code(*, event_code: str, access_token) -> bool:
-    invitation, _participant = _invitation_and_participant(
-        event_code=event_code,
-        access_token=access_token,
-    )
-    if invitation is None:
-        security_logger.info(
-            "temporary_access_code_request_ignored",
-            extra={"event_key": security_log_key(event_code)},
-        )
-        return False
-
-    mark_invitation_opened(
-        event_code=event_code,
-        access_token=invitation.access_token,
-    )
-    issue_email_challenge(
-        member=invitation.member,
-        purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
-        target_email=invitation.email,
-        scope_key=invitation_challenge_scope(invitation),
-    )
-    security_logger.info(
-        "temporary_access_code_requested",
-        extra={
-            "event_id": str(invitation.event_id),
-            "invitation_id": str(invitation.pk),
-            "member_id": str(invitation.member_id),
-        },
-    )
-    return True
-
-
 @transaction.atomic
-def verify_temporary_access_code(
-    *,
-    event_code: str,
-    access_token,
-    code: str,
-    request,
-) -> TemporarySessionCredential | None:
+def open_temporary_access(
+    *, event_code: str, access_token, request
+) -> TemporaryAccessOpening | None:
+    """Turn a private invitation link into an event-scoped session.
+
+    The link is the credential, so no live temporary invitation means None and
+    nothing about why. Opening only records that the link was opened: the
+    invitation becomes accepted and joined through the person's own saves.
+    """
+
     invitation, participant = _invitation_and_participant(
         event_code=event_code,
         access_token=access_token,
     )
     if invitation is None:
         return None
-    try:
-        challenge = verify_email_challenge(
-            email=invitation.email,
-            code=code,
-            purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
-            scope_key=invitation_challenge_scope(invitation),
-        )
-    except AuthChallengeInvalid:
-        # Returning keeps the counted attempt (or the expiry) this transaction
-        # holds; raising would roll it back and lift the per-code attempt limit.
-        return None
-    if challenge.member_id != invitation.member_id:
-        security_logger.warning(
-            "temporary_access_challenge_scope_mismatch",
-            extra={
-                "event_id": str(invitation.event_id),
-                "invitation_id": str(invitation.pk),
-            },
-        )
-        return None
 
+    existing = temporary_session_from_request(request, event_code=invitation.event.code)
+    if existing is not None and existing.invitation_id == invitation.pk:
+        return TemporaryAccessOpening(session=existing, credential=None)
+
+    mark_invitation_opened(
+        event_code=invitation.event.code,
+        access_token=invitation.access_token,
+    )
     raw_secret = secrets.token_urlsafe(32)
     session = TemporaryEventSession.objects.create(
         member=invitation.member,
@@ -157,7 +114,6 @@ def verify_temporary_access_code(
         ip_address=client_ip(request),
         user_agent=request_user_agent(request),
     )
-    mark_invitation_for_member(event=invitation.event, member=invitation.member)
     security_logger.info(
         "temporary_event_session_issued",
         extra={
@@ -167,9 +123,12 @@ def verify_temporary_access_code(
             "temporary_session_id": str(session.pk),
         },
     )
-    return TemporarySessionCredential(
+    return TemporaryAccessOpening(
         session=session,
-        cookie_value=f"{session.pk}.{raw_secret}",
+        credential=TemporarySessionCredential(
+            session=session,
+            cookie_value=f"{session.pk}.{raw_secret}",
+        ),
     )
 
 

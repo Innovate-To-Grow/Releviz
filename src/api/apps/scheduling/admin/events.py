@@ -51,7 +51,7 @@ class EventDuplicationRequestAdmin(AppAccessPermissionMixin, ModelAdmin):
     search_fields = (
         "source_event__code",
         "duplicate_event__code",
-        "requested_by__email",
+        "requested_by__contact_emails__email_address",
         "idempotency_key",
     )
     readonly_fields = (
@@ -69,7 +69,12 @@ class EventDuplicationRequestAdmin(AppAccessPermissionMixin, ModelAdmin):
 @admin.register(EventDeletionRecord)
 class EventDeletionRecordAdmin(AppAccessPermissionMixin, ModelAdmin):
     list_display = ("code", "organizer", "deleted_version", "created_at")
-    search_fields = ("code", "event_id", "organizer__email", "idempotency_key")
+    search_fields = (
+        "code",
+        "event_id",
+        "organizer__contact_emails__email_address",
+        "idempotency_key",
+    )
     readonly_fields = (
         "event_id",
         "code",

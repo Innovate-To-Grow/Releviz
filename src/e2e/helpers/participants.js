@@ -67,9 +67,10 @@ function emailField(dialog, term) {
 // the envelope, the HTML part in a sandboxed frame (no scripts, inert
 // links), and the plain-text part, both with a stand-in for that person's
 // private link. `expected` lists the summary lines, the envelope, the
-// rendered email's heading and call-to-action link, and text in the
-// plain-text part. Nothing has been sent at this point. Returns the envelope
-// as shown, to compare with the email that is delivered later.
+// rendered email's heading, call-to-action link, and any notice under it,
+// and text in the plain-text part. Nothing has been sent at this point.
+// Returns the envelope as shown, to compare with the email that is delivered
+// later.
 async function reviewEmail(dialog, expected) {
   await expect(dialog.getByText("Step 1 of 2: Review")).toBeVisible();
   await expect(
@@ -98,6 +99,9 @@ async function reviewEmail(dialog, expected) {
       exact: true,
     });
     await expect(link).toHaveAttribute("href", expected.link.href);
+  }
+  if (expected.notice) {
+    await expect(rendered.getByText(expected.notice)).toBeVisible();
   }
   await dialog.getByRole("tab", { name: "Plain text" }).click();
   const plainText = dialog.locator(".email-preview__text");

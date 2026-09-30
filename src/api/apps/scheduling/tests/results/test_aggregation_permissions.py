@@ -10,14 +10,12 @@ from apps.scheduling.permissions import (
     canonical_view_permission,
     participant_for_user,
     visible_participants_for_user,
-    weight_for_participant,
 )
 from apps.scheduling.services.results.aggregation import (
     build_event_results,
     parse_availability,
     participant_availability,
     participant_has_valid_submission,
-    participant_is_excluded,
     result_channels,
 )
 from apps.scheduling.services.results.snapshots import recompute_event_results
@@ -285,7 +283,7 @@ class AggregationDomainTests(TestCase):
             availability_virtual=[1] * 7,
             submitted=True,
         )
-        weight = Weight.objects.create(
+        Weight.objects.create(
             event=virtual_event,
             participant=participant,
             weight=0,
@@ -298,7 +296,6 @@ class AggregationDomainTests(TestCase):
             {"participantTotal": 0, "totalWeight": 0.0},
         )
         self.assertTrue(participant_has_valid_submission(participant, virtual_event))
-        self.assertFalse(participant_is_excluded(participant, weight))
 
         participant.submitted = False
         self.assertFalse(participant_has_valid_submission(participant, virtual_event))
@@ -306,13 +303,6 @@ class AggregationDomainTests(TestCase):
         participant.availability_virtual = "[1]"
         self.assertIsNone(participant_availability(participant, virtual_event))
         self.assertFalse(participant_has_valid_submission(participant, virtual_event))
-
-        participant.hidden = True
-        self.assertTrue(participant_is_excluded(participant, weight))
-        participant.hidden = False
-        weight.included = False
-        self.assertTrue(participant_is_excluded(participant, weight))
-        self.assertFalse(participant_is_excluded(participant))
 
         empty_results = build_event_results(inperson_event)
         self.assertEqual(empty_results["countedResponseTotal"], 0)
@@ -382,13 +372,6 @@ class SchedulingPermissionTests(TestCase):
         first_participant = participant_for_user(self.event, self.first)
         self.assertEqual(first_participant, self.participants[self.first.pk])
         self.assertIsNone(participant_for_user(self.event, self.unrelated))
-        self.assertIsNone(weight_for_participant(self.event, first_participant))
-        self.assertIsNotNone(
-            weight_for_participant(
-                self.event,
-                self.participants[self.excluded_member.pk],
-            )
-        )
 
         organizer_visible = visible_participants_for_user(self.event, self.organizer)
         self.assertNotIn(self.hidden_member.pk, self.ids(organizer_visible))

@@ -8,7 +8,6 @@ const {
   finalizeViaApi,
   freshResults,
   latestEmailFor,
-  latestVerificationCode,
   newAccountContext,
   newRunId,
   ownResponse,
@@ -30,8 +29,8 @@ const {
   chooseRecommendedTime,
   detailItem,
   joinEventInBrowser,
-  reviewAttendance,
   updateRoutePattern,
+  waitForAttendanceReview,
   waitForAutosave,
   wakeLiveSync,
 } = require("./helpers/workspace");
@@ -45,7 +44,7 @@ const {
   submitOnBehalf,
   waitForInvitationStatus,
 } = require("./helpers/participants");
-const { DAY_MS, icsUtc, isoDate } = require("./helpers/time");
+const { DAY_MS, dateListText, icsUtc, isoDate } = require("./helpers/time");
 
 // The participant side of an event: the Join page and its refusals, the
 // join API's limits, the schedule editor (brushes, input methods, channels,
@@ -186,7 +185,8 @@ test.describe("Joining an event", () => {
       ["Meeting type", "Virtual"],
       ["Availability window", "10:00 PM - 2:00 AM (next day)"],
       ["Availability interval", "30 minutes"],
-      ["Response days", `${firstDate}, ${secondDate}`],
+      // Consecutive dates read as one run ("Oct 20–21, 2026").
+      ["Response days", dateListText([firstDate, secondDate])],
       ["Timezone", "America/New_York"],
       ["Location", "N/A"],
       ["Event code", event.code],
@@ -688,7 +688,7 @@ test.describe("Participant schedule editor", () => {
     recomputeEventResults(event.code);
     await page.goto(`/event?code=${event.code}`);
     await chooseRecommendedTime(page, 0);
-    await reviewAttendance(page);
+    await waitForAttendanceReview(page);
     await expect(attendanceTile(page, "Partial")).toHaveText("1");
     await expect(attendanceTile(page, "Available")).toHaveText("0");
     await expect(attendanceTile(page, "Unavailable")).toHaveText("0");
@@ -1713,7 +1713,7 @@ async function setIncluded(request, code, token, email, included) {
 }
 
 test.describe("Who may change a response", () => {
-  test("a participant cannot rename, regroup or reorder themselves, touch another row or their email, or save without a version; an excluded one cannot save", async ({
+  test("a participant cannot rename, regroup or reorder themselves, touch another row or their email, or save without a version; one left out of the results still saves, one removed from the event cannot", async ({
     browser,
     request,
   }) => {
@@ -1833,36 +1833,34 @@ test.describe("Who may change a response", () => {
       availabilityInperson: mine.availabilityInperson,
     });
 
-    // The organizer leaves Pat out of the results: a paint fails to save
-    // and says why, and the API refuses it too.
+    // The organizer leaves Pat out of the results. That changes only the
+    // results: a paint still saves, and so does a direct write.
     await setIncluded(request, code, token, email, false);
     const grid = ppage.getByRole("grid", { name: "Availability" });
-    const refusedSave = ppage.waitForResponse(
-      (response) =>
-        isParticipantUpdate(response.request()) && response.status() === 403,
+    // Leaving Pat out moved the row's version on, so the open page would
+    // save into a conflict; a reload picks up the new version first.
+    await ppage.reload();
+    await expect(grid.locator('[data-cell-idx="0"]')).toBeVisible();
+    await expect(grid).not.toHaveAttribute("aria-readonly");
+    const leftOutSave = ppage.waitForResponse((response) =>
+      isParticipantUpdate(response.request()),
     );
     await grid.locator('[data-cell-idx="0"]').click();
-    const excluded = await refusedSave;
-    expect(await excluded.json()).toEqual({
-      error: "Excluded participants cannot change availability",
-      errorCode: "participant_excluded",
-    });
-    const failure = ppage.getByRole("alert").filter({
-      hasText: "Excluded participants cannot change availability",
-    });
-    await expect(failure).toBeVisible();
+    expect((await leftOutSave).status()).toBe(200);
     await expect(
-      failure.getByRole("button", { name: "Retry save" }),
-    ).toBeVisible();
+      ppage.getByRole("alert").filter({
+        hasText: "Excluded participants cannot change availability",
+      }),
+    ).toHaveCount(0);
     const current = await ownResponse(request, participant.token, code);
     const direct = await put(mine.id, {
       availabilityInperson: schedule,
       expectedVersion: current.version,
     });
-    expect(direct.response.status()).toBe(403);
-    expect(direct.payload.errorCode).toBe("participant_excluded");
+    expect(direct.response.status(), JSON.stringify(direct.payload)).toBe(200);
 
-    // Counting only a group Pat is not in leaves Pat out in the same way.
+    // Counting only a group Pat is not in leaves Pat out in the same way,
+    // and Pat's answers still save.
     await setIncluded(request, code, token, email, true);
     expect((await rosterEntry(request, code, token, email)).included).toBe(
       true,
@@ -1895,19 +1893,43 @@ test.describe("Who may change a response", () => {
       false,
     );
     const leftOut = await ownResponse(request, participant.token, code);
+    const allBusy = Array(schedule.length).fill(0);
     const countOnlyWrite = await put(mine.id, {
-      availabilityInperson: schedule,
+      availabilityInperson: allBusy,
       expectedVersion: leftOut.version,
     });
-    expect(countOnlyWrite.response.status()).toBe(403);
-    expect(countOnlyWrite.payload).toEqual({
+    expect(
+      countOnlyWrite.response.status(),
+      JSON.stringify(countOnlyWrite.payload),
+    ).toBe(200);
+    expect(
+      (await ownResponse(request, participant.token, code))
+        .availabilityInperson,
+    ).toEqual(allBusy);
+
+    // Only removing Pat from the event (a hidden row) locks the response.
+    const hidden = await apiJson(
+      request,
+      "DELETE",
+      `/events/participants/update?code=${code}&participantId=${mine.id}`,
+      token,
+    );
+    expect(hidden.response.status()).toBe(200);
+    const removed = await ownResponse(request, participant.token, code);
+    expect(removed.hidden).toBe(1);
+    const removedWrite = await put(mine.id, {
+      availabilityInperson: schedule,
+      expectedVersion: removed.version,
+    });
+    expect(removedWrite.response.status()).toBe(403);
+    expect(removedWrite.payload).toEqual({
       error: "Excluded participants cannot change availability",
       errorCode: "participant_excluded",
     });
     expect(
       (await ownResponse(request, participant.token, code))
         .availabilityInperson,
-    ).toEqual(mine.availabilityInperson);
+    ).toEqual(allBusy);
     await participant.context.close();
   });
 
@@ -2096,8 +2118,8 @@ Participant.objects.filter(event__code=data["code"], member_id=data["member"]).u
 });
 
 // Adds and invites a new address (a temporary identity), then opens the
-// emailed link in a fresh context and verifies the emailed code. Returns the
-// temporary page, its context and the address.
+// emailed link in a fresh context; the link alone opens the schedule.
+// Returns the temporary page and its context.
 async function openTemporaryAccess(
   browser,
   request,
@@ -2119,18 +2141,7 @@ async function openTemporaryAccess(
   );
   const context = await browser.newContext();
   const page = await context.newPage();
-  const codeRequestedAt = Date.now() - 1000;
   await page.goto(temporaryAccessPathFromEmail(invitation));
-  await expect(
-    page.getByRole("heading", { name: "Check your email" }),
-  ).toBeVisible();
-  const accessCode = await latestVerificationCode(
-    email,
-    codeRequestedAt,
-    "temp_event_access",
-  );
-  await page.getByLabel("Verification code").fill(accessCode);
-  await page.getByRole("button", { name: "Verify and open schedule" }).click();
   await expect(page.getByRole("heading", { name: event.name })).toBeVisible();
   await expect(page.getByText(`You are responding as ${name}`)).toBeVisible();
   return { context, page };
@@ -2184,7 +2195,7 @@ async function expectTempLocked(tpage, message) {
 }
 
 test.describe("Temporary access editor", () => {
-  test("honours organizer blocks and the deadline, and the temp endpoint guards the email, the version and exclusion", async ({
+  test("honours organizer blocks and the deadline, and the temp endpoint guards the email, the version and removal while a left-out person still saves", async ({
     browser,
     request,
   }) => {
@@ -2301,11 +2312,42 @@ test.describe("Temporary access editor", () => {
       expect(refused.payload, what).toEqual({ error, errorCode });
     }
 
-    // Left out of the results, the page locks with the server's reason.
+    // Left out of the results, the page still saves: inclusion only changes
+    // the results.
     await setIncluded(request, code, token, email, false);
-    await tpage
-      .getByRole("group", { name: "Availability status" })
-      .getByRole("button", { name: "Busy", exact: true })
+    // Leaving the invitee out moved the row's version on, so the open page
+    // would save into a conflict; a reload picks up the new version first.
+    await tpage.reload();
+    await expect(grid.locator(`[data-cell-idx="${mon930}"]`)).toBeVisible();
+    await expect(grid).not.toHaveAttribute("aria-readonly");
+    const status = tpage.getByRole("group", { name: "Availability status" });
+    await status.getByRole("button", { name: "Busy", exact: true }).click();
+    const leftOutSave = tpage.waitForResponse((response) =>
+      isTempAccessSave(response.request()),
+    );
+    await grid.locator(`[data-cell-idx="${mon930}"]`).click();
+    expect((await leftOutSave).status()).toBe(200);
+    await expect(grid).not.toHaveAttribute("aria-readonly");
+    await expect(grid.locator(`[data-cell-idx="${mon930}"]`)).toHaveAttribute(
+      "data-availability",
+      "busy",
+    );
+    await expect(
+      tpage.getByText("Draft saved. Submit when you are ready."),
+    ).toBeVisible();
+    await setIncluded(request, code, token, email, true);
+
+    // Removed from the event (a hidden row), the page locks with the
+    // server's reason.
+    const hidden = await apiJson(
+      request,
+      "DELETE",
+      `/events/participants/update?code=${code}&participantId=${participant.id}`,
+      token,
+    );
+    expect(hidden.response.status()).toBe(200);
+    await status
+      .getByRole("button", { name: "Available", exact: true })
       .click();
     const refusedSave = tpage.waitForResponse((response) =>
       isTempAccessSave(response.request()),
@@ -2319,7 +2361,7 @@ test.describe("Temporary access editor", () => {
     // The local paint is replaced by the saved response.
     await expect(grid.locator(`[data-cell-idx="${mon930}"]`)).toHaveAttribute(
       "data-availability",
-      "free",
+      "busy",
     );
     const excluded = await tempAccessPut(tpage, code, {
       availabilityInperson: expected,
@@ -2331,9 +2373,15 @@ test.describe("Temporary access editor", () => {
       errorCode: "participant_excluded",
     });
 
-    // Included again, a reload unlocks the page. Its clock is controlled
+    // Back on the event, a reload unlocks the page. Its clock is controlled
     // from that load on, so the deadline timer can be run forward.
-    await setIncluded(request, code, token, email, true);
+    const restored = await apiJson(
+      request,
+      "PUT",
+      `/events/participants/update/unhide?code=${code}&participantId=${participant.id}`,
+      token,
+    );
+    expect(restored.response.status()).toBe(200);
     await tpage.clock.install();
     await tpage.reload();
     await expect(grid).not.toHaveAttribute("aria-readonly");

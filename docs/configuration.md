@@ -73,6 +73,30 @@ from the ALB. Django admin is at `https://api.releviz.com/admin/`, not on the fr
 short-lived in-memory JWT access tokens, an `HttpOnly` refresh cookie tied to a revocable server
 session, optional browser-side password encryption, account recovery, and session management.
 
+**Administrators.** There is one administrator role. Enable **Administrator** on a member to grant
+access to every backend admin module and permission to manage other administrators. Existing staff
+and superuser accounts are migrated into this same role; legacy **Admin apps** selections no longer
+limit access. Disabling **Administrator** removes both admin entry and Django's full-permission flag.
+Inactive accounts cannot access the admin, and audit records retain their read-only restrictions.
+Full and temporary account access, and event organizer/participant roles, remain separate.
+
+Email-code requests allow 2,000 attempts per shared IP per hour, and verification allows
+3,000 attempts per shared IP per ten minutes. This accommodates a 1,000-participant event
+behind one campus network, including one resend and up to three verification attempts each.
+The per-identity limits remain five requests per hour and ten verification attempts per ten
+minutes. Successful code-request responses include `resend_after` (60 seconds). A rejected
+authentication resend includes its remaining wait in `Retry-After` and `retry_after`; durable
+request-limit rejections use `Retry-After`. Request attempts, including rejected premature
+resends, count toward the durable limits.
+
+Invitees without an account use no emailed code: the private link in their invitation email is
+the credential. Opening it (`POST /events/temp-access/open`) is limited separately, to 3,000
+attempts per shared IP and 20 per link (event code and token) per ten minutes, with a fifteen-minute
+block after that. Every link that identifies no live temporary invitation (an unknown event or
+token, an unsent invitation, or a person who has since upgraded or been deactivated) gets the same
+404, so it does not reveal whether an invitation exists. Opening records that the link was opened;
+it does not mark the invitation accepted.
+
 **Response ownership.** The organizer may enter a full account's response only until that person
 claims it by joining, saving or submitting their own response, or upgrading from a temporary
 identity (`Participant.response_claimed_at`, never cleared while the row exists). Organizer-managed
@@ -80,8 +104,7 @@ people are backed by a temporary member with no contact email; phone numbers are
 SMS and no phone login).
 
 **Email delivery.** Configure providers in Django admin under **Email Delivery**: add an active AWS
-SES provider with its region, sender address, and IAM access key. Authentication email, invitations,
-reminders, and final notifications are stored as retryable jobs. Requests return once the jobs are
-queued, and the email worker makes the provider calls. Provider secrets and queued authentication
-content are encrypted in the database, not stored in Terraform or GitHub. SES identities and IAM
-permissions must already exist in AWS.
+SES provider with its region, sender address, and IAM access key. Verification codes send through
+SES during the request; invitations, reminders, and final notifications are stored as retryable
+jobs and sent by the email worker. Provider secrets are encrypted in the database, not stored in
+Terraform or GitHub. SES identities and IAM permissions must already exist in AWS.

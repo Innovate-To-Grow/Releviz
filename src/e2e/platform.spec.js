@@ -1132,7 +1132,7 @@ print(json.dumps({
           ordinaryEmail,
         ),
       ).toContain(
-        `Email ${ordinaryEmail} belongs to a member who is not an active staff superuser; refusing to promote or replace that account.`,
+        `Email ${ordinaryEmail} belongs to a member who is not an active administrator; refusing to promote or replace that account.`,
       );
       expect(memberState(ordinaryEmail)).toMatchObject({
         staff: false,

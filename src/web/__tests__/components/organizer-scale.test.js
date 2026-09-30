@@ -17,8 +17,8 @@ import { useState } from "react";
 jest.mock("@/components/auth/AuthContext", () => ({ useAuth: jest.fn() }));
 jest.mock("@/components/event/CreateEventClient", () => ({
   __esModule: true,
-  default: ({ initialEvent, onSaved, onCancel }) => (
-    <div>
+  default: ({ initialEvent, focusRequest, onSaved, onCancel }) => (
+    <div data-testid="event-editor" data-focus-field={focusRequest?.field}>
       <button type="button" onClick={onCancel}>
         Cancel
       </button>
@@ -140,6 +140,18 @@ import {
   patchRosterParticipant,
   sendRosterInvitations,
 } from "@/lib/api/roster";
+
+// Waits until the Time Table shows a finished snapshot (of `revision`, when
+// given): the section names the freshness of what it shows.
+function resultsAreCurrent(revision) {
+  return waitFor(() => {
+    const section = document.querySelector('[data-results-status="fresh"]');
+    expect(section).toBeInTheDocument();
+    if (revision !== undefined) {
+      expect(section).toHaveAttribute("data-results-revision", `${revision}`);
+    }
+  });
+}
 
 // The event streams the workspace opened in the current test, oldest
 // first: the fake connection records the handlers it was given so a test
@@ -445,10 +457,18 @@ function calendarCell(index) {
 // Finalizes through the email review: Finalize meeting opens it, Continue
 // reaches the second confirmation, and `sendLabel` confirms.
 async function finalizeThroughReview(sendLabel = "Finalize meeting") {
+  // The attendance is read as soon as a time is picked; Finalize waits for it.
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Finalize meeting" }),
+    ).toBeEnabled(),
+  );
   await userEvent.click(
     screen.getByRole("button", { name: "Finalize meeting" }),
   );
-  const review = screen.getByRole("dialog", { name: "Finalize meeting" });
+  const review = await screen.findByRole("dialog", {
+    name: "Finalize meeting",
+  });
   await userEvent.click(
     within(review).getByRole("button", { name: "Continue" }),
   );
@@ -643,7 +663,7 @@ describe("scaled organizer workspace", () => {
       screen.getByTestId("organizer-header-event-status"),
     ).toHaveTextContent("active");
     await screen.findByText("Ada Faculty");
-    await screen.findByText(/Results are current at revision 3/);
+    await resultsAreCurrent(3);
 
     // Event facts first, then the calendar picker with its confirmation step
     // inside it, then the roster that feeds them.
@@ -856,10 +876,75 @@ describe("scaled organizer workspace", () => {
     ).toBeDisabled();
   });
 
+  test("a passed deadline is changed in place, from the controls and from the Participants notice", async () => {
+    renderView(jest.fn(), {
+      ...event,
+      responseDeadline: "2020-01-01T00:00:00Z",
+    });
+    await screen.findByText("Ada Faculty");
+
+    const controls = screen.getByRole("region", { name: "Event controls" });
+    expect(
+      within(controls).getByText(
+        "The response deadline has passed, so people can no longer respond.",
+      ),
+    ).toBeInTheDocument();
+    const overviewSection = document.getElementById("organizer-overview");
+    const rosterSection = document.getElementById("organizer-roster");
+    expect(
+      within(overviewSection).queryByRole("heading", { name: "Edit event" }),
+    ).not.toBeInTheDocument();
+
+    // The Participants notice brings the organizer to the Overview's editor
+    // instead of leaving the workspace.
+    HTMLElement.prototype.scrollIntoView.mockClear();
+    await userEvent.click(
+      within(rosterSection).getByRole("button", { name: "Change deadline" }),
+    );
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
+      behavior: "auto",
+      block: "start",
+    });
+    expect(HTMLElement.prototype.scrollIntoView.mock.contexts).toContain(
+      overviewSection,
+    );
+    expect(
+      await within(overviewSection).findByRole("heading", {
+        name: "Edit event",
+      }),
+    ).toBeInTheDocument();
+    // ...with the deadline itself in front of them, not just the editor.
+    expect(within(overviewSection).getByTestId("event-editor")).toHaveAttribute(
+      "data-focus-field",
+      "deadline",
+    );
+
+    await userEvent.click(
+      within(overviewSection).getByRole("button", { name: "Cancel" }),
+    );
+    expect(
+      within(overviewSection).queryByRole("heading", { name: "Edit event" }),
+    ).not.toBeInTheDocument();
+
+    // So does the sentence in the controls.
+    await userEvent.click(
+      within(controls).getByRole("button", { name: "Change deadline" }),
+    );
+    expect(
+      await within(overviewSection).findByRole("heading", {
+        name: "Edit event",
+      }),
+    ).toBeInTheDocument();
+    expect(within(overviewSection).getByTestId("event-editor")).toHaveAttribute(
+      "data-focus-field",
+      "deadline",
+    );
+  });
+
   test("reports when the roster cannot be re-read after a reset", async () => {
     renderView();
     await screen.findByText("Ada Faculty");
-    await screen.findByText(/Results are current at revision 3/);
+    await resultsAreCurrent(3);
     fetchRoster.mockRejectedValueOnce(new Error(""));
 
     const overviewSection = document.getElementById("organizer-overview");
@@ -1208,7 +1293,7 @@ describe("scaled organizer workspace", () => {
     // The row never shows the organizer's own address as theirs.
     expect(row).not.toHaveTextContent("organizer@example.com");
     expect(row).toHaveTextContent("No email · you enter their schedule");
-    expect(within(row).getByText("No email")).toBeInTheDocument();
+    expect(within(row).getByText("Not submitted")).toHaveClass("status-badge");
     expect(
       within(row).getByRole("button", { name: "Edit schedule" }),
     ).toBeEnabled();
@@ -1501,11 +1586,14 @@ describe("scaled organizer workspace", () => {
     const table = within(rosterSection).getByRole("table", {
       name: "Participants",
     });
-    ["Name", "Groups", "Response", "Invitation"].forEach((column) => {
+    ["Name", "Groups", "Response"].forEach((column) => {
       expect(
         within(table).getByRole("columnheader", { name: column }),
       ).toBeInTheDocument();
     });
+    expect(
+      within(table).queryByRole("columnheader", { name: "Invitation" }),
+    ).toBeNull();
     const row = within(table)
       .getByRole("rowheader", { name: /Ada Faculty/ })
       .closest("tr");
@@ -1830,7 +1918,9 @@ describe("scaled organizer workspace", () => {
       ),
     );
     expect(
-      screen.getByRole("button", { name: "Remove filter Invitation: Failed" }),
+      screen.getByRole("button", {
+        name: "Remove filter Response: Invite failed",
+      }),
     ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Participants" })).toHaveFocus();
   });
@@ -2154,7 +2244,7 @@ describe("scaled organizer workspace", () => {
       name: "Replace the list with 1 person",
     });
     expect(screen.getByRole("note")).toHaveTextContent(
-      "Rebuilding clears schedules, invitations, and pending delivery. Everyone starts as Not sent and gets no reminders until you send invitations, which you can review once the import is done.",
+      "Rebuilding clears schedules, invitations, and pending delivery. Everyone starts as Not invited and gets no reminders until you send invitations, which you can review once the import is done.",
     );
     expect(rebuildButton).toBeDisabled();
     await userEvent.type(
@@ -2235,9 +2325,7 @@ describe("scaled organizer workspace", () => {
     });
     const setEvent = jest.fn();
     renderView(setEvent, { ...event, status: "active" });
-    expect(
-      await screen.findByText(/Results are current at revision 3/),
-    ).toBeInTheDocument();
+    await resultsAreCurrent(3);
     await toggleRecommendedTimes();
     await userEvent.click(
       screen.getByRole("button", { name: /choose this time/i }),
@@ -2256,15 +2344,15 @@ describe("scaled organizer workspace", () => {
     const chosen = screen.getByRole("button", { name: /selected time/i });
     expect(chosen).toBeVisible();
     expect(chosen).toHaveFocus();
-    await userEvent.click(
-      screen.getByRole("button", { name: "Review attendance" }),
-    );
+    // The attendance is read as soon as the time is picked.
     expect(await screen.findByText("700")).toBeInTheDocument();
     await userEvent.click(
-      screen.getByRole("button", { name: "Finalize meeting" }),
+      await screen.findByRole("button", { name: "Finalize meeting" }),
     );
     // The confirmation email is reviewed before anything is finalized.
-    const review = screen.getByRole("dialog", { name: "Finalize meeting" });
+    const review = await screen.findByRole("dialog", {
+      name: "Finalize meeting",
+    });
     expect(review).toHaveTextContent(
       "2 invited people will receive the confirmation and a calendar invitation.",
     );
@@ -2325,7 +2413,7 @@ describe("scaled organizer workspace", () => {
       sample: null,
     });
     renderView(jest.fn(), { ...event, status: "active" });
-    await screen.findByText(/Results are current at revision 3/);
+    await resultsAreCurrent(3);
 
     // Playwright's getByRole("heading", { name }) is a substring match, so
     // only the panel title and the Finalize step may mention them.
@@ -2377,9 +2465,6 @@ describe("scaled organizer workspace", () => {
     });
     expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Review attendance" }),
-    );
     await screen.findByText("Attendance review is current for this candidate.");
     // The attendance tile is the only element whose whole text is "Available":
     // the per-person table spells out "Fully available" instead.
@@ -2388,7 +2473,7 @@ describe("scaled organizer workspace", () => {
       within(screen.getByRole("region", { name: "Attendance by person" }))
         .getByRole("rowheader", { name: "Grace Faculty" })
         .closest("tr"),
-    ).toHaveTextContent("Fully available · 100%");
+    ).toHaveTextContent("Fully available");
     expect(
       screen.getAllByRole("heading", { name: /time table/i }),
     ).toHaveLength(1);
@@ -2400,7 +2485,7 @@ describe("scaled organizer workspace", () => {
   test("refreshes the roster when a saved edit reset responses", async () => {
     renderView();
     await screen.findByText("Ada Faculty");
-    await screen.findByText(/Results are current at revision 3/);
+    await resultsAreCurrent(3);
     fetchRoster.mockClear();
     fetchEventResults.mockClear();
 
@@ -2426,7 +2511,7 @@ describe("scaled organizer workspace", () => {
   test("keeps the ranked list and the empty Finalize step collapsed under the calendar", async () => {
     renderView();
     await screen.findByText("Ada Faculty");
-    await screen.findByText(/Results are current at revision 3/);
+    await resultsAreCurrent(3);
 
     const finalizeSection = document.getElementById("organizer-finalize");
     expect(finalizeSection).toHaveTextContent("No time selected yet");
@@ -2494,7 +2579,7 @@ describe("scaled organizer workspace", () => {
 
     try {
       render(<StatefulWorkspace initialEvent={calendarEvent} />);
-      await screen.findByText(/Results are current/);
+      await resultsAreCurrent();
       fetchEventResults.mockClear();
       const finalizeSection = () =>
         document.getElementById("organizer-finalize");
@@ -2579,7 +2664,7 @@ describe("scaled organizer workspace", () => {
     try {
       const setEvent = jest.fn();
       renderView(setEvent, calendarEvent);
-      await screen.findByText(/Results are current/);
+      await resultsAreCurrent();
 
       // The step re-keys on every new selection, so query it fresh.
       const finalizeSection = () =>
@@ -2597,7 +2682,7 @@ describe("scaled organizer workspace", () => {
       expect(finalizeSection()).toHaveTextContent(/9:30/);
       // The estimate is the lowest per-slot share across slots 1 and 2.
       expect(finalizeSection()).toHaveTextContent(
-        "Up to 50% weighted · 60% unweighted across this window (its lowest slot; people must be free for all of it). Exact attendance counts appear after Review attendance.",
+        "Up to 50% weighted · 60% unweighted across this window (its lowest slot; people must be free for all of it).",
       );
       expect(finalizeSection()).toHaveAttribute("open");
       expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
@@ -2609,9 +2694,7 @@ describe("scaled organizer workspace", () => {
       expect(calendarCell(2)).toHaveAttribute("aria-selected", "true");
       expect(calendarCell(0)).not.toHaveAttribute("aria-selected");
 
-      await userEvent.click(
-        screen.getByRole("button", { name: "Review attendance" }),
-      );
+      // The attendance is read as soon as the window is picked.
       await waitFor(() =>
         expect(previewFinalMeeting).toHaveBeenCalledWith(
           event.code,
@@ -2619,7 +2702,6 @@ describe("scaled organizer workspace", () => {
             startsAt: "2026-08-20T09:30:00Z",
             endsAt: "2026-08-20T10:30:00Z",
             channel: "inperson",
-            location: "Room 1",
           },
           "token",
         ),
@@ -2629,7 +2711,18 @@ describe("scaled organizer workspace", () => {
       ).toBeInTheDocument();
 
       // Nobody was invited by email: finalizing goes ahead without email.
+      // The email is asked for with the location as it stands at the click.
       await finalizeThroughReview();
+      expect(previewFinalMeeting).toHaveBeenLastCalledWith(
+        event.code,
+        {
+          startsAt: "2026-08-20T09:30:00Z",
+          endsAt: "2026-08-20T10:30:00Z",
+          channel: "inperson",
+          location: "Room 1",
+        },
+        "token",
+      );
       await waitFor(() =>
         expect(confirmFinalMeeting).toHaveBeenCalledWith(
           event.code,
@@ -2684,7 +2777,7 @@ describe("scaled organizer workspace", () => {
 
     try {
       render(<StatefulWorkspace initialEvent={calendarEvent} />);
-      await screen.findByText(/Results are current/);
+      await resultsAreCurrent();
       const finalizeSection = () =>
         document.getElementById("organizer-finalize");
       const headerStatus = () =>
@@ -2692,9 +2785,6 @@ describe("scaled organizer workspace", () => {
 
       await userEvent.click(calendarCell(1));
       expect(finalizeSection()).toHaveTextContent("Custom window");
-      await userEvent.click(
-        screen.getByRole("button", { name: "Review attendance" }),
-      );
       await screen.findByRole("group", { name: "Attendance review" });
       await finalizeThroughReview();
       await waitFor(() =>
@@ -2812,7 +2902,7 @@ describe("scaled organizer workspace", () => {
       },
     });
     renderView();
-    await screen.findByText(/Results are current at revision 3/);
+    await resultsAreCurrent(3);
 
     const channelGroup = screen.getByRole("group", {
       name: "Meeting channel",
@@ -2893,7 +2983,7 @@ describe("scaled organizer workspace", () => {
       .mockReturnValue(Date.parse("2026-08-01T00:00:00Z"));
     try {
       renderView(jest.fn(), calendarEvent);
-      await screen.findByText(/Results are current/);
+      await resultsAreCurrent();
       const finalize = document.getElementById("organizer-finalize");
       await userEvent.click(finalize.querySelector(":scope > summary"));
       const other = document.getElementById("organizer-other-times");
@@ -2933,7 +3023,7 @@ describe("scaled organizer workspace", () => {
       });
     try {
       renderView(jest.fn(), calendarEvent);
-      await screen.findByText(/Results are current/);
+      await resultsAreCurrent();
       const finalize = document.getElementById("organizer-finalize");
       await userEvent.click(finalize.querySelector(":scope > summary"));
       const other = document.getElementById("organizer-other-times");
@@ -2962,7 +3052,7 @@ describe("scaled organizer workspace", () => {
       .mockReturnValue(Date.parse("2026-08-01T00:00:00Z"));
     try {
       renderView(jest.fn(), calendarEvent);
-      await screen.findByText(/Results are current/);
+      await resultsAreCurrent();
       await userEvent.click(calendarCell(1));
 
       expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
@@ -3001,7 +3091,7 @@ describe("scaled organizer workspace", () => {
     ) {
       const view = renderView(setEvent, currentEvent);
       await screen.findByText("Ada Faculty");
-      await screen.findByText(/Results are current at revision 3/);
+      await resultsAreCurrent(3);
       fetchEvent.mockClear();
       fetchRoster.mockClear();
       fetchEventResults.mockClear();
@@ -3119,7 +3209,7 @@ describe("scaled organizer workspace", () => {
         "token",
       );
       expect(
-        await screen.findByText(/Results are updating for revision 4/),
+        await screen.findByText(/Results are updating/),
       ).toBeInTheDocument();
       expect(
         screen.getByText(/· 1 submitted · 0 not submitted ·/),
@@ -3866,8 +3956,10 @@ describe("scaled organizer workspace", () => {
     renderView();
 
     expect(
-      await screen.findByText(/Results are updating for revision 4/),
-    ).toHaveTextContent("Showing the last successful snapshot meanwhile");
+      await screen.findByText(
+        /Results are updating\. Showing the last calculated results meanwhile\./,
+      ),
+    ).toBeInTheDocument();
     // Named once in the collapsed summary and once in the list itself.
     // Named in the collapsed summary, on the chip, and in the detail line.
     expect(screen.getAllByText(/Previous best window/)).toHaveLength(3);

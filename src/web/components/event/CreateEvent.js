@@ -37,6 +37,9 @@ const ERROR_FIELD_ORDER = [
 
 const ADVANCED_ERROR_FIELDS = new Set(["reminderHours"]);
 
+const DEADLINE_HELP =
+  "Optional. People can't respond after this time; without one, responses stay open until you close them.";
+
 const FALLBACK_TIMEZONES = [
   "UTC",
   "Africa/Cairo",
@@ -142,6 +145,7 @@ function CreateEvent({
   operation = "create",
   presentation = "page",
   initialEvent = null,
+  focusRequest = null,
   onSaved,
   onCancel,
 }) {
@@ -313,6 +317,22 @@ function CreateEvent({
     inline,
   ]);
 
+  useEffect(() => {
+    if (focusRequest?.field !== "deadline") return;
+    const input = document.getElementById("response-deadline");
+    if (!input) return;
+    if (typeof input.scrollIntoView === "function") {
+      input.scrollIntoView({ behavior: "auto", block: "center" });
+    }
+    input.focus();
+  }, [focusRequest]);
+
+  useEffect(() => {
+    // Saving disables its own button until the reset is confirmed, so the
+    // keyboard lands on the confirmation instead of being dropped.
+    if (resetRequired) document.getElementById("reset-confirmed")?.focus();
+  }, [resetRequired]);
+
   const clearFieldError = (fieldName) => {
     setFieldErrors((current) => {
       if (!current[fieldName]) return current;
@@ -468,13 +488,13 @@ function CreateEvent({
       }
     } catch (err) {
       if (err.requiresResponseReset) {
+        // Not a failure and not a stale version: the confirmation below says
+        // what saving again will do.
         setResetRequired(true);
         setResetParticipantCount(err.participantCount || 0);
+        return;
       }
-      // A response-reset error carries the current event too, but only a
-      // version conflict means another session changed it; a reset prompt
-      // is answered in place, and reloading would discard this edit.
-      if (err.event && !err.requiresResponseReset) setConflictEvent(err.event);
+      if (err.event) setConflictEvent(err.event);
       setError(
         err.message ||
           (editing ? "Failed to save event" : "Failed to create event"),
@@ -800,8 +820,8 @@ function CreateEvent({
               Meeting &amp; access
             </SectionHeading>
             <p>
-              Choose how the group meets, the event timezone and length, and who
-              can join.
+              Choose how the group meets, the event timezone and length, who can
+              join, and when responses close.
             </p>
           </div>
         </div>
@@ -959,6 +979,24 @@ function CreateEvent({
               <option value="busy">Busy (they mark the times that work)</option>
             </select>
           </FormField>
+
+          <FormField
+            id="response-deadline"
+            label="Response Deadline"
+            help={
+              eventTimezone.trim()
+                ? `${DEADLINE_HELP} Uses the event timezone (${eventTimezone.trim()}).`
+                : DEADLINE_HELP
+            }
+          >
+            <input
+              className="form-control"
+              aria-label="Response Deadline"
+              type="datetime-local"
+              value={responseDeadline}
+              onChange={(event) => setResponseDeadline(event.target.value)}
+            />
+          </FormField>
         </div>
       </section>
 
@@ -977,8 +1015,7 @@ function CreateEvent({
                 Advanced options
               </SectionHeading>
               <p className="mb-0">
-                Fine-tune slot granularity, participant visibility, deadlines,
-                and reminders.
+                Fine-tune the slot length and the reminder emails.
               </p>
             </div>
           </div>
@@ -998,8 +1035,8 @@ function CreateEvent({
                   Fine tuning
                 </AdvancedHeading>
                 <p>
-                  Adjust availability granularity, schedule visibility, and
-                  reminder timing when the defaults are not enough.
+                  Adjust the availability grid and the automatic reminders when
+                  the defaults are not enough.
                 </p>
               </div>
             </div>
@@ -1025,17 +1062,6 @@ function CreateEvent({
               </p>
 
               <div className="form-row-2">
-                <FormField id="response-deadline" label="Response Deadline">
-                  <input
-                    className="form-control"
-                    aria-label="Response Deadline"
-                    type="datetime-local"
-                    value={responseDeadline}
-                    onChange={(event) =>
-                      setResponseDeadline(event.target.value)
-                    }
-                  />
-                </FormField>
                 <FormField
                   id="reminder-hours"
                   label="Reminder Hours Before Deadline"
@@ -1090,6 +1116,10 @@ function CreateEvent({
                   Send reminder emails before the deadline
                 </label>
               </div>
+              <p className="form-text mb-0">
+                Automatic reminders go out before the response deadline, so they
+                only apply once one is set.
+              </p>
             </div>
           </section>
         </div>

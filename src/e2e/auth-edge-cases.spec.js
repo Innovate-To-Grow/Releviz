@@ -69,6 +69,11 @@ function continueButton(page) {
   return page.getByRole("button", { name: "Continue", exact: true });
 }
 
+// The page holds a new code back for as long as the last send (or the
+// server's refusal) says, counting the seconds down on the button itself.
+// Its clock is the page's own, so a test runs it forward rather than waiting.
+const RESEND_WAIT_MS = 61_000;
+
 // A route/response matcher for one API endpoint, whatever its query string.
 function isApiPath(pathname) {
   return (url) => new URL(url).pathname === pathname;
@@ -271,7 +276,7 @@ print(json.dumps(True))
 }
 
 test.describe("Email-code sign-in panel", () => {
-  test("Continue waits for a valid address, the code step keeps six digits, Back keeps the address, and a second code inside a minute is refused until the cooldown passes", async ({
+  test("Continue waits for a valid address, the code step keeps six digits, Back keeps the address, and a second code inside a minute is held back by the page and refused by the server until the cooldown passes", async ({
     page,
     request,
   }) => {
@@ -281,7 +286,11 @@ test.describe("Email-code sign-in panel", () => {
     const emailField = page.getByLabel("Email");
     const codeField = page.getByLabel("Verification code");
     const resend = page.getByRole("button", { name: "Resend code" });
+    const requestAgain = page.getByRole("button", {
+      name: /^Request code in \d+s$/,
+    });
 
+    await page.clock.install();
     await page.goto("/login");
     await expect(heading(page, "Welcome to Releviz")).toBeVisible();
     await expect(emailField).toHaveAccessibleDescription(
@@ -321,24 +330,51 @@ test.describe("Email-code sign-in panel", () => {
     await expect(emailField).toHaveValue(email);
     await expect(mainStatus(page)).toHaveCount(0);
 
-    // Asking again for the same address inside the 60 s cooldown is refused
-    // and keeps the email step.
-    const refused = apiResponse(page, "/authn/email-auth/request-code/");
-    await continueButton(page).click();
-    expect((await refused).status()).toBe(429);
-    await expect(mainAlert(page)).toHaveText(TOO_MANY_CODES);
+    // Inside the 60 s cooldown the page holds the same address back: the
+    // button counts down instead of sending, and a code already at hand can
+    // still be entered.
+    await expect(continueButton(page)).toHaveCount(0);
+    await expect(requestAgain).toBeDisabled();
+    await page
+      .getByRole("button", { name: "Enter a code you already have" })
+      .click();
+    await expect(heading(page, "Verify Your Identity")).toBeVisible();
+    await expect(resend).toHaveText(/^Resend code in \d+s$/);
+    await expect(resend).toBeDisabled();
+    await page.getByRole("button", { name: "Back" }).click();
     await expect(heading(page, "Welcome to Releviz")).toBeVisible();
 
-    expireResendCooldown(email);
-    const secondAt = Date.now() - 1000;
+    // The server keeps its own cooldown: once the page's countdown has run,
+    // asking again is still refused. The refusal leads to the code step,
+    // where an earlier code still works, and Resend waits out the time the
+    // server gave.
+    await page.clock.fastForward(RESEND_WAIT_MS);
+    const refused = apiResponse(page, "/authn/email-auth/request-code/");
     await continueButton(page).click();
+    const refusedAnswer = await refused;
+    expect(refusedAnswer.status()).toBe(429);
+    expect(Number(refusedAnswer.headers()["retry-after"])).toBeGreaterThan(0);
+    await expect(mainAlert(page)).toHaveText(TOO_MANY_CODES);
     await expect(heading(page, "Verify Your Identity")).toBeVisible();
+    await expect(resend).toBeDisabled();
+
+    expireResendCooldown(email);
+    await page.clock.fastForward(RESEND_WAIT_MS);
+    const secondAt = Date.now() - 1000;
+    const sent = apiResponse(page, "/authn/email-auth/request-code/");
+    await resend.click();
+    expect((await sent).status()).toBe(202);
+    await expect(mainStatus(page)).toHaveText(CODE_SENT);
     await expect(mainAlert(page)).toHaveCount(0);
     const code2 = await latestVerificationCode(email, secondAt, "login", {
       notCode: code1,
     });
 
-    // Resend inside the cooldown is refused too, and keeps the code step.
+    // Resend inside the cooldown waits on the page, and the server refuses
+    // it too once the page's countdown has run; the code step stays.
+    await expect(resend).toHaveText(/^Resend code in \d+s$/);
+    await expect(resend).toBeDisabled();
+    await page.clock.fastForward(RESEND_WAIT_MS);
     const refusedResend = apiResponse(page, "/authn/email-auth/request-code/");
     await resend.click();
     expect((await refusedResend).status()).toBe(429);
@@ -346,6 +382,7 @@ test.describe("Email-code sign-in panel", () => {
     await expect(heading(page, "Verify Your Identity")).toBeVisible();
 
     expireResendCooldown(email);
+    await page.clock.fastForward(RESEND_WAIT_MS);
     const thirdAt = Date.now() - 1000;
     const resent = apiResponse(page, "/authn/email-auth/request-code/");
     await resend.click();
@@ -376,7 +413,9 @@ test.describe("Email-code sign-in panel", () => {
       await expect(codeStep).toBeVisible();
     }
 
+    // Each send starts the page's own countdown, so it is run out first.
     async function resendCode(notCode) {
+      await page.clock.fastForward(RESEND_WAIT_MS);
       const sentAt = Date.now() - 1000;
       const resent = apiResponse(page, "/authn/email-auth/request-code/");
       await resend.click();
@@ -384,6 +423,7 @@ test.describe("Email-code sign-in panel", () => {
       return latestVerificationCode(email, sentAt, "login", { notCode });
     }
 
+    await page.clock.install();
     await page.goto("/login");
     const firstAt = Date.now() - 1000;
     await requestEmailCode(page, email);
@@ -410,8 +450,9 @@ test.describe("Email-code sign-in panel", () => {
     });
     await expectRefused(codeB);
 
-    // A used-up code no longer holds the cooldown, so Resend works at once;
-    // a code past its ten minutes is refused.
+    // A used-up code no longer holds the server's cooldown, so once the
+    // page's countdown has run Resend sends a new one at once; a code past
+    // its ten minutes is refused.
     const codeC = await resendCode(codeB);
     expireEmailChallenges(email);
     await expectRefused(codeC);
@@ -440,21 +481,35 @@ test.describe("Email-code sign-in panel", () => {
       "/authn/email-auth/request-code/",
     );
     expect(capRefused.status()).toBe(429);
+    // The wait lasts until the oldest of the hour's codes drops out.
+    expect((await capRefused.json()).retry_after).toBeGreaterThan(60);
     await expect(mainAlert(page)).toHaveText(TOO_MANY_CODES);
-    await expect(heading(page, "Welcome to Releviz")).toBeVisible();
+    // A refusal still leads to the code step, in case an earlier code is at
+    // hand, and Resend waits for as long as the server said.
+    await expect(heading(page, "Verify Your Identity")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /^Resend code in \d+s$/ }),
+    ).toBeDisabled();
 
-    // The durable per-address request throttle.
+    // The durable per-address request throttle. The page's wait belongs to
+    // the address it was given for, so another address can ask at once.
+    await page.getByRole("button", { name: "Back" }).click();
     setIdentityBlock("code_request", throttled);
     await page.getByLabel("Email").fill(throttled);
     const requestRefused = apiResponse(page, "/authn/email-auth/request-code/");
     await continueButton(page).click();
-    expect((await requestRefused).status()).toBe(429);
+    const throttledAnswer = await requestRefused;
+    expect(throttledAnswer.status()).toBe(429);
+    expect(Number(throttledAnswer.headers()["retry-after"])).toBeGreaterThan(0);
     await expect(mainAlert(page)).toHaveText(THROTTLED);
-    await expect(heading(page, "Welcome to Releviz")).toBeVisible();
+    await expect(heading(page, "Verify Your Identity")).toBeVisible();
 
     expect(
       setIdentityBlock("code_request", throttled, { blocked: false }),
     ).toBe(true);
+    // This page still counts down the wait it was given; a fresh one has
+    // none of its own, and the server now sends the code.
+    await page.goto("/login");
     const sentAt = Date.now() - 1000;
     await requestEmailCode(page, throttled);
     const code = await latestVerificationCode(throttled, sentAt, "login");

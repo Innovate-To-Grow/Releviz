@@ -6,7 +6,6 @@ const {
   freshResults,
   invitationLinkFromEmail,
   latestEmailFor,
-  latestVerificationCode,
   newAccountContext,
   newRunId,
   ownResponse,
@@ -847,8 +846,8 @@ test.describe("Person panel", () => {
     await panel.getByRole("button", { name: "Cancel" }).click();
     const niaRow = participantRow(page, "Nia Moving");
     await expect(niaRow).toContainText(niaNewEmail);
-    await expect(niaRow.locator(".participants-table__invitation")).toHaveText(
-      "Not sent",
+    await expect(niaRow.locator(".participants-table__response")).toHaveText(
+      "Not invited",
     );
     expect(invitationTokenExists(oldInvitation.token)).toBe(false);
     expect(invitationState(event.code, niaNewEmail)).toMatchObject({
@@ -881,8 +880,8 @@ test.describe("Person panel", () => {
     await expect(noraRow.locator(".participants-row__contact")).toHaveText(
       noraEmail,
     );
-    await expect(noraRow.locator(".participants-table__invitation")).toHaveText(
-      "Not sent",
+    await expect(noraRow.locator(".participants-table__response")).toHaveText(
+      "Not invited",
     );
     const noraEntry = (await rosterByName(request, event.code, token)).get(
       "Nora Later",
@@ -1683,7 +1682,7 @@ test.describe("Schedule drawer", () => {
     expect(vicSchedule.availabilityInperson[0]).toBe(1);
   });
 
-  test("locks a left-out person's schedule until they count again, and refuses Edit schedule for someone who took over", async ({
+  test("keeps a left-out person's schedule editable while saying their answers don't count until they count again, and refuses Edit schedule for someone who took over", async ({
     page,
     request,
   }) => {
@@ -1718,20 +1717,28 @@ test.describe("Schedule drawer", () => {
     const drawer = scheduleDrawer(page, "Lena Left");
     const leftOut = drawer.getByRole("status").filter({
       hasText:
-        "Lena Left is left out of the results, so their schedule can't change.",
+        "Lena Left is left out of the results, so their answers don't count.",
     });
     await expect(leftOut).toBeVisible();
+    // Leaving someone out changes only the results: their schedule can still
+    // be entered and saved.
     const cell = drawer.locator('[data-cell-idx="0"]');
-    await expect(cell).toHaveAttribute("aria-readonly", "true");
-    await expect(
-      drawer.getByRole("button", { name: "Save draft" }),
-    ).toBeDisabled();
+    await expect(cell).not.toHaveAttribute("aria-readonly", "true");
     await expect(
       drawer.getByRole("button", { name: "Submit on behalf" }),
-    ).toBeDisabled();
+    ).toBeEnabled();
     await expect(
       drawer.getByRole("button", { name: "Busy", exact: true }),
-    ).toBeDisabled();
+    ).toBeEnabled();
+    await cell.click();
+    await expect(cell).toHaveAttribute("data-availability", "busy");
+    await saveDrawer(page, drawer, "Save draft");
+    await expect(drawer.getByText("Draft saved.")).toBeVisible();
+    await expect(leftOut).toBeVisible();
+    expect(
+      (await managedSchedule(request, event.code, token, lena))
+        .availabilityInperson[0],
+    ).toBe(0);
 
     const counted = waitForRowPatch(page);
     await leftOut.getByRole("button", { name: "Count them again" }).click();
@@ -1743,7 +1750,7 @@ test.describe("Schedule drawer", () => {
       drawer.getByRole("button", { name: "Submit on behalf" }),
     ).toBeEnabled();
     await expect(lenaRow).not.toContainText("Left out of results");
-    await drawer.getByRole("button", { name: "Cancel" }).click();
+    await drawer.getByRole("button", { name: "Close", exact: true }).click();
     await expect(drawer).toHaveCount(0);
     expect(
       (await rosterByName(request, event.code, token)).get("Lena Left")
@@ -1797,7 +1804,7 @@ test.describe("Schedule drawer", () => {
     expect((await counted).status()).toBe(200);
     await expect(drawer.getByText(/is left out of the results/)).toHaveCount(0);
     // Nobody else touched Lou: the drawer's own change must not stand in
-    // the way of entering the schedule it just unlocked.
+    // the way of entering their schedule right after.
     const cell = drawer.locator('[data-cell-idx="0"]');
     await cell.click();
     await expect(cell).toHaveAttribute("data-availability", "busy");
@@ -1861,22 +1868,9 @@ test.describe("Removing people", () => {
       );
       const finnLink = invitationLinkFromEmail(finnInvitation);
 
-      // Tess opens her link and signs in with the emailed code.
+      // Tess opens her link, which signs her in to her schedule.
       const tessPage = await tessContext.newPage();
-      const codeSentAt = Date.now() - 1000;
       await tessPage.goto(temporaryAccessPathFromEmail(tessInvitation));
-      await expect(
-        tessPage.getByRole("heading", { name: "Check your email" }),
-      ).toBeVisible();
-      const accessCode = await latestVerificationCode(
-        tessEmail,
-        codeSentAt,
-        "temp_event_access",
-      );
-      await tessPage.getByLabel("Verification code").fill(accessCode);
-      await tessPage
-        .getByRole("button", { name: "Verify and open schedule" })
-        .click();
       await expect(
         tessPage.getByText("You are responding as Tess Temp"),
       ).toBeVisible();
@@ -1969,8 +1963,8 @@ test.describe("Removing people", () => {
           "An email to this person is being sent right now. Try again in a minute.";
         const piaRow = participantRow(page, "Pia Pending");
         await expect(
-          piaRow.locator(".participants-table__invitation"),
-        ).toHaveText("Sending…");
+          piaRow.locator(".participants-table__response"),
+        ).toHaveText("Sending invite…");
         await confirmRemoval(
           page,
           await removeFromRow(page, "Pia Pending"),
@@ -2224,6 +2218,8 @@ test.describe("Locked list", () => {
         /^The response deadline \(.+\) has passed, so people can't be added, invited or changed\. You can still enter schedules for people you answer for\./,
     });
     await expect(banner).toBeVisible();
+    // The deadline is shown in the event's timezone, named.
+    await expect(banner).toContainText(/\(.+ UTC\) has passed/);
     const lockReason =
       "The response deadline has passed, so people can't be added, invited or changed.";
     await expectListLocked(page, "Tia Temp", lockReason);
@@ -2248,14 +2244,15 @@ test.describe("Locked list", () => {
       ),
     ).toHaveText("Submitted");
 
-    // Counting a left-out person again changes the list, so it is locked.
+    // Counting a left-out person again changes the list, so it is locked
+    // (their schedule is not).
     await participantRow(page, "Lou Left")
       .getByRole("button", { name: "Edit schedule" })
       .click();
     const louDrawer = scheduleDrawer(page, "Lou Left");
     await expect(
       louDrawer.getByText(
-        "Lou Left is left out of the results, so their schedule can't change.",
+        "Lou Left is left out of the results, so their answers don't count.",
       ),
     ).toBeVisible();
     await expect(
@@ -2300,8 +2297,13 @@ test.describe("Locked list", () => {
       [...(await rosterByName(request, event.code, token)).keys()].sort(),
     ).toEqual(["Lou Left", "Mo Managed", "Rory Roster", "Tia Temp"]);
 
-    await banner.getByRole("link", { name: "Change deadline" }).click();
-    await expect(page).toHaveURL(new RegExp(`/edit\\?code=${event.code}$`));
+    // Change deadline opens the event settings in place, on the deadline.
+    await banner.getByRole("button", { name: "Change deadline" }).click();
+    await expect(page.getByLabel("Response Deadline")).toBeFocused();
+    await expect(
+      page.getByText("Uses the event timezone (UTC).", { exact: false }),
+    ).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/event\\?code=${event.code}$`));
   });
 });
 

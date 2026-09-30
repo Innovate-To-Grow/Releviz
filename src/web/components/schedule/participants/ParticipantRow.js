@@ -5,13 +5,9 @@ import AppButton from "@/components/ui/AppButton";
 import StatusBadge from "@/components/ui/StatusBadge";
 import { EditIcon } from "@/components/ui/icons";
 import { IconMenuButton } from "@/components/schedule/participants/MenuButton";
-import {
-  contactLine,
-  invitationBadge,
-  responseBadge,
-} from "@/lib/participants";
+import { contactLine, responseBadge } from "@/lib/participants";
 
-export const ROW_COLUMNS = 6;
+export const ROW_COLUMNS = 5;
 
 function groupsText(participant) {
   if (participant.allGroups) return "Every group";
@@ -21,14 +17,15 @@ function groupsText(participant) {
 
 /**
  * One participant: a two-line name block that opens the person panel, their
- * groups, the response and invitation badges, the schedule action and the
- * ⋯ menu. A version conflict adds a notice row underneath.
+ * groups, the one response badge, the schedule action and the ⋯ menu. A
+ * version conflict adds a notice row underneath.
  */
 export default function ParticipantRow({
   participant,
   selected = false,
   selectable = true,
   readOnly = false,
+  openLink = false,
   conflict = null,
   onToggleSelect,
   onOpen,
@@ -41,8 +38,7 @@ export default function ParticipantRow({
 }) {
   const p = participant;
   const line = contactLine(p);
-  const invitation = invitationBadge(p);
-  const response = responseBadge(p);
+  const response = responseBadge(p, { openLink });
   const groups = groupsText(p);
   const answersThemselves = !p.canOrganizerEditAvailability && !p.isOrganizer;
   const columns = selectable ? ROW_COLUMNS : ROW_COLUMNS - 1;
@@ -76,12 +72,15 @@ export default function ParticipantRow({
 
   return (
     <>
+      {/* Roles are explicit because the narrow-screen layout changes the
+          display of table parts, and some browsers then drop the semantics. */}
       <tr
+        role="row"
         className={`participants-row${selected ? " participants-row--selected" : ""}`}
         data-roster-participant-id={p.id}
       >
         {selectable && (
-          <td className="participants-table__select">
+          <td role="cell" className="participants-table__select">
             <input
               className="form-check-input"
               type="checkbox"
@@ -92,7 +91,7 @@ export default function ParticipantRow({
             />
           </td>
         )}
-        <th scope="row" className="participants-table__name">
+        <th scope="row" role="rowheader" className="participants-table__name">
           <button
             type="button"
             className="participants-row__name"
@@ -122,7 +121,7 @@ export default function ParticipantRow({
             </span>
           )}
         </th>
-        <td className="participants-table__groups">
+        <td role="cell" className="participants-table__groups">
           {groups || (
             <>
               <span className="text-secondary" aria-hidden="true">
@@ -132,15 +131,10 @@ export default function ParticipantRow({
             </>
           )}
         </td>
-        <td className="participants-table__response">
+        <td role="cell" className="participants-table__response">
           <StatusBadge status={response.status}>{response.label}</StatusBadge>
         </td>
-        <td className="participants-table__invitation">
-          <StatusBadge status={invitation.status} dot={!invitation.plain}>
-            {invitation.label}
-          </StatusBadge>
-        </td>
-        <td className="participants-table__actions">
+        <td role="cell" className="participants-table__actions">
           <div className="participants-row__actions">
             {answersThemselves ? (
               <span
@@ -167,8 +161,8 @@ export default function ParticipantRow({
         </td>
       </tr>
       {conflict && (
-        <tr className="participants-row__notice">
-          <td colSpan={columns}>
+        <tr role="row" className="participants-row__notice">
+          <td role="cell" colSpan={columns}>
             <Alert
               variant="warning"
               role="status"

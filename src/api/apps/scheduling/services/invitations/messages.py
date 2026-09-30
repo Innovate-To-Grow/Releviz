@@ -48,7 +48,8 @@ def invitation_body(
         f"\n\nPlease respond by {response_deadline_text(event)}." if event.response_deadline else ""
     )
     access_instruction = (
-        "Open the link and enter the six-digit code sent to this email address."
+        "Open the link to share your availability. It is private to you and only grants "
+        "access to this event, so please do not forward it."
         if is_temporary
         else (
             "Log in or create a Releviz account with this email address to fill out your schedule."
@@ -96,8 +97,8 @@ def invitation_html_body(
             item
             for item in [
                 (
-                    "Open this private link and enter the six-digit code sent to this "
-                    "email address. The link only grants access to this event."
+                    "This private link is only for you and only grants access to this event. "
+                    "Please do not forward it."
                     if is_temporary
                     else ""
                 ),

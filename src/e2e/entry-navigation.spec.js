@@ -466,15 +466,23 @@ test.describe("Event page entry", () => {
     );
     await continueWithEmail(page, email, Date.now() - 1000, "register");
     await expect(page).toHaveURL(completionUrl);
+    // The completion page sends a visitor without a session back to sign-in
+    // once it has loaded, so the test leaves it only after it knows who is
+    // signed in: the email field is filled from the session.
+    const emailField = page.getByRole("textbox", { name: "Email address" });
+    await expect(emailField).toHaveValue(email);
+    await page.waitForLoadState("load");
 
-    // The event page itself sends an incomplete profile to completion.
-    await page.goto(`/event?code=${event.code}`);
+    // The event page itself sends an incomplete profile to completion. It
+    // does so with a full navigation as soon as the session is known, which
+    // can be before the event page has finished loading, so the goto waits
+    // only for the first response rather than for a load that is cut short.
+    await page.goto(`/event?code=${event.code}`, { waitUntil: "commit" });
     await expect(page).toHaveURL(completionUrl);
     await expect(
       page.getByRole("heading", { level: 1, name: "Complete your profile" }),
     ).toBeVisible();
     await expect(page.getByText("One last step")).toBeVisible();
-    const emailField = page.getByRole("textbox", { name: "Email address" });
     await expect(emailField).toHaveValue(email);
     await expect(emailField).not.toBeEditable();
     await expectAccessible(page, "complete profile toward an event");
@@ -697,28 +705,17 @@ print(json.dumps({
     expect(blocked.status()).toBe(202);
     expect(await blocked.json()).toEqual({
       message: "Check your email for a verification code.",
+      resend_after: 60,
     });
     expect(challengesByPurpose()).toEqual({});
 
     const tempContext = await browser.newContext();
     try {
       // The temporary link opens a session scoped to this event, which does
-      // not count as being signed in on the event page.
+      // not count as being signed in on the event page. Opening it emails
+      // no code, so no challenge is issued either.
       const tempPage = await tempContext.newPage();
-      const codeSentAt = Date.now() - 1000;
       await tempPage.goto(temporaryAccessPathFromEmail(invitation));
-      await tempPage
-        .getByLabel("Verification code")
-        .fill(
-          await latestVerificationCode(
-            claimEmail,
-            codeSentAt,
-            "temp_event_access",
-          ),
-        );
-      await tempPage
-        .getByRole("button", { name: "Verify and open schedule" })
-        .click();
       await expect(
         tempPage.getByText("You are responding as Casey Claimant"),
       ).toBeVisible();
@@ -728,6 +725,7 @@ print(json.dumps({
         200,
       );
       expect(tempSessions()).toEqual({ total: 1, active: 1 });
+      expect(challengesByPurpose()).toEqual({});
 
       // The event's own sign-in registers the temporary identity.
       await openCodeFromHome(page, event.code);

@@ -91,31 +91,17 @@ async function chooseRecommendedTime(page, index = 0) {
   return chip;
 }
 
-// Clicks "Review attendance" until the preview lands. The Finalize step
-// re-keys when a pick changes, so a click made right after can be dropped by
-// slower engines (seen on WebKit); the preview is read-only, so retrying is
-// safe.
-async function reviewAttendance(page) {
-  const notice = page.getByText(
-    "Attendance review is current for this candidate.",
-  );
-  await expect
-    .poll(
-      async () => {
-        if (await notice.isVisible()) return true;
-        await page.getByRole("button", { name: "Review attendance" }).click();
-        return notice.isVisible();
-      },
-      { timeout: 20_000, intervals: [500, 1000, 2000] },
-    )
-    .toBe(true);
+// The Finalize step reads a picked time's attendance on its own; its
+// Finalize button stays disabled until that reading is current.
+async function waitForAttendanceReview(page) {
+  await expect(
+    page.getByText("Attendance review is current for this candidate."),
+  ).toBeVisible({ timeout: 20_000 });
 }
 
 async function finalizeCurrentSelection(page, eventCode) {
-  await page.getByRole("button", { name: "Review attendance" }).click();
-  await expect(
-    page.getByText("Attendance review is current for this candidate."),
-  ).toBeVisible();
+  // The attendance is read as soon as the time is picked.
+  await waitForAttendanceReview(page);
   // The count tiles are backed by a per-person breakdown.
   await expect(
     page
@@ -158,15 +144,14 @@ async function finalizeCurrentSelection(page, eventCode) {
   ).toBeVisible();
 }
 
-// The revision the Results panel says it is current at, or -1 while it is
-// still updating.
+// The revision the Time Table is current at, or -1 while it is still
+// updating.
 async function currentResultsRevision(page) {
-  const text = await page
-    .getByText(/Results are current at revision \d+/)
-    .textContent({ timeout: 500 })
-    .catch(() => "");
-  const match = String(text || "").match(/revision (\d+)/);
-  return match ? Number(match[1]) : -1;
+  const revision = await page
+    .locator('[data-results-status="fresh"]')
+    .getAttribute("data-results-revision", { timeout: 500 })
+    .catch(() => null);
+  return revision === null ? -1 : Number(revision);
 }
 
 // The lifecycle controls in the workspace header (status badge, Close
@@ -175,8 +160,16 @@ function eventControls(page) {
   return page.getByRole("region", { name: "Event controls" });
 }
 
-// Clicks a lifecycle button in the workspace header and returns the
-// lifecycle response, so callers can assert its status and payload.
+// The confirmation Close responses and Archive event put first, by the
+// button that opens it; its confirm button repeats that button's name.
+const LIFECYCLE_CONFIRMATIONS = {
+  "Close responses": "Close responses?",
+  "Archive event": "Archive this event?",
+};
+
+// Clicks a lifecycle button in the workspace header, confirms the change when
+// it asks first (closing and archiving do), and returns the lifecycle
+// response, so callers can assert its status and payload.
 async function clickLifecycleButton(page, name, eventCode) {
   const response = page.waitForResponse(
     (candidate) =>
@@ -184,6 +177,13 @@ async function clickLifecycleButton(page, name, eventCode) {
       candidate.url().includes(`/events/lifecycle?code=${eventCode}`),
   );
   await eventControls(page).getByRole("button", { name, exact: true }).click();
+  const confirmation = LIFECYCLE_CONFIRMATIONS[name];
+  if (confirmation) {
+    await page
+      .getByRole("dialog", { name: confirmation })
+      .getByRole("button", { name, exact: true })
+      .click();
+  }
   return response;
 }
 
@@ -284,10 +284,10 @@ module.exports = {
   overviewDetail,
   overviewTile,
   pickCell,
-  reviewAttendance,
   selectedCells,
   unselectedCells,
   updateRoutePattern,
-  wakeLiveSync,
+  waitForAttendanceReview,
   waitForAutosave,
+  wakeLiveSync,
 };

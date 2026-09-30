@@ -2,7 +2,6 @@ from django import forms
 from django.contrib import admin, messages
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from apps.authn.services.contacts.contact_emails import make_contact_email_primary
@@ -10,7 +9,6 @@ from apps.authn.services.email.challenges import AuthChallengeInvalid
 from apps.core.admin import BaseModelAdmin
 
 from ....models import ContactEmail, Member
-from ..helpers import changeable_accounts, may_change_account
 
 PRIMARY_EMAIL_EDIT_ERROR = _(
     "The current primary email's owner, address, and type cannot be edited directly. "
@@ -22,7 +20,6 @@ PRIMARY_EMAIL_DELETE_ERROR = _(
 PRIMARY_EMAIL_PROMOTION_ERROR = _(
     "A primary email cannot be assigned directly. Use the 'Make selected email primary' action."
 )
-PRIVILEGED_EMAIL_ERROR = _("Only a superuser can change a staff or superuser account's emails.")
 
 
 def _primary_identity_changed(current, candidate) -> bool:
@@ -103,38 +100,10 @@ class ContactEmailAdmin(BaseModelAdmin):
                     readonly.append(field)
         return readonly
 
-    @staticmethod
-    def _may_change_owner(request, obj):
-        # An email of a staff or superuser account signs in to the admin, so only
-        # a superuser may change another privileged account's emails.
-        return obj.member is None or may_change_account(request.user, obj.member)
-
-    def _changeable_emails(self, request, queryset):
-        # The bulk actions skip another privileged account's emails too.
-        if request.user.is_superuser:
-            return queryset
-        return queryset.filter(
-            Q(member__isnull=True)
-            | Q(member__in=changeable_accounts(request.user, Member.objects.all()))
-        )
-
-    def has_change_permission(self, request, obj=None):
-        if obj is not None and not self._may_change_owner(request, obj):
-            return False
-        return super().has_change_permission(request, obj)
-
     def has_delete_permission(self, request, obj=None):
-        if obj is not None and (
-            obj.email_type == "primary" or not self._may_change_owner(request, obj)
-        ):
+        if obj is not None and obj.email_type == "primary":
             return False
         return super().has_delete_permission(request, obj)
-
-    def formfield_for_foreignkey(self, db_field, request, **kwargs):
-        # Nor may a non-superuser attach a new email to another privileged account.
-        if db_field.name == "member" and not request.user.is_superuser:
-            kwargs["queryset"] = changeable_accounts(request.user, Member.objects.all())
-        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     def save_model(self, request, obj, form, change):
         if not change:
@@ -208,9 +177,6 @@ class ContactEmailAdmin(BaseModelAdmin):
                 level=messages.ERROR,
             )
             return
-        if not self._may_change_owner(request, contact_email):
-            self.message_user(request, PRIVILEGED_EMAIL_ERROR, level=messages.ERROR)
-            return
 
         try:
             updated = make_contact_email_primary(
@@ -229,21 +195,20 @@ class ContactEmailAdmin(BaseModelAdmin):
 
     @admin.action(description="Mark selected emails as verified")
     def mark_verified(self, request, queryset):
-        updated = self._changeable_emails(request, queryset).update(verified=True)
+        updated = queryset.update(verified=True)
         self.message_user(request, f"{updated} email(s) marked as verified.")
 
     @admin.action(description="Mark selected emails as unverified")
     def mark_unverified(self, request, queryset):
-        updated = self._changeable_emails(request, queryset).update(verified=False)
+        updated = queryset.update(verified=False)
         self.message_user(request, f"{updated} email(s) marked as unverified.")
 
     @admin.action(description="Toggle subscription status")
     def toggle_subscribe(self, request, queryset):
-        emails = list(self._changeable_emails(request, queryset))
-        for email in emails:
+        for email in queryset:
             email.subscribe = not email.subscribe
             email.save()
         self.message_user(
             request,
-            f"Toggled subscription for {len(emails)} email(s).",
+            f"Toggled subscription for {queryset.count()} email(s).",
         )

@@ -11,7 +11,7 @@ const {
   beforeUnloadIsBlocked,
   createEvent,
   differentCode,
-  expireResendCooldown,
+  emailsSentTo,
   finalizeViaApi,
   freshResults,
   invitationLinkFromEmail,
@@ -37,25 +37,30 @@ const {
 const { joinEventInBrowser } = require("./helpers/workspace");
 
 // Temporary event access from the invited person's side: the invitation
-// link and its emailed code (the token's trip from the address bar into the
-// tab, wrong, superseded and throttled codes, the neutral request-code API),
-// the event-scoped session cookie (resume, scope, Origin checks), the
-// temporary editor (painting, both channels, conflicts, failed saves),
-// signing out, the ways access ends, the upgrade page's error states, and
-// the participant pages at 320px. Organizers, events and invitations are
-// seeded through the API; the browser drives the behaviour under test.
+// link, which opens the schedule by itself (the token's trip from the address
+// bar into the tab, a link that is not active, a failed or throttled open,
+// the uniform open API), the event-scoped session cookie (resume, scope,
+// Origin checks), the temporary editor (painting, both channels, conflicts,
+// failed saves), signing out, the ways access ends, the upgrade page's error
+// states, and the participant pages at 320px. Organizers, events and
+// invitations are seeded through the API; the browser drives the behaviour
+// under test.
 
 const TEMP_COOKIE = "releviz_temp_event";
 const TEMP_COOKIE_LIFETIME_S = 7 * 24 * 60 * 60;
-const CODE_SENT =
-  "If this access link is valid, a six-digit code has been sent to its email address.";
-const REQUEST_ACCEPTED =
-  "If this access link is valid, a verification code has been sent.";
-const WRONG_CODE =
-  "That code could not be verified. Check the code or request a new one.";
-const TOO_MANY_ATTEMPTS =
-  "Too many attempts. Request a new code after waiting a moment.";
-const SIX_DIGITS = "Enter the six-digit code from your email.";
+// A link that matches no live temporary invitation: every cause gets the
+// same answer and the same page.
+const INACTIVE_LINK = "This invitation link isn't active";
+const INACTIVE_LINK_EXPLAINED =
+  "It may have been replaced by a newer invitation, or the organizer changed the address it was sent to. Ask the organizer to send it again, or sign in if you have a Releviz account.";
+const INACTIVE_BODY = {
+  error: "This invitation link is not active.",
+  errorCode: "temp_invitation_inactive",
+};
+const OPEN_FAILED_TITLE = "Invitation not opened";
+const OPEN_FAILED =
+  "We could not open your invitation. Check your connection and try again.";
+const OPEN_THROTTLED = "Too many attempts. Wait a moment and try again.";
 const LINK_REQUIRED = "Access link required";
 const OPEN_THE_LINK =
   "Open the temporary access link in your invitation email.";
@@ -107,8 +112,16 @@ async function tempCookie(context) {
 const SAVE_ROUTE = /\/events\/temp-access\/participant\?/;
 const SESSION_ROUTE = /\/events\/temp-access\/session\?/;
 const LOGOUT_ROUTE = /\/events\/temp-access\/logout$/;
-const REQUEST_CODE_ROUTE = /\/events\/temp-access\/request-code$/;
-const VERIFY_ROUTE = /\/events\/temp-access\/verify$/;
+const OPEN_ROUTE = /\/events\/temp-access\/open$/;
+
+function isOpen(request) {
+  return request.method() === "POST" && OPEN_ROUTE.test(request.url());
+}
+
+// The next answer to opening an invitation link (POST events/temp-access/open).
+function nextOpen(page) {
+  return page.waitForResponse((response) => isOpen(response.request()));
+}
 
 function isTempSave(request) {
   return request.method() === "PUT" && SAVE_ROUTE.test(request.url());
@@ -245,21 +258,16 @@ async function inviteTemporaryPerson(request, token, event, name, email) {
   return { path, invitation };
 }
 
-// Opens an invitation link and verifies the emailed code. Returns the code.
-async function openTemporaryAccess(page, event, email, path, name) {
-  const requestedAt = Date.now() - 1000;
+// Opens an invitation link, which by itself opens the person's schedule.
+// Resolves to the open request's answer.
+async function openTemporaryAccess(page, event, path, name) {
+  const opened = nextOpen(page);
   await page.goto(path);
-  await expect(heading(page, "Check your email")).toBeVisible();
-  const code = await latestVerificationCode(
-    email,
-    requestedAt,
-    "temp_event_access",
-  );
-  await page.getByLabel("Verification code").fill(code);
-  await page.getByRole("button", { name: "Verify and open schedule" }).click();
+  const response = await opened;
+  expect(response.status()).toBe(200);
   await expect(heading(page, event.name)).toBeVisible();
   await expect(page.getByText(`You are responding as ${name}`)).toBeVisible();
-  return code;
+  return response;
 }
 
 // This person's temporary sessions on one event (Django read).
@@ -313,33 +321,50 @@ assert updated >= 1, updated
   );
 }
 
-// Moves this person's pending temporary-access code past its expiry, as if
-// ten minutes had gone by. Only this test's own challenge is written.
-function expireTempAccessCode(email) {
-  runDjangoScript(
+// How many emailed codes were ever issued to these addresses for temporary
+// access (opening a link issues none).
+function tempAccessChallenges(emails) {
+  return runDjangoJson(
     `
-from datetime import timedelta
-
-from django.utils import timezone
-
 from apps.authn.models import EmailAuthChallenge
 
-updated = EmailAuthChallenge.objects.filter(
-    target_email__iexact=data["email"],
-    purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
-    status=EmailAuthChallenge.Status.PENDING,
-).update(expires_at=timezone.now() - timedelta(seconds=1))
-assert updated == 1, updated
+print(json.dumps({
+    email: EmailAuthChallenge.objects.filter(
+        target_email__iexact=email,
+        purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
+    ).count()
+    for email in data["emails"]
+}))
+`,
+    { emails },
+  );
+}
+
+// The account behind this address: its names, whether it has a password
+// and whether it is still temporary.
+function accountDetails(email) {
+  return runDjangoJson(
+    `
+from apps.authn.models import ContactEmail
+
+member = ContactEmail.objects.select_related("member").get(
+    email_address__iexact=data["email"]
+).member
+print(json.dumps({
+    "firstName": member.first_name,
+    "lastName": member.last_name,
+    "usablePassword": member.has_usable_password(),
+    "accessLevel": member.access_level,
+}))
 `,
     { email },
   );
 }
 
-// Fills one temporary-access quota ("temp_access_code_request" or
-// "temp_access_code_verify") for this event and link to its configured
-// limit, so the next real request crosses the threshold; `clear` removes the
-// bucket again. Only this test's own (event, link) bucket is written, never
-// the per-IP budget every test shares.
+// Fills the temporary-access open quota ("temp_access_open") for this event
+// and link to its configured limit, so the next real request crosses the
+// threshold; `clear` removes the bucket again. Only this test's own (event,
+// link) bucket is written, never the per-IP budget every test shares.
 function setTempAccessQuota(scope, code, token, { clear = false } = {}) {
   return runDjangoJson(
     `
@@ -403,7 +428,7 @@ function tempEditorControls(page) {
   };
 }
 
-test.describe("Temporary access link and code", () => {
+test.describe("Temporary access link", () => {
   test("a missing link, a code with no invitation or session, and an unknown invitation all reveal nothing about the event", async ({
     page,
     request,
@@ -429,36 +454,33 @@ test.describe("Temporary access link and code", () => {
       ).toBeVisible();
     }
 
-    // An invitation token the server does not know still gets the neutral
-    // code step, and no code it could send would open anything.
-    const requested = page.waitForResponse(
-      (response) =>
-        REQUEST_CODE_ROUTE.test(response.url()) &&
-        response.request().method() === "POST",
-    );
+    // An invitation token the server does not know opens nothing, and the
+    // page says so without naming the event or the reason.
+    const opened = nextOpen(page);
     await page.goto(
       `/temp-access?code=${event.code}&invitation=${randomUUID()}`,
     );
-    expect((await requested).status()).toBe(202);
-    await expect(heading(page, "Check your email")).toBeVisible();
-    await expect(mainStatus(page, CODE_SENT)).toHaveText(CODE_SENT);
-    const field = page.getByLabel("Verification code");
-    await field.fill("123456");
-    await page
-      .getByRole("button", { name: "Verify and open schedule" })
-      .click();
-    await expect(field).toHaveAccessibleDescription(WRONG_CODE);
+    const answer = await opened;
+    expect(answer.status()).toBe(404);
+    expect(await answer.json()).toEqual(INACTIVE_BODY);
+    await expect(heading(page, INACTIVE_LINK)).toBeVisible();
+    await expect(
+      page.getByText(INACTIVE_LINK_EXPLAINED, { exact: true }),
+    ).toBeVisible();
+    await expect(page).toHaveURL(
+      new RegExp(`/temp-access\\?code=${event.code}$`),
+    );
+    await expect(page.getByRole("heading", { name: event.name })).toHaveCount(
+      0,
+    );
   });
 
-  test("an invitation link moves its token from the address bar into this tab, and the emailed code opens the event with an HttpOnly event cookie, one session and an accepted invitation", async ({
+  test("an invitation link moves its token from the address bar into this tab and opens the event by itself, with an HttpOnly event cookie, one session and an opened invitation that the person's own first save accepts", async ({
     browser,
     request,
   }) => {
-    const { runId, token, event } = await organizerEvent(
-      request,
-      "temp-verify",
-    );
-    const email = `temp-verify-tia-${runId}@example.com`;
+    const { runId, token, event } = await organizerEvent(request, "temp-open");
+    const email = `temp-open-tia-${runId}@example.com`;
     const { path, invitation } = await inviteTemporaryPerson(
       request,
       token,
@@ -473,61 +495,37 @@ test.describe("Temporary access link and code", () => {
     const context = await browser.newContext();
     try {
       const page = await context.newPage();
-      const firstRequest = page.waitForRequest(
-        (sent) =>
-          REQUEST_CODE_ROUTE.test(sent.url()) && sent.method() === "POST",
-      );
-      const requestedAt = Date.now() - 1000;
+      // The open is held, so the page can be seen while it is on its way.
+      const heldOpens = [];
+      const holdFirstOpen = (route) => {
+        if (route.request().method() === "POST" && heldOpens.length === 0) {
+          heldOpens.push(route);
+        } else {
+          route.fallback();
+        }
+      };
+      await page.route(OPEN_ROUTE, holdFirstOpen);
+      const openedAt = Date.now();
       await page.goto(path);
-      expect((await firstRequest).postDataJSON()).toEqual({
+      await expect.poll(() => heldOpens.length).toBe(1);
+      expect(heldOpens[0].request().postDataJSON()).toEqual({
         code: event.code,
         invitationToken: invitation,
       });
-      await expect(heading(page, "Check your email")).toBeVisible();
-      await expect(mainStatus(page, CODE_SENT)).toHaveText(CODE_SENT);
-      await expect(
-        page.getByText(
-          "This verification only grants access to this event. It does not sign you in to a full Releviz account.",
-        ),
-      ).toBeVisible();
+      await expect(heading(page, "Opening event access…")).toBeVisible();
+      await expect(page.getByText("Opening your invitation…")).toBeVisible();
       // The token leaves the address bar (and so the history and any
       // shared screenshot) and waits in this tab's session storage.
       await expect(page).toHaveURL(
         new RegExp(`/temp-access\\?code=${event.code}$`),
       );
       expect(await storedInvitation(page, event.code)).toBe(invitation);
-      const code = await latestVerificationCode(
-        email,
-        requestedAt,
-        "temp_event_access",
-      );
-
-      // Opening the link marks the invitation opened, but nothing is
-      // accepted and no session exists until the code is entered.
-      let invited = await invitationFor(request, token, event.code, email);
-      expect(invited.status).toBe("opened");
-      expect(invited.openedAt).toBeTruthy();
-      expect(invited.acceptedAt).toBeNull();
-      expect(
-        (await rosterByEmail(request, event.code, token)).get(email)
-          .invitationStatus,
-      ).toBe("sent");
+      // Nothing is opened or signed in until the server answers.
       expect(tempSessions(email, event.code)).toEqual([]);
       expect(await tempCookie(context)).toBeUndefined();
-
-      // A reload reads the token back from session storage.
-      const reloadRequest = page.waitForRequest(
-        (sent) =>
-          REQUEST_CODE_ROUTE.test(sent.url()) && sent.method() === "POST",
-      );
-      await page.reload();
-      expect((await reloadRequest).postDataJSON().invitationToken).toBe(
-        invitation,
-      );
-      await expect(heading(page, "Check your email")).toBeVisible();
-      await expect(page).toHaveURL(
-        new RegExp(`/temp-access\\?code=${event.code}$`),
-      );
+      expect(
+        (await invitationFor(request, token, event.code, email)).status,
+      ).toBe("invited");
 
       // Session storage belongs to the tab: another tab has no token and
       // no session, so it only asks for the link.
@@ -536,23 +534,12 @@ test.describe("Temporary access link and code", () => {
       await expect(heading(otherTab, LINK_REQUIRED)).toBeVisible();
       await otherTab.close();
 
-      const verified = page.waitForResponse(
-        (response) =>
-          VERIFY_ROUTE.test(response.url()) &&
-          response.request().method() === "POST",
-      );
-      await page.getByLabel("Verification code").fill(code);
-      await page
-        .getByRole("button", { name: "Verify and open schedule" })
-        .click();
-      const verifiedResponse = await verified;
-      expect(verifiedResponse.status()).toBe(200);
-      expect(verifiedResponse.request().postDataJSON()).toEqual({
-        code: event.code,
-        invitationToken: invitation,
-        verificationCode: code,
-      });
-      const payload = await verifiedResponse.json();
+      const opened = nextOpen(page);
+      await heldOpens[0].continue();
+      const openedResponse = await opened;
+      await page.unroute(OPEN_ROUTE, holdFirstOpen);
+      expect(openedResponse.status()).toBe(200);
+      const payload = await openedResponse.json();
       expect(payload.email).toBe(email);
       expect(payload.event.code).toBe(event.code);
       expect(payload.participant.name).toBe("Tia Temporary");
@@ -565,6 +552,9 @@ test.describe("Temporary access link and code", () => {
           .getByRole("navigation", { name: "Site" })
           .getByText("Temporary event access"),
       ).toBeVisible();
+      // The link was the credential: nothing was emailed and no code issued.
+      expect(await emailsSentTo(email, openedAt)).toEqual([]);
+      expect(tempAccessChallenges([email])).toEqual({ [email]: 0 });
 
       // The token is gone from the tab once it has done its job.
       expect(await storedInvitation(page, event.code)).toBeNull();
@@ -595,9 +585,43 @@ test.describe("Temporary access link and code", () => {
       expect(session.status).toBe(200);
       expect(session.payload.email).toBe(email);
 
-      // The organizer sees the invitation accepted.
+      // Opening records that the link was opened. It is not an acceptance:
+      // the organizer still sees the invitation as sent.
+      let invited = await invitationFor(request, token, event.code, email);
+      expect(invited.status).toBe("opened");
+      expect(invited.openedAt).toBeTruthy();
+      expect(invited.acceptedAt).toBeNull();
+      expect(
+        (await rosterByEmail(request, event.code, token)).get(email)
+          .invitationStatus,
+      ).toBe("sent");
+
+      // A reload resumes from the cookie without opening the link again.
+      const opens = requestRecorder(page, isOpen);
+      await page.reload();
+      await expect(
+        page.getByText("You are responding as Tia Temporary"),
+      ).toBeVisible();
+      expect(opens.entries).toEqual([]);
+
+      // Opening the same link again in this browser keeps its session and
+      // its cookie.
+      await openTemporaryAccess(page, event, path, "Tia Temporary");
+      expect(tempSessions(email, event.code)).toHaveLength(1);
+      expect((await tempCookie(context))?.value).toBe(cookie.value);
+      expect(
+        (await invitationFor(request, token, event.code, email)).openedAt,
+      ).toBe(invited.openedAt);
+
+      // The person's own first save is what accepts the invitation.
+      const saved = nextTempSave(page);
+      await page
+        .getByRole("grid", { name: "Availability" })
+        .locator('[data-cell-idx="0"]')
+        .click();
+      expect((await saved).status()).toBe(200);
       invited = await invitationFor(request, token, event.code, email);
-      expect(invited.status).toBe("joined");
+      expect(invited.status).toBe("draft_saved");
       expect(invited.acceptedAt).toBeTruthy();
       expect(
         (await rosterByEmail(request, event.code, token)).get(email)
@@ -608,174 +632,98 @@ test.describe("Temporary access link and code", () => {
     }
   });
 
-  test("the code step keeps six digits, refuses short, wrong, superseded, expired and throttled codes, recovers from a failed send, and a fresh code still opens the event", async ({
+  test("an open that fails on the way or is throttled says so and keeps the link, a reload reads it back, and Try again opens the event once it can", async ({
     browser,
     request,
   }) => {
-    const { runId, token, event } = await organizerEvent(request, "temp-codes");
-    const email = `temp-codes-cai-${runId}@example.com`;
+    const { runId, token, event } = await organizerEvent(request, "temp-retry");
+    const email = `temp-retry-cai-${runId}@example.com`;
     const { path, invitation } = await inviteTemporaryPerson(
       request,
       token,
       event,
-      "Cai Codes",
+      "Cai Retry",
       email,
     );
 
     const context = await browser.newContext();
     try {
       const page = await context.newPage();
-      const verifyRequests = requestRecorder(
-        page,
-        (sent) => sent.method() === "POST" && VERIFY_ROUTE.test(sent.url()),
-      );
-      const field = page.getByLabel("Verification code");
-      const verify = page.getByRole("button", {
-        name: "Verify and open schedule",
-      });
-      const sendNew = page.getByRole("button", { name: "Send a new code" });
+      const tryAgain = page.getByRole("button", { name: "Try again" });
 
-      // The automatic request fails: the page says so and offers a resend.
-      await page.route(
-        REQUEST_CODE_ROUTE,
-        failRequests("POST", 503, { detail: "Service unavailable." }),
-      );
+      // The first open fails on the way: the page keeps the link and offers
+      // to try again. The handler fails one open each time it is armed.
+      let failNextOpen = true;
+      const failArmedOpen = async (route) => {
+        if (route.request().method() === "POST" && failNextOpen) {
+          failNextOpen = false;
+          await fulfillError(route, 503, { detail: "Service unavailable." });
+          return;
+        }
+        await route.fallback();
+      };
+      await page.route(OPEN_ROUTE, failArmedOpen);
       await page.goto(path);
-      await expect(heading(page, "Check your email")).toBeVisible();
-      await expect(
-        mainAlert(
-          page,
-          "We could not start verification. Try sending the code again.",
-        ),
-      ).toBeVisible();
-      await page.unroute(REQUEST_CODE_ROUTE);
-      let sentAt = Date.now() - 1000;
-      await sendNew.click();
-      await expect(mainStatus(page, CODE_SENT)).toHaveText(CODE_SENT);
-      const firstCode = await latestVerificationCode(
-        email,
-        sentAt,
-        "temp_event_access",
+      await expect(heading(page, OPEN_FAILED_TITLE)).toBeVisible();
+      await expect(mainAlert(page, OPEN_FAILED)).toBeVisible();
+      await expect(tryAgain).toBeFocused();
+      await expect(page).toHaveURL(
+        new RegExp(`/temp-access\\?code=${event.code}$`),
       );
+      expect(await storedInvitation(page, event.code)).toBe(invitation);
+      expect(tempSessions(email, event.code)).toEqual([]);
 
-      // Only digits are kept, and at most six.
-      await field.fill("12ab34");
-      await expect(field).toHaveValue("1234");
-      await field.fill("");
-      await field.pressSequentially("98-76 543");
-      await expect(field).toHaveValue("987654");
-
-      // A short code is stopped by the field's own validation before any
-      // request; without that validation the page's own check says so.
-      await field.fill("1234");
-      await verify.click();
-      expect(await field.evaluate((input) => input.validity.valid)).toBe(false);
-      await expect(page.getByText(SIX_DIGITS)).toHaveCount(0);
-      // Submitted from script: after a refused click, Firefox spends the next
-      // click on its validation message instead of the button.
-      await page
-        .getByRole("main")
-        .locator("form")
-        .evaluate((form) => {
-          form.noValidate = true;
-          form.requestSubmit();
-        });
-      await expect(field).toHaveAccessibleDescription(SIX_DIGITS);
-      await expect(field).toHaveAttribute("aria-invalid", "true");
-      expect(verifyRequests.entries).toEqual([]);
-
-      // A wrong code.
-      await field.fill(differentCode(firstCode));
-      await verify.click();
-      await expect(field).toHaveAccessibleDescription(WRONG_CODE);
-      await expect(heading(page, "Check your email")).toBeVisible();
-
-      // A new code clears the error and supersedes the first one.
-      expireResendCooldown(email);
-      sentAt = Date.now() - 1000;
-      await sendNew.click();
-      await expect(page.getByText(WRONG_CODE)).toHaveCount(0);
-      await expect(mainStatus(page, CODE_SENT)).toHaveText(CODE_SENT);
-      const secondCode = await latestVerificationCode(
-        email,
-        sentAt,
-        "temp_event_access",
-        { notCode: firstCode },
+      // A reload reads the kept link back from this tab's session storage
+      // and opens it again from a fresh document, without the token in the
+      // address bar; the failure is replayed, so nothing opens yet.
+      failNextOpen = true;
+      const reloaded = page.waitForRequest(isOpen);
+      await page.reload();
+      expect((await reloaded).postDataJSON()).toEqual({
+        code: event.code,
+        invitationToken: invitation,
+      });
+      await expect(heading(page, OPEN_FAILED_TITLE)).toBeVisible();
+      await expect(mainAlert(page, OPEN_FAILED)).toBeVisible();
+      await expect(page).toHaveURL(
+        new RegExp(`/temp-access\\?code=${event.code}$`),
       );
-      await field.fill(firstCode);
-      await verify.click();
-      await expect(field).toHaveAccessibleDescription(WRONG_CODE);
+      expect(await storedInvitation(page, event.code)).toBe(invitation);
+      expect(tempSessions(email, event.code)).toEqual([]);
+      await page.unroute(OPEN_ROUTE, failArmedOpen);
 
-      // The current code, once it has expired, is refused the same way. The
-      // field already shows that message, so the answer is awaited first.
-      expireTempAccessCode(email);
-      const expiredVerify = page.waitForResponse(
-        (response) =>
-          VERIFY_ROUTE.test(response.url()) &&
-          response.request().method() === "POST",
-      );
-      await field.fill(secondCode);
-      await verify.click();
-      expect((await expiredVerify).ok()).toBe(false);
-      await expect(field).toHaveAccessibleDescription(WRONG_CODE);
-      await expect(heading(page, "Check your email")).toBeVisible();
-
-      // Too many requests for this link: the resend says it failed.
+      // Too many opens of this link: Try again says to wait, and opens
+      // nothing.
       expect(
-        setTempAccessQuota("temp_access_code_request", event.code, invitation),
+        setTempAccessQuota("temp_access_open", event.code, invitation),
       ).toBeGreaterThan(0);
-      const throttledSend = page.waitForResponse(
-        (response) =>
-          REQUEST_CODE_ROUTE.test(response.url()) &&
-          response.request().method() === "POST",
+      const throttled = nextOpen(page);
+      await tryAgain.click();
+      const throttledAnswer = await throttled;
+      expect(throttledAnswer.status()).toBe(429);
+      expect(Number(throttledAnswer.headers()["retry-after"])).toBeGreaterThan(
+        0,
       );
-      await sendNew.click();
-      expect((await throttledSend).status()).toBe(429);
-      await expect(
-        mainAlert(
-          page,
-          "We could not send a new code. Wait a moment and try again.",
-        ),
-      ).toBeVisible();
+      await expect(heading(page, OPEN_FAILED_TITLE)).toBeVisible();
+      await expect(mainAlert(page, OPEN_THROTTLED)).toBeVisible();
+      expect(tempSessions(email, event.code)).toEqual([]);
+      expect(
+        (await invitationFor(request, token, event.code, email)).status,
+      ).toBe("invited");
 
-      // Once that quota lapses a third code arrives.
-      setTempAccessQuota("temp_access_code_request", event.code, invitation, {
+      // Once that quota lapses, Try again opens the event with the link it
+      // kept.
+      setTempAccessQuota("temp_access_open", event.code, invitation, {
         clear: true,
       });
-      expireResendCooldown(email);
-      sentAt = Date.now() - 1000;
-      await sendNew.click();
-      await expect(mainStatus(page, CODE_SENT)).toHaveText(CODE_SENT);
-      const thirdCode = await latestVerificationCode(
-        email,
-        sentAt,
-        "temp_event_access",
-        { notCode: secondCode },
-      );
-
-      // Too many verifications for this link: even the right code is
-      // refused, and it is not used up.
-      setTempAccessQuota("temp_access_code_verify", event.code, invitation);
-      const throttledVerify = page.waitForResponse(
-        (response) =>
-          VERIFY_ROUTE.test(response.url()) &&
-          response.request().method() === "POST",
-      );
-      await field.fill(thirdCode);
-      await verify.click();
-      expect((await throttledVerify).status()).toBe(429);
-      await expect(field).toHaveAccessibleDescription(TOO_MANY_ATTEMPTS);
-      await expect(heading(page, "Check your email")).toBeVisible();
-
-      // Once that quota lapses too, the third code opens the event.
-      setTempAccessQuota("temp_access_code_verify", event.code, invitation, {
-        clear: true,
-      });
-      await verify.click();
+      const opened = nextOpen(page);
+      await tryAgain.click();
+      expect((await opened).status()).toBe(200);
       await expect(heading(page, event.name)).toBeVisible();
       await expect(
-        page.getByText("You are responding as Cai Codes"),
+        page.getByText("You are responding as Cai Retry"),
       ).toBeVisible();
+      expect(await storedInvitation(page, event.code)).toBeNull();
       expect(tempSessions(email, event.code)).toHaveLength(1);
     } finally {
       await context.close();
@@ -784,8 +732,9 @@ test.describe("Temporary access link and code", () => {
 });
 
 test.describe("Temporary access API", () => {
-  test("request-code answers every link alike and only emails a sent invitation to an active temporary identity; verify refuses the rest alike; both are throttled per event and link", async ({
+  test("open answers every link that is not a live temporary invitation with the same 404 and opens nothing, opens a sent one, emails nobody, and is throttled per event and link", async ({
     browserName,
+    playwright,
     request,
   }) => {
     test.skip(
@@ -846,63 +795,60 @@ print(json.dumps({
     );
     expect(unsentSent).toBe(false);
 
-    const requestCode = (body) =>
-      request.post(`${BACKEND_URL}/events/temp-access/request-code`, {
-        maxRetries: STALE_SOCKET_RETRIES,
-        data: body,
-      });
-    const verifyCode = (body) =>
-      request.post(`${BACKEND_URL}/events/temp-access/verify`, {
-        maxRetries: STALE_SOCKET_RETRIES,
-        data: body,
-      });
+    // A fresh request context per call, so no cookie from an earlier open
+    // rides along.
+    const openLink = async (body) => {
+      const client = await playwright.request.newContext();
+      try {
+        const response = await client.post(
+          `${BACKEND_URL}/events/temp-access/open`,
+          { maxRetries: STALE_SOCKET_RETRIES, data: body },
+        );
+        return {
+          status: response.status(),
+          payload: await response.json(),
+          headers: response.headers(),
+        };
+      } finally {
+        await client.dispose();
+      }
+    };
 
-    const links = {
+    const openedAt = Date.now();
+    const refusedLinks = {
       "an unknown event": { code: "NOPE0000", invitationToken: sentToken },
       "a malformed token": { code, invitationToken: "not-a-token" },
       "an unknown token": { code, invitationToken: randomUUID() },
       "an unsent invitation": { code, invitationToken: unsentToken },
       "a full account's invitation": { code, invitationToken: fullToken },
       "an inactive identity": { code, invitationToken: inactiveToken },
-      "a sent invitation": { code, invitationToken: sentToken },
     };
-    for (const [what, body] of Object.entries(links)) {
-      const response = await requestCode(body);
-      expect(response.status(), what).toBe(202);
-      expect(await response.json(), what).toEqual({
-        message: REQUEST_ACCEPTED,
-      });
-      expect(response.headers()["cache-control"], what).toMatch(/no-store/);
-      expect(response.headers()["cache-control"], what).toMatch(/private/);
+    for (const [what, body] of Object.entries(refusedLinks)) {
+      const response = await openLink(body);
+      expect(response.status, what).toBe(404);
+      expect(response.payload, what).toEqual(INACTIVE_BODY);
+      expect(response.headers["cache-control"], what).toMatch(/no-store/);
+      expect(response.headers["cache-control"], what).toMatch(/private/);
+      expect(response.headers["set-cookie"], what).toBeUndefined();
+    }
+    // None of them was marked opened.
+    for (const email of [unsentEmail, fullEmail, inactiveEmail]) {
+      expect((await invitationFor(request, token, code, email)).status).toBe(
+        "invited",
+      );
     }
 
-    // Only the sent invitation to an active temporary identity got a code
-    // and was marked opened.
-    const challengeCounts = runDjangoJson(
-      `
-from apps.authn.models import EmailAuthChallenge
-
-print(json.dumps({
-    email: EmailAuthChallenge.objects.filter(
-        target_email__iexact=email,
-        purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
-    ).count()
-    for email in data["emails"]
-}))
-`,
-      { emails: [sentEmail, unsentEmail, fullEmail, inactiveEmail] },
+    // The sent invitation to an active temporary identity opens: a session
+    // and its cookie, and the invitation is marked opened.
+    const opened = await openLink({ code, invitationToken: sentToken });
+    expect(opened.status).toBe(200);
+    expect(opened.payload.email).toBe(sentEmail);
+    expect(opened.payload.participant.name).toBe("Sid Sent");
+    expect(opened.headers["cache-control"]).toMatch(/no-store/);
+    expect(opened.headers["set-cookie"]).toMatch(
+      new RegExp(`^${TEMP_COOKIE}=`),
     );
-    expect(challengeCounts).toEqual({
-      [sentEmail]: 1,
-      [unsentEmail]: 0,
-      [fullEmail]: 0,
-      [inactiveEmail]: 0,
-    });
-    const sentCode = await latestVerificationCode(
-      sentEmail,
-      invitedAt,
-      "temp_event_access",
-    );
+    expect(tempSessions(sentEmail, code)).toMatchObject([{ active: true }]);
     for (const [email, status] of [
       [sentEmail, "opened"],
       [unsentEmail, "invited"],
@@ -913,153 +859,58 @@ print(json.dumps({
         status,
       );
     }
-
-    // Verify answers every ignored link the same way.
-    for (const [what, body] of Object.entries(links)) {
-      if (what === "a sent invitation") continue;
-      const response = await verifyCode({
-        ...body,
-        verificationCode: sentCode,
-      });
-      expect(response.status(), what).toBe(400);
-      expect(await response.json(), what).toEqual({
-        error: "Invalid or expired verification code.",
-      });
-      expect(response.headers()["set-cookie"], what).toBeUndefined();
-    }
-    // (A wrong code on a valid link is the next test's subject.)
-
-    // Code requests are throttled per event and link. The same link
-    // spelled differently shares the quota; another link does not.
-    setTempAccessQuota("temp_access_code_request", code, sentToken);
-    const throttled = await requestCode({
-      code,
-      invitationToken: sentToken,
+    // No link emails anything or issues a code.
+    expect(
+      tempAccessChallenges([sentEmail, unsentEmail, fullEmail, inactiveEmail]),
+    ).toEqual({
+      [sentEmail]: 0,
+      [unsentEmail]: 0,
+      [fullEmail]: 0,
+      [inactiveEmail]: 0,
     });
-    expect(throttled.status()).toBe(429);
-    expect(Number(throttled.headers()["retry-after"])).toBeGreaterThan(0);
-    const respelled = await requestCode({
+    for (const email of [sentEmail, unsentEmail, fullEmail, inactiveEmail]) {
+      expect(await emailsSentTo(email, openedAt), email).toEqual([]);
+    }
+
+    // Opens are throttled per event and link, whether or not the link is
+    // live. The same link spelled differently shares the quota; another
+    // link does not.
+    setTempAccessQuota("temp_access_open", code, sentToken);
+    const throttled = await openLink({ code, invitationToken: sentToken });
+    expect(throttled.status).toBe(429);
+    expect(Number(throttled.headers["retry-after"])).toBeGreaterThan(0);
+    expect(throttled.headers["set-cookie"]).toBeUndefined();
+    const respelled = await openLink({
       code: code.toLowerCase(),
       invitationToken: sentToken.toUpperCase(),
     });
-    expect(respelled.status()).toBe(429);
+    expect(respelled.status).toBe(429);
     expect(
-      (await requestCode({ code, invitationToken: unsentToken })).status(),
-    ).toBe(202);
-
-    // Verifications have their own quota, which refuses even the right
-    // code without using it up.
-    setTempAccessQuota("temp_access_code_verify", code, sentToken);
-    const throttledVerify = await verifyCode({
+      (await openLink({ code, invitationToken: unsentToken })).status,
+    ).toBe(404);
+    expect(tempSessions(sentEmail, code)).toHaveLength(1);
+    // A link that is not live is rationed the same way, before it is looked
+    // up: once its quota is spent, the 404 gives way to the 429, so a link
+    // cannot be guessed at faster than a real one can be opened.
+    setTempAccessQuota("temp_access_open", code, unsentToken);
+    const unsentThrottled = await openLink({
       code,
-      invitationToken: sentToken,
-      verificationCode: sentCode,
+      invitationToken: unsentToken,
     });
-    expect(throttledVerify.status()).toBe(429);
-    expect(Number(throttledVerify.headers()["retry-after"])).toBeGreaterThan(0);
-    setTempAccessQuota("temp_access_code_request", code, sentToken, {
-      clear: true,
-    });
-    setTempAccessQuota("temp_access_code_verify", code, sentToken, {
-      clear: true,
-    });
-    const verified = await verifyCode({
-      code,
-      invitationToken: sentToken,
-      verificationCode: sentCode,
-    });
-    expect(verified.status()).toBe(200);
-    expect((await verified.json()).email).toBe(sentEmail);
+    expect(unsentThrottled.status).toBe(429);
+    expect(Number(unsentThrottled.headers["retry-after"])).toBeGreaterThan(0);
+    expect(unsentThrottled.headers["set-cookie"]).toBeUndefined();
+    setTempAccessQuota("temp_access_open", code, unsentToken, { clear: true });
+    expect(
+      (await openLink({ code, invitationToken: unsentToken })).status,
+    ).toBe(404);
+    setTempAccessQuota("temp_access_open", code, sentToken, { clear: true });
+    const reopened = await openLink({ code, invitationToken: sentToken });
+    expect(reopened.status).toBe(200);
+    expect(reopened.payload.email).toBe(sentEmail);
   });
 
-  test("a wrong or superseded code on a valid link is refused with the same 400 as an unknown link, and five wrong codes use the code up", async ({
-    browserName,
-    playwright,
-    request,
-  }) => {
-    test.skip(
-      browserName !== "chromium",
-      "API-level test: the browser does not matter, so one project runs it",
-    );
-    // Each wrong code is counted against the code (five use it up), and the
-    // refusal is the one an unknown link gets.
-    const { runId, token, event } = await organizerEvent(request, "temp-wrong");
-    const email = `temp-wrong-wes-${runId}@example.com`;
-    const { invitation } = await inviteTemporaryPerson(
-      request,
-      token,
-      event,
-      "Wes Wrong",
-      email,
-    );
-    const temp = await playwright.request.newContext();
-    try {
-      const post = (path, data) =>
-        temp.post(`${BACKEND_URL}/events/temp-access/${path}`, {
-          data,
-          maxRetries: STALE_SOCKET_RETRIES,
-        });
-      const link = { code: event.code, invitationToken: invitation };
-      let requestedAt = Date.now() - 1000;
-      expect((await post("request-code", link)).status()).toBe(202);
-      const firstCode = await latestVerificationCode(
-        email,
-        requestedAt,
-        "temp_event_access",
-      );
-      expireResendCooldown(email);
-      requestedAt = Date.now() - 1000;
-      expect((await post("request-code", link)).status()).toBe(202);
-      const code = await latestVerificationCode(
-        email,
-        requestedAt,
-        "temp_event_access",
-        { notCode: firstCode },
-      );
-
-      // The superseded code and five wrong ones, then the right one.
-      const answers = [];
-      for (const verificationCode of [
-        firstCode,
-        ...[1, 2, 3, 4].map((step) =>
-          String((Number(code) + step) % 1_000_000).padStart(6, "0"),
-        ),
-      ]) {
-        const response = await post("verify", { ...link, verificationCode });
-        const payload = await response.json().catch(() => null);
-        answers.push({ status: response.status(), error: payload?.error });
-      }
-      const attempts = runDjangoJson(
-        `
-from apps.authn.models import EmailAuthChallenge
-
-challenge = EmailAuthChallenge.objects.filter(
-    target_email__iexact=data["email"],
-    purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
-).order_by("-created_at").first()
-print(json.dumps({"attempts": challenge.attempts, "status": challenge.status}))
-`,
-        { email },
-      );
-      const right = await post("verify", { ...link, verificationCode: code });
-      expect({
-        answers,
-        attempts,
-        right: right.status(),
-      }).toEqual({
-        answers: Array(5).fill({
-          status: 400,
-          error: "Invalid or expired verification code.",
-        }),
-        attempts: { attempts: 5, status: "expired" },
-        right: 400,
-      });
-    } finally {
-      await temp.dispose();
-    }
-  });
-
-  test("verify, saves, sign-out and upgrade registration refuse a foreign Origin, and the verified cookie is HttpOnly, SameSite=Lax and scoped to the temporary-access API", async ({
+  test("open, saves, sign-out and upgrade registration refuse a foreign Origin, and the opened cookie is HttpOnly, SameSite=Lax and scoped to the temporary-access API", async ({
     browserName,
     playwright,
     request,
@@ -1092,41 +943,27 @@ print(json.dumps({"attempts": challenge.attempts, "status": challenge.status}))
         });
         return { status: response.status(), payload: await response.json() };
       };
-      const requestedAt = Date.now() - 1000;
-      expect(
-        (
-          await temp.post(url("request-code"), {
-            maxRetries: STALE_SOCKET_RETRIES,
-            data: { code, invitationToken: invitation },
-          })
-        ).status(),
-      ).toBe(202);
-      const verificationCode = await latestVerificationCode(
-        email,
-        requestedAt,
-        "temp_event_access",
-      );
-      const credentials = {
-        code,
-        invitationToken: invitation,
-        verificationCode,
-      };
+      const link = { code, invitationToken: invitation };
 
       // Login CSRF: a cross-site page cannot plant the event cookie, and the
-      // attempt does not use up the code.
-      let response = await temp.post(url("verify"), {
+      // refused attempt opens nothing.
+      let response = await temp.post(url("open"), {
         maxRetries: STALE_SOCKET_RETRIES,
-        data: credentials,
+        data: link,
         headers: foreign,
       });
       expect(response.status()).toBe(403);
       expect(await response.json()).toEqual(ORIGIN_REFUSED);
       expect(response.headers()["set-cookie"]).toBeUndefined();
       expect((await sessionState()).status).toBe(401);
+      expect(tempSessions(email, code)).toEqual([]);
+      expect((await invitationFor(request, token, code, email)).status).toBe(
+        "invited",
+      );
 
-      response = await temp.post(url("verify"), {
+      response = await temp.post(url("open"), {
         maxRetries: STALE_SOCKET_RETRIES,
-        data: credentials,
+        data: link,
         headers: own,
       });
       expect(response.status()).toBe(200);
@@ -1245,14 +1082,10 @@ test.describe("Temporary session", () => {
     const context = await browser.newContext();
     try {
       const tab = await context.newPage();
-      await openTemporaryAccess(tab, event, piaEmail, pia.path, "Pia Resume");
-      const codeRequests = requestRecorder(
-        tab,
-        (sent) =>
-          sent.method() === "POST" && REQUEST_CODE_ROUTE.test(sent.url()),
-      );
+      await openTemporaryAccess(tab, event, pia.path, "Pia Resume");
+      const opens = requestRecorder(tab, isOpen);
 
-      // A reload resumes from the cookie without asking for a code.
+      // A reload resumes from the cookie without opening the link again.
       const resumed = tab.waitForResponse(
         (response) =>
           SESSION_ROUTE.test(response.url()) &&
@@ -1264,7 +1097,7 @@ test.describe("Temporary session", () => {
       await expect(
         tab.getByText("You are responding as Pia Resume"),
       ).toBeVisible();
-      expect(codeRequests.entries).toEqual([]);
+      expect(opens.entries).toEqual([]);
 
       // So does a second tab, which has no invitation of its own.
       const secondTab = await context.newPage();
@@ -1276,33 +1109,19 @@ test.describe("Temporary session", () => {
       expect(await storedInvitation(secondTab, event.code)).toBeNull();
 
       // Someone else's invitation opened on this device is their identity
-      // choice: it asks for their code instead of reusing Pia's cookie.
-      const quinnRequest = secondTab.waitForRequest(
-        (sent) =>
-          REQUEST_CODE_ROUTE.test(sent.url()) && sent.method() === "POST",
-      );
-      const quinnAt = Date.now() - 1000;
+      // choice: it opens Quinn's own schedule instead of reusing Pia's
+      // cookie.
+      const quinnOpen = secondTab.waitForRequest(isOpen);
       await secondTab.goto(quinn.path);
-      expect((await quinnRequest).postDataJSON().invitationToken).toBe(
+      expect((await quinnOpen).postDataJSON().invitationToken).toBe(
         quinn.invitation,
       );
-      await expect(heading(secondTab, "Check your email")).toBeVisible();
-      await expect(secondTab.getByText("You are responding as")).toHaveCount(0);
-      expect((await tempAccessSessionState(secondTab, event.code)).status).toBe(
-        200,
-      );
-      const quinnCode = await latestVerificationCode(
-        quinnEmail,
-        quinnAt,
-        "temp_event_access",
-      );
-      await secondTab.getByLabel("Verification code").fill(quinnCode);
-      await secondTab
-        .getByRole("button", { name: "Verify and open schedule" })
-        .click();
       await expect(
         secondTab.getByText("You are responding as Quinn Second"),
       ).toBeVisible();
+      await expect(
+        secondTab.getByText("You are responding as Pia Resume"),
+      ).toHaveCount(0);
       expect(tempSessions(quinnEmail, event.code)).toMatchObject([
         { active: true },
       ]);
@@ -1353,7 +1172,7 @@ test.describe("Temporary session", () => {
     const context = await browser.newContext();
     try {
       const tab = await context.newPage();
-      await openTemporaryAccess(tab, event, email, path, "Kit Keep");
+      await openTemporaryAccess(tab, event, path, "Kit Keep");
       const cookie = await tempCookie(context);
       expect(cookie).toBeDefined();
       const cookieValue = async () => (await tempCookie(context))?.value;
@@ -1421,7 +1240,7 @@ test.describe("Temporary session", () => {
     }
   });
 
-  test("Sign out on an event whose cookie another event's verification has since replaced leaves that event signed in, and its own Sign out still ends it", async ({
+  test("Sign out on an event whose cookie another event's link has since replaced leaves that event signed in, and its own Sign out still ends it", async ({
     browser,
     request,
   }) => {
@@ -1448,34 +1267,12 @@ test.describe("Temporary session", () => {
     const context = await browser.newContext();
     try {
       const tab = await context.newPage();
-      const firstCode = await openTemporaryAccess(
-        tab,
-        event,
-        email,
-        first.path,
-        "Sam Swap",
-      );
+      await openTemporaryAccess(tab, event, first.path, "Sam Swap");
 
-      // A second tab verifies the other event; its cookie replaces this
+      // A second tab opens the other event's link; its cookie replaces this
       // event's, while the first tab still shows this event's editor.
       const otherTab = await context.newPage();
-      const requestedAt = Date.now() - 1000;
-      await otherTab.goto(second.path);
-      await expect(heading(otherTab, "Check your email")).toBeVisible();
-      const otherCode = await latestVerificationCode(
-        email,
-        requestedAt,
-        "temp_event_access",
-        { notCode: firstCode },
-      );
-      await otherTab.getByLabel("Verification code").fill(otherCode);
-      await otherTab
-        .getByRole("button", { name: "Verify and open schedule" })
-        .click();
-      await expect(heading(otherTab, other.name)).toBeVisible();
-      await expect(
-        otherTab.getByText("You are responding as Sam Swap"),
-      ).toBeVisible();
+      await openTemporaryAccess(otherTab, other, second.path, "Sam Swap");
       const otherCookie = await tempCookie(context);
       expect(otherCookie).toBeDefined();
       expect(tempSessions(email, other.code)).toMatchObject([
@@ -1539,38 +1336,13 @@ test.describe("Temporary session", () => {
     const device = await playwright.request.newContext();
     try {
       const page = await context.newPage();
-      const firstCode = await openTemporaryAccess(
-        page,
-        event,
-        email,
-        path,
-        "Lou Logout",
-      );
-      expireResendCooldown(email);
-      const deviceAt = Date.now() - 1000;
+      await openTemporaryAccess(page, event, path, "Lou Logout");
+      // The second device opens the same link and gets a session of its own.
       expect(
         (
-          await device.post(`${BACKEND_URL}/events/temp-access/request-code`, {
+          await device.post(`${BACKEND_URL}/events/temp-access/open`, {
             maxRetries: STALE_SOCKET_RETRIES,
             data: { code: event.code, invitationToken: invitation },
-          })
-        ).status(),
-      ).toBe(202);
-      const deviceCode = await latestVerificationCode(
-        email,
-        deviceAt,
-        "temp_event_access",
-        { notCode: firstCode },
-      );
-      expect(
-        (
-          await device.post(`${BACKEND_URL}/events/temp-access/verify`, {
-            maxRetries: STALE_SOCKET_RETRIES,
-            data: {
-              code: event.code,
-              invitationToken: invitation,
-              verificationCode: deviceCode,
-            },
           })
         ).status(),
       ).toBe(200);
@@ -1652,7 +1424,7 @@ test.describe("Temporary session", () => {
       await expect(heading(page, "You are signed out")).toBeVisible();
       await expect(
         page.getByText(
-          "Reopen the invitation email whenever you need to access this event again.",
+          "Open the link in your invitation email whenever you need to access this event again.",
         ),
       ).toBeVisible();
       expect(order.entries.map((entry) => entry.split(" ")[0])).toEqual([
@@ -1705,7 +1477,7 @@ test.describe("Temporary session", () => {
     const context = await browser.newContext();
     try {
       const page = await context.newPage();
-      await openTemporaryAccess(page, event, email, path, "Eve Expired");
+      await openTemporaryAccess(page, event, path, "Eve Expired");
       expireTempSessions(email);
       // The browser still holds the cookie; only the server knows it lapsed.
       expect(await tempCookie(context)).toBeDefined();
@@ -1723,7 +1495,7 @@ test.describe("Temporary session", () => {
       await expect(heading(page, "Temporary access ended")).toBeVisible();
       await expect(
         page.getByText(
-          "This temporary session has expired. Reopen the invitation email to verify again.",
+          "This temporary session has expired. Open the link in your invitation email again to continue.",
           { exact: true },
         ),
       ).toBeVisible();
@@ -1757,7 +1529,7 @@ test.describe("Temporary session", () => {
     const context = await browser.newContext();
     try {
       const tab = await context.newPage();
-      await openTemporaryAccess(tab, event, email, path, "Uma Upgrade");
+      await openTemporaryAccess(tab, event, path, "Uma Upgrade");
 
       // The second tab opens the event from the shared cookie and upgrades.
       const upgradeTab = await context.newPage();
@@ -1819,6 +1591,14 @@ test.describe("Temporary session", () => {
       await expect(tab.getByRole("grid", { name: "Availability" })).toHaveCount(
         0,
       );
+
+      // Uma answers with the account now, so the old link opens nothing and
+      // says no more than any other link that matches no invitation.
+      const refusedOpen = nextOpen(tab);
+      await tab.goto(path);
+      expect((await refusedOpen).status()).toBe(404);
+      await expect(heading(tab, INACTIVE_LINK)).toBeVisible();
+      await expect(heading(tab, event.name)).toHaveCount(0);
     } finally {
       await context.close();
     }
@@ -1844,7 +1624,7 @@ test.describe("Temporary editor", () => {
     const context = await browser.newContext();
     try {
       const page = await context.newPage();
-      await openTemporaryAccess(page, event, email, path, "Mia Mixed");
+      await openTemporaryAccess(page, event, path, "Mia Mixed");
       const { brush, submit } = tempEditorControls(page);
       const inperson = page.getByRole("grid", { name: "In-Person" });
       const virtual = page.getByRole("grid", { name: "Virtual" });
@@ -2010,7 +1790,7 @@ test.describe("Temporary editor", () => {
     const context = await browser.newContext();
     try {
       const page = await context.newPage();
-      await openTemporaryAccess(page, event, email, path, "Cora Conflict");
+      await openTemporaryAccess(page, event, path, "Cora Conflict");
       const { submit, applyToAll } = tempEditorControls(page);
       const grid = page.getByRole("grid", { name: "Availability" });
       const cell = (index) => grid.locator(`[data-cell-idx="${index}"]`);
@@ -2178,7 +1958,7 @@ test.describe("Temporary editor", () => {
     const context = await browser.newContext();
     try {
       const page = await context.newPage();
-      await openTemporaryAccess(page, event, email, path, "Fay Flush");
+      await openTemporaryAccess(page, event, path, "Fay Flush");
       const { upgrade } = tempEditorControls(page);
       const grid = page.getByRole("grid", { name: "Availability" });
       const cell = (index) => grid.locator(`[data-cell-idx="${index}"]`);
@@ -2267,7 +2047,7 @@ test.describe("Temporary editor", () => {
     const context = await browser.newContext();
     try {
       const page = await context.newPage();
-      await openTemporaryAccess(page, event, email, path, "Fin Feedback");
+      await openTemporaryAccess(page, event, path, "Fin Feedback");
       const { upgrade, signOut, submit } = tempEditorControls(page);
       const grid = page.getByRole("grid", { name: "Availability" });
       const cell = (index) => grid.locator(`[data-cell-idx="${index}"]`);
@@ -2308,7 +2088,7 @@ test.describe("Temporary editor", () => {
 });
 
 test.describe("Upgrade page errors", () => {
-  test("explains an incomplete link and an unverifiable session, keeps next on Continue with email, and refuses mismatched passwords and a wrong code before upgrading", async ({
+  test("explains an incomplete link and an unverifiable session, keeps next on Continue with email, refuses mismatched passwords and a wrong code, and sets the new password and name only with the emailed code", async ({
     browser,
     page,
     request,
@@ -2372,7 +2152,7 @@ test.describe("Upgrade page errors", () => {
     const context = await browser.newContext();
     try {
       const temp = await context.newPage();
-      await openTemporaryAccess(temp, event, email, path, "Sal Signup");
+      await openTemporaryAccess(temp, event, path, "Sal Signup");
       await tempEditorControls(temp).upgrade.click();
       await expect(heading(temp, "Upgrade your account")).toBeVisible();
       await expect(temp.getByLabel("Email")).toHaveValue(email);
@@ -2407,6 +2187,14 @@ test.describe("Upgrade page errors", () => {
       ).toBeVisible();
       await expect(mainAlert(temp, "Passwords do not match.")).toHaveCount(0);
       expect(registrations.entries).toHaveLength(1);
+      // Holding the link is not enough to choose the full account's password
+      // or name: until the emailed code comes back, the account is unchanged.
+      const temporaryAccount = accountDetails(email);
+      expect(temporaryAccount).toMatchObject({
+        usablePassword: false,
+        accessLevel: "temporary",
+      });
+      expect(temporaryAccount.firstName).not.toBe("Sal");
       const upgradeCode = await latestVerificationCode(
         email,
         upgradeAt,
@@ -2421,11 +2209,19 @@ test.describe("Upgrade page errors", () => {
         mainAlert(temp, "Verification code is invalid or has expired."),
       ).toBeVisible();
       await expect(temp).toHaveURL(/\/signup\?upgrade=temporary&/);
+      expect(accountDetails(email)).toEqual(temporaryAccount);
 
-      // The wrong code did not use up the right one.
+      // The wrong code did not use up the right one, which sets the
+      // password and the name sent with it.
       await temp.getByLabel("Verification code").fill(upgradeCode);
       await verify.click();
       await expect(temp).toHaveURL(new RegExp(`/event\\?code=${event.code}$`));
+      expect(accountDetails(email)).toEqual({
+        firstName: "Sal",
+        lastName: "Signup",
+        usablePassword: true,
+        accessLevel: "full",
+      });
     } finally {
       await context.close();
     }
@@ -2435,7 +2231,7 @@ test.describe("Upgrade page errors", () => {
 test.describe("Participant pages at 320px", () => {
   test.use({ viewport: { width: 320, height: 720 } });
 
-  test("the temporary access status, code, editor, submitted, locked, ended and signed-out pages pass WCAG A/AA checks and do not scroll sideways", async ({
+  test("the temporary access status, inactive link, failed open, editor, submitted, locked, ended and signed-out pages pass WCAG A/AA checks and do not scroll sideways", async ({
     page,
     request,
   }) => {
@@ -2448,6 +2244,7 @@ test.describe("Participant pages at 320px", () => {
       "Ada Access",
       email,
     );
+    const tryAgain = page.getByRole("button", { name: "Try again" });
     const check = async (label) => {
       await expectNoHorizontalScroll(page, label);
       await expectAccessible(page, label);
@@ -2457,28 +2254,30 @@ test.describe("Participant pages at 320px", () => {
     await expect(heading(page, LINK_REQUIRED)).toBeVisible();
     await check("temporary access without a link");
 
-    let requestedAt = Date.now() - 1000;
-    await page.goto(path);
-    await expect(mainStatus(page, CODE_SENT)).toBeVisible();
-    await check("temporary access code step");
-    let code = await latestVerificationCode(
-      email,
-      requestedAt,
-      "temp_event_access",
+    await page.goto(
+      `/temp-access?code=${event.code}&invitation=${randomUUID()}`,
     );
-    await page.getByLabel("Verification code").fill(differentCode(code));
-    await page
-      .getByRole("button", { name: "Verify and open schedule" })
-      .click();
-    await expect(
-      page.getByLabel("Verification code"),
-    ).toHaveAccessibleDescription(WRONG_CODE);
-    await check("temporary access code step with an error");
-    await page.getByLabel("Verification code").fill(code);
-    await page
-      .getByRole("button", { name: "Verify and open schedule" })
-      .click();
+    await expect(heading(page, INACTIVE_LINK)).toBeVisible();
+    await check("temporary access with a link that isn't active");
+
+    // The real link's first open fails on the way; Try again opens it.
+    let failNextOpen = true;
+    const failFirstOpen = async (route) => {
+      if (route.request().method() === "POST" && failNextOpen) {
+        failNextOpen = false;
+        await fulfillError(route, 503, { detail: "Service unavailable." });
+        return;
+      }
+      await route.fallback();
+    };
+    await page.route(OPEN_ROUTE, failFirstOpen);
+    await page.goto(path);
+    await expect(heading(page, OPEN_FAILED_TITLE)).toBeVisible();
+    await expect(mainAlert(page, OPEN_FAILED)).toBeVisible();
+    await check("temporary access, invitation not opened");
+    await tryAgain.click();
     await expect(heading(page, event.name)).toBeVisible();
+    await page.unroute(OPEN_ROUTE, failFirstOpen);
     await check("temporary editor");
 
     const { submit, applyToAll, brush, upgrade } = tempEditorControls(page);
@@ -2529,24 +2328,8 @@ test.describe("Participant pages at 320px", () => {
     await expect(heading(page, "Temporary access ended")).toBeVisible();
     await check("temporary access ended");
 
-    // Verified again, then signed out.
-    expireResendCooldown(email);
-    requestedAt = Date.now() - 1000;
-    await page.goto(path);
-    await expect(heading(page, "Check your email")).toBeVisible();
-    code = await latestVerificationCode(
-      email,
-      requestedAt,
-      "temp_event_access",
-      {
-        notCode: code,
-      },
-    );
-    await page.getByLabel("Verification code").fill(code);
-    await page
-      .getByRole("button", { name: "Verify and open schedule" })
-      .click();
-    await expect(heading(page, event.name)).toBeVisible();
+    // Opened again from the link, then signed out.
+    await openTemporaryAccess(page, event, path, "Ada Access");
     await tempEditorControls(page).signOut.click();
     await expect(heading(page, "You are signed out")).toBeVisible();
     await check("temporary access signed out");

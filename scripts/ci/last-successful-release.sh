@@ -32,7 +32,8 @@ api() {
 }
 
 # The newest completed orchestrated run whose surface job succeeded, as
-# "<created_at>\t<head_sha>".
+# "<created_at>\t<head_sha>". Search every page: a surface may be skipped
+# for more than a page of releases before its latest success appears.
 orchestrated_success() {
   local run_id created_at head_sha job_conclusion
   while IFS=$'\t' read -r run_id created_at head_sha; do
@@ -50,6 +51,7 @@ orchestrated_success() {
     fi
   done < <(
     api "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs?branch=main&status=completed&per_page=50" \
+      --paginate \
       --jq '.workflow_runs[]
         | select(.event == "workflow_run" or .event == "workflow_dispatch")
         | [(.id | tostring), .created_at, .head_sha] | @tsv' \

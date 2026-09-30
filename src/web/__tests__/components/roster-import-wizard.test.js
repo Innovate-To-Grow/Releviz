@@ -868,7 +868,7 @@ test("labels the commit by mode and count, guards a rebuild with the event code,
   });
   expect(rebuild).toBeDisabled();
   expect(screen.getByRole("note")).toHaveTextContent(
-    "Rebuilding clears schedules, invitations, and pending delivery. Everyone starts as Not sent and gets no reminders until you send invitations, which you can review once the import is done.",
+    "Rebuilding clears schedules, invitations, and pending delivery. Everyone starts as Not invited and gets no reminders until you send invitations, which you can review once the import is done.",
   );
   const code = screen.getByLabelText("Rebuild confirmation code");
   fireEvent.change(code, { target: { value: "WRONG" } });

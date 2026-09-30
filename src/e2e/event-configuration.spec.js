@@ -21,6 +21,7 @@ const {
 } = require("./helpers/participants");
 const {
   DAY_MS,
+  dateListText,
   icsUtc,
   isoDate,
   nextUsDstDates,
@@ -298,8 +299,10 @@ test.describe("Create form: schedule, meeting and access", () => {
       startsAt: `${isoDate(Date.parse(d1) + DAY_MS)}T00:00:00+00:00`,
     });
 
-    // The Overview says so.
-    await expect(overviewTile(page, "Schedule")).toContainText(`${d1}, ${d2}`);
+    // The Overview says so, with the dates written out ("Oct 7, 9, 2026").
+    await expect(overviewTile(page, "Schedule")).toContainText(
+      dateListText([d1, d2]),
+    );
     await expect(overviewTile(page, "Schedule")).toContainText(
       "10:00 PM - 2:00 AM (next day) · UTC",
     );

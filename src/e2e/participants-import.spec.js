@@ -1151,7 +1151,7 @@ test.describe("Applying an import", () => {
       })
       .check();
     await expect(warning).toHaveText(
-      "Rebuilding clears schedules, invitations, and pending delivery. Everyone starts as Not sent and gets no reminders until you send invitations, which you can review once the import is done.",
+      "Rebuilding clears schedules, invitations, and pending delivery. Everyone starts as Not invited and gets no reminders until you send invitations, which you can review once the import is done.",
     );
     await expect(
       sheet.getByText(`Type ${event.code} to confirm`, { exact: true }),
@@ -1190,7 +1190,7 @@ test.describe("Applying an import", () => {
       "Imported 2 people: 2 added, 0 updated. No invitations were sent.",
     );
 
-    // A rebuild starts everyone over as Not sent, so the review offers every
+    // A rebuild starts everyone over as Not invited, so the review offers every
     // person it imported.
     await sheet
       .getByRole("button", { name: "Review and send invitations (2)…" })

@@ -89,10 +89,23 @@ export function invitationBadge(participant) {
   return { status: "not-sent", label: "Not sent" };
 }
 
-export function responseBadge(participant) {
-  return participant.submitted
-    ? { status: "submitted", label: "Submitted" }
-    : { status: "not-submitted", label: "Not submitted" };
+// The Response column's one badge: the answer once there is one, otherwise
+// how far the invitation got. People nobody invites have no invitation state,
+// and neither does anyone in an open-link event who never got one.
+export function responseBadge(participant, { openLink = false } = {}) {
+  if (participant.submitted) return { status: "submitted", label: "Submitted" };
+  if (participant.isOrganizer || participant.organizerManaged)
+    return { status: "not-submitted", label: "Not submitted" };
+  if (participant.invitationDelivery === "failed")
+    return { status: "danger", label: "Invite failed" };
+  if (participant.invitationDelivery === "queued")
+    return { status: "info", label: "Sending invite…" };
+  if (participant.invitationStatus === "accepted")
+    return { status: "draft", label: "Started" };
+  if (participant.invitationStatus === "sent")
+    return { status: "sent", label: "Invited" };
+  if (openLink) return { status: "not-submitted", label: "Not submitted" };
+  return { status: "not-sent", label: "Not invited" };
 }
 
 // The person panel's one-line explanation of how this row is answered.
@@ -140,13 +153,74 @@ export function describeSelection({ count, mode = "page", notOnPage = 0 }) {
   return text;
 }
 
-export const INVITATION_FILTER_LABELS = {
-  not_sent: "Not sent",
-  queued: "Sending",
-  failed: "Failed",
-  sent: "Sent",
-  accepted: "Accepted",
+// The Filter popover's single Response group. Each option is a pair of the
+// API's `submitted` and `invitationStatus` query parameters.
+export const RESPONSE_FILTER_OPTIONS = [
+  { key: "", label: "Any", params: { submitted: "", invitationStatus: "" } },
+  {
+    key: "submitted",
+    label: "Submitted",
+    params: { submitted: "true", invitationStatus: "" },
+  },
+  {
+    key: "not_submitted",
+    label: "Not submitted",
+    params: { submitted: "false", invitationStatus: "" },
+  },
+  {
+    key: "not_invited",
+    label: "Not invited yet",
+    params: { submitted: "false", invitationStatus: "not_sent" },
+  },
+  {
+    key: "sending",
+    label: "Sending invite",
+    params: { submitted: "", invitationStatus: "queued" },
+  },
+  {
+    key: "failed",
+    label: "Invite failed",
+    params: { submitted: "", invitationStatus: "failed" },
+  },
+  {
+    key: "invited",
+    label: "Invited",
+    params: { submitted: "false", invitationStatus: "sent" },
+  },
+  {
+    key: "started",
+    label: "Started",
+    params: { submitted: "false", invitationStatus: "accepted" },
+  },
+];
+
+const INVITATION_STATUS_KEYS = {
+  queued: "sending",
+  failed: "failed",
+  not_sent: "not_invited",
+  sent: "invited",
+  accepted: "started",
 };
+
+// Which option the two API parameters amount to. Sending and failed ignore
+// `submitted`, so the failed-invitations banner and the list it opens agree.
+export function responseFilterKey({
+  submitted = "",
+  invitationStatus = "",
+} = {}) {
+  const status = String(invitationStatus ?? "");
+  if (Object.hasOwn(INVITATION_STATUS_KEYS, status))
+    return INVITATION_STATUS_KEYS[status];
+  const answered = String(submitted ?? "");
+  if (answered === "true") return "submitted";
+  if (answered === "false") return "not_submitted";
+  return "";
+}
+
+export function responseFilterParams(key) {
+  const option = RESPONSE_FILTER_OPTIONS.find((item) => item.key === key);
+  return { ...(option ?? RESPONSE_FILTER_OPTIONS[0]).params };
+}
 
 export function filterChips({
   search = "",
@@ -163,16 +237,11 @@ export function filterChips({
       key: "group",
       label: group === UNGROUPED ? "Group: No group" : `Group: ${group}`,
     });
-  const submittedValue = String(submitted ?? "");
-  if (submittedValue === "true" || submittedValue === "false")
+  const responseKey = responseFilterKey({ submitted, invitationStatus });
+  if (responseKey)
     chips.push({
-      key: "submitted",
-      label: `Response: ${submittedValue === "true" ? "Submitted" : "Not submitted"}`,
-    });
-  if (invitationStatus && INVITATION_FILTER_LABELS[invitationStatus])
-    chips.push({
-      key: "invitationStatus",
-      label: `Invitation: ${INVITATION_FILTER_LABELS[invitationStatus]}`,
+      key: "response",
+      label: `Response: ${RESPONSE_FILTER_OPTIONS.find((item) => item.key === responseKey).label}`,
     });
   const includedValue = String(included ?? "");
   if (includedValue === "true" || includedValue === "false")

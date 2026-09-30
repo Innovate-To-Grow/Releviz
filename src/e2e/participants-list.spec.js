@@ -107,10 +107,13 @@ function renamingRow(panel, name) {
   });
 }
 
-// Opens a radio group of the Filter popover (Response, Invitation, Results)
-// and picks one option; the popover stays open for the next pick.
+// Opens a radio group of the Filter popover (Response, Results) and picks
+// one option; the popover stays open for the next pick.
 async function pickFilter(page, legend, option) {
-  const popoverGroup = roster(page).getByRole("group", { name: legend });
+  const popoverGroup = roster(page).getByRole("group", {
+    name: legend,
+    exact: true,
+  });
   if (!(await popoverGroup.isVisible())) await filterButton(page).click();
   await popoverGroup.getByRole("radio", { name: option, exact: true }).check();
 }
@@ -118,7 +121,7 @@ async function pickFilter(page, legend, option) {
 async function closeFilterPopover(page) {
   await filterButton(page).press("Escape");
   await expect(
-    roster(page).getByRole("group", { name: "Response" }),
+    roster(page).getByRole("group", { name: "Response", exact: true }),
   ).toHaveCount(0);
 }
 
@@ -515,7 +518,7 @@ test.describe("Participants list: search, filters and paging", () => {
     await expect(listRows(page).first()).toContainText("Person 01");
   });
 
-  test("filters by response, invitation delivery and results, and clears a filter that matches nobody", async ({
+  test("filters by response (answers and how far the invitation got) and results, and clears a filter that matches nobody", async ({
     page,
     request,
   }) => {
@@ -561,10 +564,10 @@ test.describe("Participants list: search, filters and paging", () => {
     for (const email of [emails.sid, emails.quinn, emails.fay, emails.acy]) {
       await waitForInvitationStatus(request, event.code, token, email, "sent");
     }
-    // Quinn's invitation email waits for a retry a day away (Sending…), Fay's
-    // was given up on (Failed), and Acy followed the link (Accepted, recorded
-    // the way joining through an invitation records it). Only this event's
-    // rows are touched.
+    // Quinn's invitation email waits for a retry a day away (Sending invite…),
+    // Fay's was given up on (Invite failed), and Acy followed the link
+    // (Started, recorded the way joining through an invitation records it).
+    // Only this event's rows are touched.
     const delivery = runDjangoJson(
       `
 from datetime import timedelta
@@ -623,60 +626,59 @@ print(json.dumps({"queued": queued, "failed": failed, "accepted": accepted}))
     await expect(listRows(page)).toHaveCount(6);
     await expect(filterChip(page, "Response: Not submitted")).toBeVisible();
 
-    // The invitation filter reads the delivery state too.
+    // The same Response group reads how far an invitation got, the delivery
+    // state included. Each option sets the answer and the invitation filter
+    // together, and still counts as one filter with one chip.
+    const responseBadge = (name) =>
+      participantRow(page, name).locator(".participants-table__response");
     listed = listingResponse(page, {
-      submitted: "false",
+      submitted: null,
       invitationStatus: "queued",
     });
-    await pickFilter(page, "Invitation", "Sending");
+    await pickFilter(page, "Response", "Sending invite");
     expect(
       (await (await listed).json()).participants.map((entry) => entry.name),
     ).toEqual(["Quinn Queued"]);
     await expect.poll(() => rowNames(page)).toEqual(["Quinn Queued"]);
-    await expect(
-      participantRow(page, "Quinn Queued").locator(
-        ".participants-table__invitation",
-      ),
-    ).toHaveText("Sending…");
-    await expect(filterChip(page, "Invitation: Sending")).toBeVisible();
+    await expect(responseBadge("Quinn Queued")).toHaveText("Sending invite…");
+    await expect(filterChip(page, "Response: Sending invite")).toBeVisible();
     await expect(
       filterButton(page).locator(".participants-popover__count"),
-    ).toHaveText("2 active");
+    ).toHaveText("1 active");
 
     listed = listingResponse(page, { invitationStatus: "failed" });
-    await pickFilter(page, "Invitation", "Failed");
+    await pickFilter(page, "Response", "Invite failed");
     expect(
       (await (await listed).json()).participants.map((entry) => entry.name),
     ).toEqual(["Fay Failed"]);
     await expect.poll(() => rowNames(page)).toEqual(["Fay Failed"]);
-    await expect(
-      participantRow(page, "Fay Failed").locator(
-        ".participants-table__invitation",
-      ),
-    ).toHaveText("Failed");
+    await expect(responseBadge("Fay Failed")).toHaveText("Invite failed");
 
-    listed = listingResponse(page, { invitationStatus: "accepted" });
-    await pickFilter(page, "Invitation", "Accepted");
+    listed = listingResponse(page, {
+      submitted: "false",
+      invitationStatus: "accepted",
+    });
+    await pickFilter(page, "Response", "Started");
     expect(
       (await (await listed).json()).participants.map((entry) => entry.name),
     ).toEqual(["Acy Accepted"]);
     await expect.poll(() => rowNames(page)).toEqual(["Acy Accepted"]);
-    await expect(
-      participantRow(page, "Acy Accepted").locator(
-        ".participants-table__invitation",
-      ),
-    ).toHaveText("Accepted");
+    await expect(responseBadge("Acy Accepted")).toHaveText("Started");
 
-    // Sent is everyone invited who has not accepted, whatever became of the
-    // email.
-    await pickFilter(page, "Invitation", "Sent");
+    // Invited is everyone invited who has not accepted or answered, whatever
+    // became of the email; each row still says how far its email got.
+    await pickFilter(page, "Response", "Invited");
     await expect
       .poll(() => rowNames(page))
       .toEqual(["Sid Sent", "Quinn Queued", "Fay Failed"]);
-    await pickFilter(page, "Invitation", "Not sent");
+    await expect(responseBadge("Sid Sent")).toHaveText("Invited");
+    await expect(responseBadge("Quinn Queued")).toHaveText("Sending invite…");
+    await expect(responseBadge("Fay Failed")).toHaveText("Invite failed");
+    await pickFilter(page, "Response", "Not invited yet");
     await expect
       .poll(() => rowNames(page))
       .toEqual(["Lou Leftout", "Nia Nobody"]);
+    await expect(responseBadge("Nia Nobody")).toHaveText("Not invited");
 
     listed = listingResponse(page, { included: "false" });
     await pickFilter(page, "Results", "Left out");
@@ -686,17 +688,16 @@ print(json.dumps({"queued": queued, "failed": failed, "accepted": accepted}))
     await expect.poll(() => rowNames(page)).toEqual(["Lou Leftout"]);
     await expect(
       filterButton(page).locator(".participants-popover__count"),
-    ).toHaveText("3 active");
+    ).toHaveText("2 active");
     await expect(activeFilters(page).getByRole("button")).toHaveText([
-      "Response: Not submitted×",
-      "Invitation: Not sent×",
+      "Response: Not invited yet×",
       "Results: Left out×",
       "Clear all",
     ]);
 
-    // Acy, the only one who accepted, is counted: nobody matches, and the
+    // Acy, the only one who started, is counted: nobody matches, and the
     // list says so and offers Clear all.
-    await pickFilter(page, "Invitation", "Accepted");
+    await pickFilter(page, "Response", "Started");
     await closeFilterPopover(page);
     const list = roster(page).locator(".participants-list");
     await expect(
@@ -712,10 +713,13 @@ print(json.dumps({"queued": queued, "failed": failed, "accepted": accepted}))
     await expect(activeFilters(page)).toHaveCount(0);
     await expect(filterButton(page)).toHaveText("Filter");
     await filterButton(page).click();
-    for (const legend of ["Response", "Invitation", "Results"]) {
+    await expect(
+      roster(page).getByRole("group", { name: "Invitation", exact: true }),
+    ).toHaveCount(0);
+    for (const legend of ["Response", "Results"]) {
       await expect(
         roster(page)
-          .getByRole("group", { name: legend })
+          .getByRole("group", { name: legend, exact: true })
           .getByRole("radio", { name: "Any" }),
       ).toBeChecked();
     }

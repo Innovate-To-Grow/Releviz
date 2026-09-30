@@ -19,7 +19,11 @@ class ScheduleEditRecordAdmin(AppAccessPermissionMixin, ModelAdmin):
         "created_at",
     )
     list_filter = ("source", "action")
-    search_fields = ("event__code", "participant__participant_name", "actor__email")
+    search_fields = (
+        "event__code",
+        "participant__participant_name",
+        "actor__contact_emails__email_address",
+    )
 
 
 @admin.register(EventResultSnapshot)

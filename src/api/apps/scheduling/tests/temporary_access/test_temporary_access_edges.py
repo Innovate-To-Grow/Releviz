@@ -6,15 +6,14 @@ from unittest.mock import patch
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.auth.hashers import make_password
-from django.test import RequestFactory, TestCase
+from django.test import TestCase
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.test import APIClient
 
 from apps.authn.models import ContactEmail, EmailAuthChallenge
 from apps.authn.security import RateLimitDecision
-from apps.authn.services import AuthChallengeInvalid, start_registration
+from apps.authn.services import start_registration
 from apps.authn.tests.helpers import create_member, token_for
 from apps.mail.services import EmailDeliveryError
 from apps.scheduling.models import (
@@ -26,12 +25,12 @@ from apps.scheduling.models import (
     Weight,
 )
 from apps.scheduling.services.invitations import ManagedParticipantError
+from apps.scheduling.services.results import build_event_results
 from apps.scheduling.services.temporary_access import (
     _invitation_and_participant,
     temporary_access_rate_identity,
     temporary_session_from_request,
     temporary_session_member_has_full_access,
-    verify_temporary_access_code,
 )
 from apps.scheduling.views import (
     EventInvitationsView,
@@ -142,32 +141,6 @@ class TemporaryAccessServiceEdgeTests(TemporaryAccessEdgeFixture):
             ),
             (None, None),
         )
-
-    def test_verification_rejects_unknown_invitation_and_cross_member_challenge(self):
-        request = RequestFactory().post("/events/temp-access/verify", HTTP_USER_AGENT="Edge")
-        self.assertIsNone(
-            verify_temporary_access_code(
-                event_code=self.event.code,
-                access_token="not-a-token",
-                code="123456",
-                request=request,
-            )
-        )
-
-        other = create_member("mismatch@example.com")
-        with patch(
-            "apps.scheduling.services.temporary_access.verify_email_challenge",
-            return_value=SimpleNamespace(member_id=other.pk),
-        ):
-            self.assertIsNone(
-                verify_temporary_access_code(
-                    event_code=self.event.code,
-                    access_token=self.invitation.access_token,
-                    code="123456",
-                    request=request,
-                )
-            )
-        self.assertEqual(TemporaryEventSession.objects.count(), 1)
 
     def test_session_parser_rejects_bad_or_unknown_ids_and_revokes_upgraded_accounts(self):
         cookie_name = settings.TEMP_EVENT_COOKIE_NAME
@@ -428,122 +401,6 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         )
         self.assertEqual(too_long.status_code, 400)
 
-    def test_code_endpoints_are_non_enumerating_but_enforce_rate_limits(self):
-        client = APIClient()
-        denied = RateLimitDecision(allowed=False, retry_after=7)
-        with patch(
-            "apps.scheduling.views.temporary_access.codes.consume_request_rate_limit",
-            return_value=denied,
-        ):
-            requested = client.post(
-                "/events/temp-access/request-code",
-                {"code": self.event.code, "invitationToken": str(self.invitation.access_token)},
-                format="json",
-            )
-            verified = client.post(
-                "/events/temp-access/verify",
-                {
-                    "code": self.event.code,
-                    "invitationToken": str(self.invitation.access_token),
-                    "verificationCode": "123456",
-                },
-                format="json",
-            )
-        self.assertEqual(requested.status_code, 429)
-        self.assertEqual(verified.status_code, 429)
-
-        with patch(
-            "apps.scheduling.views.temporary_access.codes.request_temporary_access_code",
-            side_effect=RuntimeError("mail provider unavailable"),
-        ):
-            with self.assertLogs("apps.scheduling.views.temporary_access.codes", level="ERROR"):
-                generic = client.post(
-                    "/events/temp-access/request-code",
-                    {"code": self.event.code, "invitationToken": "opaque"},
-                    format="json",
-                )
-        self.assertEqual(generic.status_code, 202)
-
-    def test_verification_maps_challenge_errors_and_invalid_credentials_to_one_error(self):
-        client = APIClient()
-        payload = {
-            "code": self.event.code,
-            "invitationToken": str(self.invitation.access_token),
-            "verificationCode": "123456",
-        }
-        rejected_origin = client.post(
-            "/events/temp-access/verify",
-            payload,
-            format="json",
-            HTTP_ORIGIN="https://attacker.example",
-        )
-        self.assertEqual(rejected_origin.status_code, 403)
-
-        with patch(
-            "apps.scheduling.views.temporary_access.codes.verify_temporary_access_code",
-            side_effect=AuthChallengeInvalid("bad code"),
-        ):
-            validation_error = client.post("/events/temp-access/verify", payload, format="json")
-        self.assertEqual(validation_error.status_code, 400)
-        self.assertEqual(validation_error.data["error"], "Invalid or expired verification code.")
-
-        with (
-            patch(
-                "apps.scheduling.views.temporary_access.codes.verify_temporary_access_code",
-                return_value=None,
-            ),
-            patch(
-                "apps.scheduling.views.temporary_access.codes.security_logger.warning"
-            ) as warning,
-        ):
-            invalid = client.post("/events/temp-access/verify", payload, format="json")
-        self.assertEqual(invalid.status_code, 400)
-        self.assertEqual(invalid.data, validation_error.data)
-        self.assertEqual(warning.call_args.args[0], "temporary_access_code_verification_failed")
-        self.assertIn("auth_key", warning.call_args.kwargs["extra"])
-        self.assertEqual(
-            warning.call_args.kwargs["extra"]["auth_scope"],
-            "temp_access_code_verify",
-        )
-        self.assertIn("ip_address", warning.call_args.kwargs["extra"])
-
-    def test_wrong_codes_on_a_valid_link_are_counted_until_the_code_is_used_up(self):
-        client = APIClient()
-        challenge = EmailAuthChallenge.objects.create(
-            member=self.temporary,
-            purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
-            target_email=self.invitation.email,
-            code_hash=make_password("123456"),
-            expires_at=timezone.now() + timedelta(minutes=10),
-            max_attempts=5,
-            last_sent_at=timezone.now(),
-        )
-
-        def verify(code):
-            return client.post(
-                "/events/temp-access/verify",
-                {
-                    "code": self.event.code,
-                    "invitationToken": str(self.invitation.access_token),
-                    "verificationCode": code,
-                },
-                format="json",
-            )
-
-        for attempt in range(1, 6):
-            with self.assertLogs("releviz.security", level="WARNING") as logs:
-                wrong = verify(f"00000{attempt}")
-            self.assertEqual(wrong.status_code, 400, wrong.data)
-            self.assertEqual(wrong.data, {"error": "Invalid or expired verification code."})
-            self.assertIn("temporary_access_code_verification_failed", logs.output[-1])
-            challenge.refresh_from_db()
-            self.assertEqual(challenge.attempts, attempt)
-        self.assertEqual(challenge.status, EmailAuthChallenge.Status.EXPIRED)
-
-        used_up = verify("123456")
-        self.assertEqual(used_up.status_code, 400, used_up.data)
-        self.assertEqual(TemporaryEventSession.objects.count(), 1)
-
     def test_session_endpoint_requires_event_scope_and_hides_results_without_permission(self):
         client = self.temp_client()
         missing = client.get("/events/temp-access/session")
@@ -668,13 +525,15 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         self.assertIn("no-store", response["Cache-Control"])
         self.assertTrue({"Cookie", "Origin"}.issubset(response["Vary"].split(", ")))
 
+        # Starting the upgrade only needs the link, so it must not write the
+        # password or name: they are applied when the emailed code is verified.
         self.temporary.refresh_from_db()
-        self.assertEqual(self.temporary.first_name, "Formal")
-        self.assertEqual(self.temporary.last_name, "Identity")
+        self.assertEqual(self.temporary.first_name, "Temp")
+        self.assertEqual(self.temporary.last_name, "Member")
         self.assertEqual(self.temporary.email, "edge-temp@example.com")
         self.assertEqual(self.temporary.access_level, "temporary")
         self.assertTrue(self.temporary.is_active)
-        self.assertTrue(self.temporary.check_password("new-password-123"))
+        self.assertFalse(self.temporary.has_usable_password())
         self.assertFalse(ContactEmail.objects.filter(email_address=untrusted_email).exists())
         challenge = EmailAuthChallenge.objects.get(
             member=self.temporary,
@@ -695,18 +554,28 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         pending_session = client.get(f"/events/temp-access/session?code={self.event.code}")
         self.assertEqual(pending_session.status_code, 200, pending_session.data)
 
-        verified = client.post(
-            "/authn/register/verify-code/",
-            {
-                "email": "edge-temp@example.com",
-                "code": verification_code,
-                "temporaryUpgrade": True,
-            },
-            format="json",
-        )
+        with patch(
+            "apps.authn.services.members.register.decrypt_password",
+            return_value="new-password-123",
+        ):
+            verified = client.post(
+                "/authn/register/verify-code/",
+                {
+                    "email": "edge-temp@example.com",
+                    "code": verification_code,
+                    "password": "new-password-123",
+                    "password_confirm": "new-password-123",
+                    "first_name": "Formal",
+                    "last_name": "Identity",
+                },
+                format="json",
+            )
         self.assertEqual(verified.status_code, 200, verified.data)
         self.assertEqual(verified.data["user"]["member_uuid"], str(self.temporary.pk))
         self.temporary.refresh_from_db()
+        self.assertTrue(self.temporary.check_password("new-password-123"))
+        self.assertEqual(self.temporary.first_name, "Formal")
+        self.assertEqual(self.temporary.last_name, "Identity")
         self.session.refresh_from_db()
         self.participant.refresh_from_db()
         self.assertEqual(self.temporary.access_level, "full")
@@ -716,6 +585,160 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         self.assertEqual(self.participant.participant_name, "Formal Identity")
         # The upgrade hands the response to the person.
         self.assertIsNotNone(self.participant.response_claimed_at)
+
+    def _start_upgrade(self, client, password, first_name="Attacker", last_name="Chosen"):
+        with patch(
+            "apps.authn.services.members.register.decrypt_password",
+            side_effect=lambda value, _key: value,
+        ):
+            return client.post(
+                f"/events/temp-access/upgrade-registration?code={self.event.code}",
+                {
+                    "password": password,
+                    "password_confirm": password,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                },
+                format="json",
+                HTTP_ORIGIN="http://testserver",
+            )
+
+    def _verify_upgrade(self, code, **details):
+        with patch(
+            "apps.authn.services.members.register.decrypt_password",
+            side_effect=lambda value, _key: value,
+        ):
+            return APIClient().post(
+                "/authn/register/verify-code/",
+                {"email": "edge-temp@example.com", "code": code, **details},
+                format="json",
+            )
+
+    def test_link_holder_cannot_plant_a_password_for_a_later_passwordless_upgrade(self):
+        with patch("apps.authn.services.email.send_email.send_verification_email"):
+            started = self._start_upgrade(self.temp_client(), "attacker-password-1")
+        self.assertEqual(started.status_code, 202, started.data)
+        self.temporary.refresh_from_db()
+        self.assertFalse(self.temporary.check_password("attacker-password-1"))
+        self.assertFalse(self.temporary.has_usable_password())
+
+        # The person later upgrades through the passwordless route, mailbox only.
+        EmailAuthChallenge.objects.filter(member=self.temporary).update(
+            last_sent_at=timezone.now() - timedelta(minutes=5)
+        )
+        with (
+            patch("apps.authn.services.email.challenges._random_code", return_value="654321"),
+            patch("apps.authn.services.email.send_email.send_verification_email"),
+        ):
+            requested = APIClient().post(
+                "/authn/email-auth/request-code/",
+                {"email": "edge-temp@example.com", "source": "event_registration"}
+                | {"event": self.event.code},
+                format="json",
+            )
+            self.assertEqual(requested.status_code, 202, requested.data)
+        verified = APIClient().post(
+            "/authn/email-auth/verify-code/",
+            {"email": "edge-temp@example.com", "code": "654321"},
+            format="json",
+        )
+        self.assertEqual(verified.status_code, 200, verified.data)
+        self.temporary.refresh_from_db()
+        self.assertEqual(self.temporary.access_level, "full")
+        self.assertFalse(self.temporary.check_password("attacker-password-1"))
+        self.assertFalse(self.temporary.has_usable_password())
+        self.assertEqual((self.temporary.first_name, self.temporary.last_name), ("Temp", "Member"))
+
+    def test_starting_an_upgrade_rejects_a_weak_password_before_any_code_is_sent(self):
+        with patch("apps.authn.services.email.send_email.send_verification_email") as send:
+            weak = self._start_upgrade(self.temp_client(), "password")
+
+        self.assertEqual(weak.status_code, 400)
+        self.assertIn("password", weak.data)
+        send.assert_not_called()
+        self.assertFalse(
+            EmailAuthChallenge.objects.filter(
+                member=self.temporary, purpose=EmailAuthChallenge.Purpose.REGISTER
+            ).exists()
+        )
+        self.temporary.refresh_from_db()
+        self.assertEqual(self.temporary.access_level, "temporary")
+
+    def test_link_holder_restarting_an_upgrade_cannot_replace_the_persons_password(self):
+        with (
+            patch("apps.authn.services.email.challenges._random_code", return_value="111111"),
+            patch("apps.authn.services.email.send_email.send_verification_email"),
+        ):
+            self.assertEqual(
+                self._start_upgrade(
+                    self.temp_client(), "person-password-1", "Real", "Person"
+                ).status_code,
+                202,
+            )
+        EmailAuthChallenge.objects.filter(member=self.temporary).update(
+            last_sent_at=timezone.now() - timedelta(minutes=5)
+        )
+        with (
+            patch("apps.authn.services.email.challenges._random_code", return_value="222222"),
+            patch("apps.authn.services.email.send_email.send_verification_email"),
+        ):
+            self.assertEqual(
+                self._start_upgrade(self.temp_client(), "attacker-password-1").status_code, 202
+            )
+
+        verified = self._verify_upgrade(
+            "222222",
+            password="person-password-1",
+            password_confirm="person-password-1",
+            first_name="Real",
+            last_name="Person",
+        )
+        self.assertEqual(verified.status_code, 200, verified.data)
+        self.temporary.refresh_from_db()
+        self.assertTrue(self.temporary.check_password("person-password-1"))
+        self.assertFalse(self.temporary.check_password("attacker-password-1"))
+        self.assertEqual(self.temporary.first_name, "Real")
+
+    def test_upgrade_verification_rejects_bad_details_without_spending_the_code(self):
+        with (
+            patch("apps.authn.services.email.challenges._random_code", return_value="333333"),
+            patch("apps.authn.services.email.send_email.send_verification_email"),
+        ):
+            self.assertEqual(
+                self._start_upgrade(self.temp_client(), "person-password-1").status_code, 202
+            )
+
+        mismatch = self._verify_upgrade(
+            "333333",
+            password="person-password-1",
+            password_confirm="different-password-2",
+            first_name="Real",
+            last_name="Person",
+        )
+        self.assertEqual(mismatch.status_code, 400)
+        self.assertIn("password_confirm", mismatch.data)
+        weak = self._verify_upgrade(
+            "333333",
+            password="password",
+            password_confirm="password",
+            first_name="Real",
+            last_name="Person",
+        )
+        self.assertEqual(weak.status_code, 400)
+        self.assertIn("password", weak.data)
+        self.temporary.refresh_from_db()
+        self.assertEqual(self.temporary.access_level, "temporary")
+        challenge = EmailAuthChallenge.objects.get(
+            member=self.temporary, purpose=EmailAuthChallenge.Purpose.REGISTER
+        )
+        self.assertEqual(challenge.status, EmailAuthChallenge.Status.PENDING)
+
+        # Without details the code still completes a passwordless upgrade.
+        verified = self._verify_upgrade("333333")
+        self.assertEqual(verified.status_code, 200, verified.data)
+        self.temporary.refresh_from_db()
+        self.assertEqual(self.temporary.access_level, "full")
+        self.assertFalse(self.temporary.has_usable_password())
 
     def test_upgrade_registration_errors_do_not_expose_the_session_email(self):
         endpoint = f"/events/temp-access/upgrade-registration?code={self.event.code}"
@@ -831,20 +854,16 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         origin = {"HTTP_ORIGIN": "http://testserver"}
         client = self.temp_client()
 
-        Weight.objects.create(
-            event=self.event,
-            participant=self.participant,
-            included=False,
-        )
-        excluded = client.put(
+        Participant.objects.filter(pk=self.participant.pk).update(hidden=True)
+        removed = client.put(
             endpoint,
             {"availabilityInperson": [1, 0], "expectedVersion": 1},
             format="json",
             **origin,
         )
-        self.assertEqual(excluded.status_code, 403)
-        self.assertEqual(excluded.data["errorCode"], "participant_excluded")
-        Weight.objects.all().delete()
+        self.assertEqual(removed.status_code, 403)
+        self.assertEqual(removed.data["errorCode"], "participant_excluded")
+        Participant.objects.filter(pk=self.participant.pk).update(hidden=False)
 
         invalid_availability = client.put(
             endpoint,
@@ -906,6 +925,36 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         )
         self.assertEqual(locked.status_code, 409)
         self.assertEqual(locked.data["errorCode"], "event_responses_locked")
+
+    def test_participant_left_out_of_the_results_still_saves_and_submits(self):
+        endpoint = f"/events/temp-access/participant?code={self.event.code}"
+        origin = {"HTTP_ORIGIN": "http://testserver"}
+        client = self.temp_client()
+        Weight.objects.create(event=self.event, participant=self.participant, included=False)
+
+        draft = client.put(
+            endpoint,
+            {"availabilityInperson": [1, 0], "expectedVersion": 1},
+            format="json",
+            **origin,
+        )
+        self.assertEqual(draft.status_code, 200, draft.data)
+        submitted = client.put(
+            endpoint,
+            {"submitted": 1, "expectedVersion": draft.data["participant"]["version"]},
+            format="json",
+            **origin,
+        )
+        self.assertEqual(submitted.status_code, 200, submitted.data)
+        self.participant.refresh_from_db()
+        self.assertTrue(self.participant.submitted)
+        self.assertEqual(self.participant.availability_inperson, [1, 0])
+        self.invitation.refresh_from_db()
+        self.assertEqual(self.invitation.status, EventInvitation.Status.SUBMITTED)
+        # Still out of the results until the organizer counts them again.
+        results = build_event_results(self.event)
+        self.assertEqual(results["countedResponseTotal"], 0)
+        self.assertEqual(results["exclusionReasons"]["organizerExcluded"], 1)
 
     def test_participant_endpoint_records_submit_withdraw_and_first_draft_transitions(self):
         endpoint = f"/events/temp-access/participant?code={self.event.code}"

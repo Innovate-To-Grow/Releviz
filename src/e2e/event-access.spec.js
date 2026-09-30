@@ -9,7 +9,6 @@ const {
   freshResults,
   invitationLinkFromEmail,
   latestEmailFor,
-  latestVerificationCode,
   newAccountContext,
   newRunId,
   readSession,
@@ -34,7 +33,7 @@ const { joinEventInBrowser } = require("./helpers/workspace");
 // an unknown code, and joining is refused. Invitation links record their
 // open (signed in or out) and never keep the private token in the address
 // bar, while the "preview" stand-in token that email previews carry records
-// nothing and can never verify. Results, the activity digest and the event
+// nothing and opens nothing. Results, the activity digest and the event
 // stream are the organizer's alone, and a participant's page holds only their
 // own calendar. Hiding a participant (an API-only action) takes away the
 // access they had through the roster, but not access an invitation or an
@@ -420,7 +419,7 @@ test.describe("Invitation links", () => {
     }
   });
 
-  test("the preview stand-in link on the temporary-access page asks for a code that is never issued and cannot verify even a valid one", async ({
+  test("the preview stand-in link on the temporary-access page opens nothing, while the real link opens the schedule without a code", async ({
     page,
     request,
   }) => {
@@ -464,91 +463,57 @@ print(json.dumps(EmailAuthChallenge.objects.filter(
         { email: guestEmail },
       );
 
-    // The page asks for a code with the stand-in token. The answer is the
-    // same neutral 202 a real link gets, but no challenge is issued (the
-    // request is handled before the answer, so the count is final) and the
+    // The page opens the link with the stand-in token. It matches no live
+    // invitation, so the answer is the one 404 every such link gets, the
+    // page says the link isn't active, no challenge is issued and the
     // invitation is not marked opened.
-    const previewRequest = apiCall(
-      page,
-      "POST",
-      "/events/temp-access/request-code",
-    );
+    const previewRequest = apiCall(page, "POST", "/events/temp-access/open");
     await page.goto(`/temp-access?code=${code}&invitation=preview`);
     const previewAnswer = await previewRequest;
-    expect(previewAnswer.status()).toBe(202);
+    expect(previewAnswer.status()).toBe(404);
     expect(previewAnswer.request().postDataJSON()).toEqual({
       code,
       invitationToken: "preview",
     });
     expect(await previewAnswer.json()).toEqual({
-      message:
-        "If this access link is valid, a verification code has been sent.",
+      error: "This invitation link is not active.",
+      errorCode: "temp_invitation_inactive",
     });
     await expect(page).toHaveURL(new RegExp(`/temp-access\\?code=${code}$`));
     await expect(
-      page.getByRole("heading", { level: 1, name: "Check your email" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("status").filter({
-        hasText:
-          "If this access link is valid, a six-digit code has been sent to its email address.",
+      page.getByRole("heading", {
+        level: 1,
+        name: "This invitation link isn't active",
       }),
     ).toBeVisible();
+    await expect(page.getByRole("heading", { name: event.name })).toHaveCount(
+      0,
+    );
     expect(tempChallenges()).toBe(0);
     expect(
       await invitationFor(request, organizer.access, code, guestEmail),
     ).toEqual(expect.objectContaining({ status: "invited", openedAt: null }));
-
-    // A real code, issued through the real link.
-    const requestedAt = Date.now() - 1000;
-    const realRequest = await request.post(
-      `${BACKEND_URL}/events/temp-access/request-code`,
-      { data: { code, invitationToken: realToken } },
-    );
-    expect(realRequest.status()).toBe(202);
-    const realCode = await latestVerificationCode(
-      guestEmail,
-      requestedAt,
-      "temp_event_access",
-    );
-    expect(tempChallenges()).toBe(1);
-
-    // Even that code does not verify against the stand-in token.
-    const refused = apiCall(page, "POST", "/events/temp-access/verify");
-    await page.getByLabel("Verification code").fill(realCode);
-    await page
-      .getByRole("button", { name: "Verify and open schedule" })
-      .click();
-    const refusedAnswer = await refused;
-    expect(refusedAnswer.status()).toBe(400);
-    expect(await refusedAnswer.json()).toEqual({
-      error: "Invalid or expired verification code.",
-    });
-    await expect(
-      page.getByText(
-        "That code could not be verified. Check the code or request a new one.",
-      ),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("heading", { level: 1, name: "Check your email" }),
-    ).toBeVisible();
     const session = await tempAccessSessionState(page, code);
     expect(session.status).toBe(401);
     expect(session.payload.errorCode).toBe("temp_session_inactive");
 
-    // The code itself was good: the real token verifies with it.
-    const verified = await request.post(
-      `${BACKEND_URL}/events/temp-access/verify`,
-      {
-        data: {
-          code,
-          invitationToken: realToken,
-          verificationCode: realCode,
-        },
-      },
+    // The real link opens Tara's schedule, still without any emailed code.
+    const opened = await request.post(
+      `${BACKEND_URL}/events/temp-access/open`,
+      { data: { code, invitationToken: realToken } },
     );
-    expect(verified.status()).toBe(200);
-    expect((await verified.json()).participant.name).toBe("Tara Temp");
+    expect(opened.status()).toBe(200);
+    expect((await opened.json()).participant.name).toBe("Tara Temp");
+    expect(tempChallenges()).toBe(0);
+    expect(
+      await invitationFor(request, organizer.access, code, guestEmail),
+    ).toEqual(
+      expect.objectContaining({
+        status: "opened",
+        openedAt: expect.any(String),
+        acceptedAt: null,
+      }),
+    );
   });
 });
 

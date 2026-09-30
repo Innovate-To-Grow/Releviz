@@ -401,7 +401,16 @@ test.describe("Contact emails", () => {
       `/authn/contact-emails/${contactId}/request-verification/`,
     );
     expect(tooSoon.status).toBe(429);
-    expect(tooSoon.payload).toEqual({ detail: VERIFICATION_THROTTLED });
+    expect(tooSoon.payload).toEqual({
+      detail: VERIFICATION_THROTTLED,
+      retry_after: expect.any(Number),
+    });
+    // The wait is what is left of the cooldown, in the header too.
+    expect(tooSoon.payload.retry_after).toBeGreaterThan(0);
+    expect(tooSoon.payload.retry_after).toBeLessThanOrEqual(60);
+    expect(tooSoon.response.headers()["retry-after"]).toBe(
+      String(tooSoon.payload.retry_after),
+    );
     expect(expireResendCooldown(altEmail)).toBe(1);
     const resentAt = Date.now() - 1000;
     const resent = await asOwner(
@@ -916,7 +925,10 @@ test.describe("Legacy email-code routes", () => {
       body: { email: unknown },
     });
     expect(nobody.status).toBe(202);
-    expect(nobody.payload).toEqual({ message: LOGIN_CODE_SENT });
+    expect(nobody.payload).toEqual({
+      message: LOGIN_CODE_SENT,
+      resend_after: 60,
+    });
     expect(
       runDjangoJson(
         `
@@ -933,7 +945,10 @@ print(json.dumps(EmailAuthChallenge.objects.filter(target_email__iexact=data["em
       body: { email: email.toUpperCase() },
     });
     expect(requested.status).toBe(202);
-    expect(requested.payload).toEqual({ message: LOGIN_CODE_SENT });
+    expect(requested.payload).toEqual({
+      message: LOGIN_CODE_SENT,
+      resend_after: 60,
+    });
     const code = await latestVerificationCode(email, requestedAt, "login");
 
     const verify = (body) =>
@@ -1080,14 +1095,26 @@ print(json.dumps(EmailAuthChallenge.objects.filter(target_email__iexact=data["em
       body: { email },
     });
     expect(tooSoon.status).toBe(429);
-    expect(tooSoon.payload).toEqual({ detail: VERIFICATION_THROTTLED });
+    expect(tooSoon.payload).toEqual({
+      detail: VERIFICATION_THROTTLED,
+      retry_after: expect.any(Number),
+    });
+    // The wait is what is left of the cooldown, in the header too.
+    expect(tooSoon.payload.retry_after).toBeGreaterThan(0);
+    expect(tooSoon.payload.retry_after).toBeLessThanOrEqual(60);
+    expect(tooSoon.response.headers()["retry-after"]).toBe(
+      String(tooSoon.payload.retry_after),
+    );
     expect(expireResendCooldown(email)).toBe(1);
     const resentAt = Date.now() - 1000;
     const resent = await api(request, "POST", "/authn/register/resend-code/", {
       body: { email: email.toUpperCase() },
     });
     expect(resent.status).toBe(202);
-    expect(resent.payload).toEqual({ message: "Verification code sent." });
+    expect(resent.payload).toEqual({
+      message: "Verification code sent.",
+      resend_after: 60,
+    });
     const secondCode = await latestVerificationCode(
       email,
       resentAt,

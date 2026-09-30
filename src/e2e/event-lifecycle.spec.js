@@ -39,14 +39,15 @@ const {
   eventControls,
   finalizeCurrentSelection,
   overviewTile,
-  reviewAttendance,
+  waitForAttendanceReview,
   wakeLiveSync,
 } = require("./helpers/workspace");
 const { DAY_MS, icsUtc, isoDate, weekStartMs } = require("./helpers/time");
 
 // The event lifecycle from the organizer's workspace: closing, archiving and
 // reactivating from the Event controls (each state's summary, buttons and
-// locks, the emails a change cancels, and the refusals the controls show),
+// locks, the confirmation closing and archiving ask for first, the emails a
+// change cancels, and the refusals the controls show),
 // finalizing (the attendance review, the meeting location, the confirmation
 // dialog's refusals, a meeting finalized elsewhere) and what a confirmed
 // meeting keeps while it is archived, on the workspace and the dashboard.
@@ -74,6 +75,13 @@ const LIFECYCLE_STATES = {
     buttons: ["Reactivate event"],
   },
 };
+// An archived event that still holds its confirmed meeting says so.
+const ARCHIVED_WITH_MEETING =
+  "This event is archived. The confirmed meeting still stands.";
+// Reactivating past the old deadline removes it, says so, and offers to set
+// a new one.
+const DEADLINE_REMOVED =
+  "Responses are open again. The old deadline had passed, so it was removed.";
 
 // Why "Edit event" and the Blocked times tools are locked.
 const ARCHIVED_LOCK = "Reactivate this archived event before editing it.";
@@ -85,21 +93,65 @@ const NOT_ACCEPTING = "The event is no longer accepting responses.";
 const FINALIZED_FIRST =
   "The event was finalized before this message was delivered.";
 const PAST_DEADLINE = "An active event must have a future response deadline.";
+// The error this test answers a held attendance reading with; the Finalize
+// step shows a failed reading's message as the server sent it.
+const REVIEW_UNAVAILABLE = "Attendance could not be read right now.";
 
 const lifecyclePreviewUrl = (code) => `/events/lifecycle/preview?code=${code}`;
 
+// The Finalize step's reading of a picked time's attendance
+// (POST events/finalization/preview).
+const ATTENDANCE_REVIEW_ROUTE = /\/events\/finalization\/preview\?/;
+function isAttendanceReview(request) {
+  return (
+    request.method() === "POST" && ATTENDANCE_REVIEW_ROUTE.test(request.url())
+  );
+}
+
+// Answers a held attendance reading with a server error the page can read
+// (the CORS headers let the cross-origin fetch resolve instead of failing as
+// a network error).
+async function failAttendanceReview(route, status, body) {
+  const origin = await route.request().headerValue("origin");
+  await route.fulfill({
+    status,
+    contentType: "application/json",
+    headers: {
+      "Access-Control-Allow-Origin": origin || new URL(FRONTEND_URL).origin,
+      "Access-Control-Allow-Credentials": "true",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
 // The badge, the summary, exactly the buttons of `status`, and the header's
-// Live line, which shows only while the event is active.
-async function expectLifecycleState(page, status) {
+// Live line, which shows only while the event is active. `summary` replaces
+// the status's usual one, and `notice` is the note a reactivation leaves (its
+// Set a new deadline button follows the lifecycle buttons).
+async function expectLifecycleState(
+  page,
+  status,
+  { summary = LIFECYCLE_STATES[status].summary, notice = null } = {},
+) {
   const controls = eventControls(page);
-  const { summary, buttons } = LIFECYCLE_STATES[status];
+  const { buttons } = LIFECYCLE_STATES[status];
   await expect(
     controls.locator(".organizer-lifecycle-panel__status"),
   ).toHaveText(status);
   await expect(
     controls.locator(".organizer-event-controls__lifecycle"),
   ).toHaveText(summary);
-  await expect(controls.getByRole("button")).toHaveText(buttons);
+  const noticeLine = controls.locator(".organizer-event-controls__notice");
+  if (notice) {
+    await expect(noticeLine).toHaveText(`${notice} Set a new deadline`);
+    await expect(controls.getByRole("button")).toHaveText([
+      ...buttons,
+      "Set a new deadline",
+    ]);
+  } else {
+    await expect(noticeLine).toHaveCount(0);
+    await expect(controls.getByRole("button")).toHaveText(buttons);
+  }
   const live = page.locator(".organizer-heading__live");
   if (status === "active") {
     await expect(live).toContainText("New responses load automatically.");
@@ -409,6 +461,19 @@ test.describe("Event controls", () => {
     await openWorkspace(page, event);
     await expectLifecycleState(page, "active");
 
+    // Closing says what it does first, and backing out changes nothing.
+    await eventControls(page)
+      .getByRole("button", { name: "Close responses", exact: true })
+      .click();
+    const closeDialog = page.getByRole("dialog", { name: "Close responses?" });
+    await expect(closeDialog).toContainText(
+      "Invitation and reminder emails still waiting to go out are canceled and automatic reminders stop.",
+    );
+    await closeDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(closeDialog).toHaveCount(0);
+    await expectLifecycleState(page, "active");
+    expect((await eventState(request, token, code)).status).toBe("active");
+
     // Closing stops responses but keeps editing open, and cancels the
     // invitation and reminder emails still waiting to go out. One already
     // sent stays sent.
@@ -452,14 +517,21 @@ test.describe("Event controls", () => {
     expect(response.request().postDataJSON().responseDeadline).toBeNull();
     expect((await response.json()).cancellationDeliveryRequestId).toBeNull();
     await expect(alert).toHaveCount(0);
-    await expectLifecycleState(page, "active");
+    await expectLifecycleState(page, "active", { notice: DEADLINE_REMOVED });
     await expect(overviewTile(page, "Responses")).toContainText("No deadline");
+    // Set a new deadline opens the event settings in place, on the deadline.
+    await eventControls(page)
+      .getByRole("button", { name: "Set a new deadline" })
+      .click();
+    await expect(page.getByLabel("Response Deadline")).toBeFocused();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByLabel("Response Deadline")).toHaveCount(0);
     expect(
       (await eventState(request, token, code)).responseDeadline,
     ).toBeNull();
 
-    // Archiving an active event cancels queued reminders too, and locks
-    // editing, blocked times and finalizing.
+    // Archiving an active event asks first, then cancels queued reminders
+    // too, and locks editing, blocked times and finalizing.
     const [queuedReminder] = seedDeliveryJobs(code, [
       {
         type: "reminder",
@@ -475,18 +547,21 @@ test.describe("Event controls", () => {
     ]);
     await expectEditingLocked(page, ARCHIVED_LOCK);
 
-    // A time can still be picked to look at, but not reviewed or finalized.
+    // A time can still be picked to look at, but not finalized, and nothing
+    // reads its attendance: no review is requested and no review line shows.
+    const reviews = requestRecorder(page, isAttendanceReview);
     await chooseRecommendedTime(page, 0);
     const finalize = page.locator("#organizer-finalize");
     await expect(finalize.getByRole("note")).toHaveText(
-      "Reactivate this event before reviewing and finalizing a meeting time.",
+      "Reactivate this event before finalizing a meeting time.",
     );
-    await expect(
-      finalize.getByRole("button", { name: "Review attendance" }),
-    ).toBeDisabled();
     await expect(
       finalize.getByRole("button", { name: "Finalize meeting" }),
     ).toBeDisabled();
+    await expect(finalize.getByText("Reviewing attendance…")).toHaveCount(0);
+    await expect(
+      finalize.getByText("Attendance review is current for this candidate."),
+    ).toHaveCount(0);
 
     // Reactivating reopens responses and clears the pick.
     response = await clickLifecycleButton(page, "Reactivate event", code);
@@ -498,6 +573,9 @@ test.describe("Event controls", () => {
       page.getByRole("button", { name: "Edit event" }),
     ).toBeEnabled();
     expect((await eventState(request, token, code)).status).toBe("active");
+    // By now a reading of the archived pick would long have been sent; the
+    // reactivation, which clears the pick, reads nothing either.
+    expect(reviews.entries).toEqual([]);
   });
 
   test("the server's refusals show in the event controls and change nothing", async ({
@@ -595,7 +673,7 @@ test.describe("Event controls", () => {
     expect(reopened.status()).toBe(202);
     expect(reopened.request().postDataJSON().responseDeadline).toBeNull();
     await expect(alert).toHaveCount(0);
-    await expectLifecycleState(page, "active");
+    await expectLifecycleState(page, "active", { notice: DEADLINE_REMOVED });
     expect(
       (await eventState(request, token, code)).responseDeadline,
     ).toBeNull();
@@ -977,7 +1055,9 @@ print(json.dumps(EmailDeliveryJob.objects.filter(
     await dialog.getByRole("button", { name: "Close dialog" }).click();
     await expect(dialog).toHaveCount(0);
     await releaseAndReload(page, release, code);
-    await expectLifecycleState(page, "archived");
+    await expectLifecycleState(page, "archived", {
+      summary: ARCHIVED_WITH_MEETING,
+    });
     await openFinalize(page);
     await expect(
       page.locator("#organizer-finalize .finalized-meeting"),
@@ -1013,7 +1093,9 @@ test.describe("Archiving a finalized event", () => {
 
     const archived = await clickLifecycleButton(page, "Archive event", code);
     expect(archived.status()).toBe(200);
-    await expectLifecycleState(page, "archived");
+    await expectLifecycleState(page, "archived", {
+      summary: ARCHIVED_WITH_MEETING,
+    });
     await expect(eventControls(page).getByRole("alert")).toHaveCount(0);
     await expect(meetingCard.locator(".finalized-meeting__meta")).toHaveText(
       "In person · Board Room",
@@ -1088,7 +1170,9 @@ test.describe("Archiving a finalized event", () => {
     expect(preview.payload.cancellation.recipientCount).toBe(1);
 
     await openWorkspace(page, event);
-    await expectLifecycleState(page, "archived");
+    await expectLifecycleState(page, "archived", {
+      summary: ARCHIVED_WITH_MEETING,
+    });
     const lifecyclePuts = requestRecorder(
       page,
       (candidate) =>
@@ -1159,9 +1243,18 @@ test.describe("Archiving a finalized event", () => {
     await page.keyboard.press("Enter");
     await lockedEdit.dispatchEvent("click");
 
-    // The dashboard offers Archive for a finalized event, and archiving
-    // keeps its confirmed meeting.
+    // The dashboard offers Archive for a finalized event. It says first that
+    // the confirmed meeting stays and nobody is emailed, and archiving keeps
+    // that meeting.
     await finalizedCard.getByRole("button", { name: "Archive" }).click();
+    const archiveDialog = page.getByRole("dialog", {
+      name: "Archive this event?",
+    });
+    await expect(archiveDialog).toContainText(
+      "The confirmed meeting stays as it is and nobody is emailed.",
+    );
+    await archiveDialog.getByRole("button", { name: "Archive event" }).click();
+    await expect(archiveDialog).toHaveCount(0);
     await expect(page.getByText(`${event.name} was archived.`)).toBeVisible();
     await expect(finalizedCard.getByText("Status: archived")).toBeVisible();
     await expect(
@@ -1183,7 +1276,7 @@ test.describe("Archiving a finalized event", () => {
 });
 
 test.describe("Finalize", () => {
-  test("reviews attendance person by person, finalizes at the location typed, and cancels availability emails still queued", async ({
+  test("reads attendance person by person as soon as a time is picked, drops a reading the pick outran, finalizes at the location typed, and cancels availability emails still queued", async ({
     page,
     request,
   }) => {
@@ -1234,7 +1327,10 @@ test.describe("Finalize", () => {
       { included: false, expectedVersion: fayEntry.version },
     );
     expect(excluded.response.status()).toBe(200);
-    const best = (await freshResults(request, token, code)).recommendations[0];
+    // Monday 10:00 is the best time; Tuesday 14:00, where only Cam is free,
+    // the runner-up.
+    const [best, second] = (await freshResults(request, token, code))
+      .recommendations;
     await expectRefusal(
       apiJson(request, "GET", `/events/finalization?code=${code}`, token),
       404,
@@ -1258,6 +1354,17 @@ test.describe("Finalize", () => {
       },
     ]);
 
+    // Picking a time reads its attendance at once. The readings are held
+    // here while the route is on, so the step can be seen waiting for one.
+    const heldReviews = [];
+    const holdReviews = (route) => {
+      if (route.request().method() === "POST") {
+        heldReviews.push(route);
+      } else {
+        route.fallback();
+      }
+    };
+    await page.route(ATTENDANCE_REVIEW_ROUTE, holdReviews);
     await openWorkspace(page, event);
     await chooseRecommendedTime(page, 0);
     const finalize = page.locator("#organizer-finalize");
@@ -1265,15 +1372,82 @@ test.describe("Finalize", () => {
       name: "Finalize meeting",
     });
     const currentStep = finalize.locator('[aria-current="step"]');
+    const reviewing = finalize.getByText("Reviewing attendance…");
     const reviewNotice = finalize.getByText(
       "Attendance review is current for this candidate.",
     );
     const tiles = finalize.getByRole("group", { name: "Attendance review" });
-    // Finalizing waits for a review of the time picked.
+    await expect.poll(() => heldReviews.length).toBe(1);
+    // It asks about the time alone: no location rides along.
+    const reading = heldReviews[0].request().postDataJSON();
+    expect(Object.keys(reading).sort()).toEqual([
+      "channel",
+      "endsAt",
+      "startsAt",
+    ]);
+    expect(Date.parse(reading.startsAt)).toBe(
+      Date.parse(best.suggestedStartsAt),
+    );
+    // Finalizing waits for that reading; there is nothing to press meanwhile.
     await expect(currentStep).toHaveText("Review attendance");
+    await expect(reviewing).toBeVisible();
+    await expect(
+      finalize.getByRole("button", { name: "Review attendance" }),
+    ).toHaveCount(0);
     await expect(finalizeButton).toBeDisabled();
 
-    await reviewAttendance(page);
+    // Picking another time while that reading is still on its way reads
+    // the new time instead. The first answer, arriving after the pick moved
+    // on, is dropped: the step keeps waiting for the new reading.
+    await chooseRecommendedTime(page, 1);
+    await expect.poll(() => heldReviews.length).toBe(2);
+    expect(Date.parse(heldReviews[1].request().postDataJSON().startsAt)).toBe(
+      Date.parse(second.suggestedStartsAt),
+    );
+    const lateAnswer = page.waitForResponse((candidate) =>
+      isAttendanceReview(candidate.request()),
+    );
+    await heldReviews[0].continue();
+    const late = await lateAnswer;
+    expect(late.status()).toBe(200);
+    await late.finished();
+    await expect(currentStep).toHaveText("Review attendance");
+    await expect(reviewing).toBeVisible();
+    await expect(tiles).toHaveCount(0);
+    await expect(finalizeButton).toBeDisabled();
+    // The new reading then fails: the step says so and offers Try again.
+    // That it does also shows the late answer was not taken as the new
+    // pick's reading: had it been, the step would have stopped waiting,
+    // and the new reading's failure would have gone unreported.
+    await failAttendanceReview(heldReviews[1], 503, {
+      error: REVIEW_UNAVAILABLE,
+    });
+    const reviewAlert = finalize
+      .getByRole("alert")
+      .filter({ hasText: REVIEW_UNAVAILABLE });
+    await expect(reviewAlert).toBeVisible();
+    await expect(tiles).toHaveCount(0);
+    await expect(finalizeButton).toBeDisabled();
+    await page.unroute(ATTENDANCE_REVIEW_ROUTE, holdReviews);
+
+    // Try again reads the picked time once more, and the review shown is
+    // that time's own: only Cam is free on Tuesday.
+    await reviewAlert.getByRole("button", { name: "Try again" }).click();
+    await waitForAttendanceReview(page);
+    await expect(reviewAlert).toHaveCount(0);
+    for (const [label, value] of [
+      ["Available", "1"],
+      ["Partial", "0"],
+      ["Unavailable", "2"],
+      ["Unanswered", "1"],
+      ["Excluded", "2"],
+    ]) {
+      await expect(attendanceTile(page, label)).toHaveText(value);
+    }
+
+    // Back on the best time, its own reading is made and Finalize is offered.
+    await chooseRecommendedTime(page, 0);
+    await waitForAttendanceReview(page);
     await expect(currentStep).toHaveText("Finalize meeting");
     await expect(finalizeButton).toBeEnabled();
     for (const [label, value] of [
@@ -1290,9 +1464,9 @@ test.describe("Finalize", () => {
     });
     await expect(attendance.getByRole("row")).toHaveCount(7);
     for (const [name, response, availability] of [
-      ["Ada Answer", "Submitted", "Fully available · 100%"],
-      ["Ben Maybe", "Submitted", "Partly available · 50%"],
-      ["Cam Busy", "Submitted", "Not available · 0%"],
+      ["Ada Answer", "Submitted", "Fully available"],
+      ["Ben Maybe", "Submitted", "Available if needed"],
+      ["Cam Busy", "Submitted", "Not available"],
       ["Dee Silent", "Not submitted", "—"],
       ["Eve Hidden", "Not included", "Hidden from results"],
       ["Fay Excluded", "Not included", "Excluded by organizer"],
@@ -1303,52 +1477,37 @@ test.describe("Finalize", () => {
       await expect(row.getByRole("cell")).toHaveText([response, availability]);
     }
 
-    // The location starts as the event's own. Editing it clears the review.
+    // The location starts as the event's own. It belongs to the meeting,
+    // not to the attendance: typing it keeps the review and Finalize.
     const location = finalize.getByRole("textbox", {
       name: "Location or meeting link",
     });
     await expect(location).toHaveValue("Calendar Room");
     await location.fill("Studio 9");
-    await expect(reviewNotice).toHaveCount(0);
-    await expect(tiles).toHaveCount(0);
-    await expect(currentStep).toHaveText("Review attendance");
-    await expect(finalizeButton).toBeDisabled();
+    await expect(reviewNotice).toBeVisible();
+    await expect(tiles).toBeVisible();
+    await expect(currentStep).toHaveText("Finalize meeting");
+    await expect(finalizeButton).toBeEnabled();
 
-    // A review still on its way when the location changes again is dropped
-    // on arrival.
-    const previewPattern = /\/events\/finalization\/preview\?/;
-    const heldReviews = [];
-    const holdFirstReview = (route) => {
-      if (route.request().method() === "POST" && heldReviews.length === 0) {
-        heldReviews.push(route);
-      } else {
-        route.fallback();
-      }
-    };
-    await page.route(previewPattern, holdFirstReview);
-    await finalize.getByRole("button", { name: "Review attendance" }).click();
-    await expect.poll(() => heldReviews.length).toBe(1);
-    await expect(
-      finalize.getByRole("button", { name: "Reviewing…" }),
-    ).toBeDisabled();
+    // The confirmation is previewed at the click on Finalize, with the
+    // location typed by then, and the meeting is finalized where it was
+    // typed.
     await location.fill("Studio 4");
-    const answered = page.waitForResponse(
-      (candidate) =>
-        candidate.request().method() === "POST" &&
-        previewPattern.test(candidate.url()),
+    const confirmationPreview = page.waitForRequest(
+      (sent) =>
+        sent.method() === "POST" &&
+        ATTENDANCE_REVIEW_ROUTE.test(sent.url()) &&
+        "location" in (sent.postDataJSON() || {}),
     );
-    await heldReviews[0].continue();
-    expect((await answered).status()).toBe(200);
-    await page.unroute(previewPattern, holdFirstReview);
-    await expect(
-      finalize.getByRole("button", { name: "Review attendance" }),
-    ).toBeEnabled();
-    await expect(reviewNotice).toHaveCount(0);
-    await expect(tiles).toHaveCount(0);
-    await expect(finalizeButton).toBeDisabled();
-
-    // Reviewed again, the meeting is finalized where it was typed.
     await finalizeCurrentSelection(page, code);
+    const previewed = (await confirmationPreview).postDataJSON();
+    expect(previewed).toMatchObject({
+      channel: "inperson",
+      location: "Studio 4",
+    });
+    expect(Date.parse(previewed.startsAt)).toBe(
+      Date.parse(best.suggestedStartsAt),
+    );
     await expect(finalize.locator(".finalized-meeting__meta")).toHaveText(
       "In person · Studio 4",
     );
@@ -1413,7 +1572,7 @@ test.describe("Finalize", () => {
     const best = (await freshResults(request, token, code)).recommendations[0];
     await openWorkspace(page, event);
     await chooseRecommendedTime(page, 0);
-    await reviewAttendance(page);
+    await waitForAttendanceReview(page);
     const finalize = page.locator("#organizer-finalize");
     await finalize.getByRole("button", { name: "Finalize meeting" }).click();
     const dialog = page.getByRole("dialog", { name: "Finalize meeting" });
@@ -1474,7 +1633,7 @@ test.describe("Finalize", () => {
     expect(reopened.status()).toBe(202);
     await expectLifecycleState(page, "active");
     await chooseRecommendedTime(page, 0);
-    await reviewAttendance(page);
+    await waitForAttendanceReview(page);
     await finalize.getByRole("button", { name: "Finalize meeting" }).click();
     await expect(dialog.getByText("Step 1 of 2: Review")).toBeVisible();
     await finalizeViaApi(request, token, code, best);

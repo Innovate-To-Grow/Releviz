@@ -1,10 +1,13 @@
 """Views for public email-code auth flows."""
 
+from functools import partial
+
 from django.contrib.auth import get_user_model
 from django.db.models import Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rest_framework import status
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -26,7 +29,11 @@ from apps.authn.serializers import (
     UnifiedEmailAuthRequestSerializer,
     UnifiedEmailAuthVerifySerializer,
 )
-from apps.authn.services import AuthChallengeInvalid
+from apps.authn.services import (
+    AuthChallengeInvalid,
+    apply_registration_details,
+    validated_registration_details,
+)
 
 from ..helpers import auth_success_response, build_auth_success_payload
 from .email_code_helpers import auth_challenge_response, request_code_response
@@ -106,9 +113,17 @@ class RegisterVerifyCodeView(APIView):
     # noinspection PyMethodMayBeStatic
     def post(self, request):
         enforce_cookie_request_origin(request)
+        # A temporary member's upgrade carries its password and names here, next
+        # to the emailed code, so only the mailbox holder can set them.
+        try:
+            details = (
+                validated_registration_details(request.data) if "password" in request.data else None
+            )
+        except DRFValidationError as exc:
+            return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
         serializer = RegisterVerifyCodeSerializer(
             data=request.data,
-            context={"approved_callback": _complete_registration},
+            context={"approved_callback": partial(_complete_registration, details=details)},
         )
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -196,11 +211,14 @@ def _complete_login(challenge):
     return build_auth_success_payload(member, "Login successful.")
 
 
-def _complete_registration(challenge):
+def _complete_registration(challenge, details=None):
     member = _lock_challenge_member(challenge)
     was_inactive = not member.is_active
     was_temporary = member.access_level == Member.AccessLevel.TEMPORARY
     member_update_fields = []
+    if was_temporary and details is not None:
+        apply_registration_details(member, details, email=challenge.target_email)
+        member_update_fields += ["first_name", "last_name", "email", "password"]
     if was_inactive:
         member.is_active = True
         member_update_fields.append("is_active")

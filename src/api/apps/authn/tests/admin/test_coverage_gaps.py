@@ -287,7 +287,6 @@ class ImportResultMessageTests(TestCase):
         )
 
         request = RequestFactory().post("/import/", {})
-        request.user = get_user_model()(is_superuser=True)
 
         with (
             patch.object(helpers, "MemberImportForm") as FormCls,

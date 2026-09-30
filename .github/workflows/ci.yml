@@ -209,20 +209,6 @@ jobs:
     timeout-minutes: 15
     needs: [backend-lint, changes]
     if: ${{ needs.changes.outputs.backend == 'true' }}
-    services:
-      postgres:
-        image: public.ecr.aws/docker/library/postgres:16
-        env:
-          POSTGRES_DB: releviz_test
-          POSTGRES_USER: releviz
-          POSTGRES_PASSWORD: releviz
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U releviz -d releviz_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     defaults:
       run:
         working-directory: src/api
@@ -236,6 +222,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+
+      - name: Start PostgreSQL
+        uses: ./.github/actions/setup-postgres
+        with:
+          database: ${{ env.DB_NAME }}
+          user: ${{ env.DB_USER }}
+          password: ${{ env.DB_PASSWORD }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -337,20 +330,6 @@ jobs:
       fail-fast: false
       matrix:
         app: ${{ fromJson(needs.django-test-plan.outputs.apps) }}
-    services:
-      postgres:
-        image: public.ecr.aws/docker/library/postgres:16
-        env:
-          POSTGRES_DB: releviz_test
-          POSTGRES_USER: releviz
-          POSTGRES_PASSWORD: releviz
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U releviz -d releviz_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     defaults:
       run:
         working-directory: src/api
@@ -364,6 +343,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+
+      - name: Start PostgreSQL
+        uses: ./.github/actions/setup-postgres
+        with:
+          database: ${{ env.DB_NAME }}
+          user: ${{ env.DB_USER }}
+          password: ${{ env.DB_PASSWORD }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -1235,20 +1221,6 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.e2e-plan.outputs.matrix) }}
-    services:
-      postgres:
-        image: public.ecr.aws/docker/library/postgres:16
-        env:
-          POSTGRES_DB: releviz_test
-          POSTGRES_USER: releviz
-          POSTGRES_PASSWORD: releviz
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U releviz -d releviz_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     env:
       DB_HOST: 127.0.0.1
       DB_PORT: 5432
@@ -1267,6 +1239,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+
+      - name: Start PostgreSQL
+        uses: ./.github/actions/setup-postgres
+        with:
+          database: ${{ env.DB_NAME }}
+          user: ${{ env.DB_USER }}
+          password: ${{ env.DB_PASSWORD }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -1437,19 +1416,21 @@ jobs:
       - name: Merge blob reports
         env:
           PLAYWRIGHT_JUNIT_OUTPUT_NAME: results.xml
+          PLAYWRIGHT_JSON_OUTPUT_NAME: results.json
         run: |
           set -euo pipefail
           if [ ! -d all-blob-reports ] || [ -z "$(ls -A all-blob-reports 2>/dev/null)" ]; then
             echo "::notice::No blob reports to merge."
             exit 0
           fi
-          npx playwright merge-reports --reporter html,github,junit all-blob-reports
+          npx playwright merge-reports --reporter html,github,junit,json all-blob-reports
 
       - name: Write E2E summary
         if: ${{ always() }}
         run: |
           python3 - <<'PY'
           import glob
+          import json
           import os
           import xml.etree.ElementTree as ET
 
@@ -1468,13 +1449,25 @@ jobs:
                   skip += int(suite.get("skipped", 0))
                   duration += float(suite.get("time", 0) or 0)
           passed = total - fail - err - skip
+          # JUnit counts a test that passed on its retry as passed; the JSON
+          # report's stats say how many of those passes were flaky.
+          flaky = 0
+          try:
+              with open("results.json", encoding="utf-8") as fh:
+                  flaky = int(json.load(fh).get("stats", {}).get("flaky", 0))
+          except (OSError, ValueError):
+              pass
+          if flaky:
+              print(f"::warning::{flaky} E2E test(s) passed only on retry; see the flaky annotations.")
           summary = os.environ.get("GITHUB_STEP_SUMMARY")
           if summary:
               with open(summary, "a", encoding="utf-8") as fh:
                   fh.write("## Playwright E2E\n\n")
-                  fh.write("| Total | Passed | Failed | Skipped | Duration |\n")
-                  fh.write("|---:|---:|---:|---:|---:|\n")
-                  fh.write(f"| {total} | {passed} | {fail + err} | {skip} | {duration:.1f}s |\n")
+                  fh.write("| Total | Passed | Flaky | Failed | Skipped | Duration |\n")
+                  fh.write("|---:|---:|---:|---:|---:|---:|\n")
+                  fh.write(
+                      f"| {total} | {passed} | {flaky} | {fail + err} | {skip} | {duration:.1f}s |\n"
+                  )
           PY
 
       - name: Annotate test results
@@ -1495,6 +1488,7 @@ jobs:
           path: |
             playwright-report
             results.xml
+            results.json
           if-no-files-found: warn
 
   e2e-required-result:
