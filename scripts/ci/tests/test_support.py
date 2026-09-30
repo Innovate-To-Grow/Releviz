@@ -248,27 +248,41 @@ class LastSuccessfulReleaseTests(TestCase):
     script = Path(__file__).resolve().parents[3] / "scripts" / "ci" / "last-successful-release.sh"
     repository = "Innovate-To-Grow/Releviz"
     # A fake gh: every request is answered from a canned JSON file keyed by
-    # its URL, and --jq is applied with the real jq. Like gh, it takes no
-    # other jq options.
+    # its URL, and --jq is applied with the real jq. Paginated responses use
+    # &page=2, &page=3, etc.; a missing next-page fixture ends the history.
     FAKE_GH = """#!/usr/bin/env bash
 set -euo pipefail
 filter=""
 url=""
+paginate=false
 while [ $# -gt 0 ]; do
   case "$1" in
     api) shift ;;
     -H) shift 2 ;;
     --jq) filter="$2"; shift 2 ;;
+    --paginate) paginate=true; shift ;;
     --*) echo "unsupported gh option: $1" >&2; exit 1 ;;
     *) url="$1"; shift ;;
   esac
 done
-file="${FAKE_GH_DIR}/$(printf '%s' "$url" | sha256sum | cut -c1-16).json"
-if [ ! -f "$file" ]; then
-  echo "unexpected request: $url" >&2
-  exit 1
-fi
-jq -r "$filter" "$file"
+page=1
+request_url="$url"
+while true; do
+  file="${FAKE_GH_DIR}/$(printf '%s' "$request_url" | sha256sum | cut -c1-16).json"
+  if [ ! -f "$file" ]; then
+    if [ "$page" -gt 1 ]; then
+      break
+    fi
+    echo "unexpected request: $request_url" >&2
+    exit 1
+  fi
+  jq -r "$filter" "$file"
+  if [ "$paginate" != true ]; then
+    break
+  fi
+  page=$((page + 1))
+  request_url="${url}&page=${page}"
+done
 """
 
     @staticmethod
@@ -299,10 +313,15 @@ jq -r "$filter" "$file"
                 check=False,
             )
 
-    def orchestrated_runs(self, *runs):
-        return {
+    def orchestrated_runs(self, *runs, page: int = 1):
+        url = (
             f"repos/{self.repository}/actions/workflows/release.yml/runs"
-            "?branch=main&status=completed&per_page=50": {
+            "?branch=main&status=completed&per_page=50"
+        )
+        if page > 1:
+            url += f"&page={page}"
+        return {
+            url: {
                 "workflow_runs": [
                     {"id": run_id, "created_at": created_at, "head_sha": sha, "event": event}
                     for run_id, created_at, sha, event, _jobs in runs
@@ -373,6 +392,82 @@ jq -r "$filter" "$file"
                 result = self.run_script(surface, responses)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), expected)
+
+    def test_finds_success_beyond_the_first_fifty_runs(self):
+        released, legacy = "a" * 40, "b" * 40
+        responses = {
+            **self.orchestrated_runs(
+                *(
+                    (
+                        run_id,
+                        "2026-09-23T10:00:00Z",
+                        f"{run_id:040x}",
+                        "workflow_run",
+                        [
+                            ("frontend / Release frontend to production", "success"),
+                            (
+                                "backend / Release backend to production",
+                                "skipped" if run_id % 2 else "failure",
+                            ),
+                        ],
+                    )
+                    for run_id in range(100, 50, -1)
+                )
+            ),
+            **self.orchestrated_runs(
+                (
+                    50,
+                    "2026-09-22T10:00:00Z",
+                    released,
+                    "workflow_run",
+                    [("backend / Release backend to production", "success")],
+                ),
+                (
+                    49,
+                    "2026-09-21T10:00:00Z",
+                    "c" * 40,
+                    "workflow_run",
+                    [("backend / Release backend to production", "success")],
+                ),
+                page=2,
+            ),
+            **self.workflow_runs("release-backend.yml", ("2026-09-01T00:00:00Z", legacy)),
+        }
+        result = self.run_script("backend", responses)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), released)
+
+    def test_falls_back_when_paginated_history_has_no_success(self):
+        legacy = "d" * 40
+        responses = {
+            **self.orchestrated_runs(
+                *(
+                    (
+                        run_id,
+                        "2026-09-23T10:00:00Z",
+                        f"{run_id:040x}",
+                        "workflow_run",
+                        [("backend / Release backend to production", "skipped")],
+                    )
+                    for run_id in range(100, 50, -1)
+                )
+            ),
+            **self.orchestrated_runs(
+                (
+                    50,
+                    "2026-09-22T10:00:00Z",
+                    "e" * 40,
+                    "workflow_run",
+                    [("backend / Release backend to production", "failure")],
+                ),
+                page=2,
+            ),
+            **self.workflow_runs("release-backend.yml"),
+            **self.workflow_runs("deploy-prod.yml", ("2026-09-01T00:00:00Z", legacy)),
+        }
+        result = self.run_script("backend", responses)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), legacy)
 
     def test_ignores_orchestrated_runs_from_other_events(self):
         pushed, released = "c" * 40, "d" * 40
