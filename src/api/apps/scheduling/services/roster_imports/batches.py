@@ -24,6 +24,7 @@ from .normalization import (
     batch_organizer_addresses,
     normalize_group_cell,
     normalize_import_batch,
+    refused_cell_errors,
     rows_summary,
     validate_identity_fields,
     validate_phone,
@@ -196,7 +197,13 @@ def _apply_row_updates(batch: RosterImportBatch, updates) -> None:
             row.included = parse_included(item.get("included"), label="rowUpdates.included")
         if "selected" in item:
             row.selected = parse_included(item.get("selected"), label="rowUpdates.selected")
-        row.validation_errors = identity_errors
+        # A cell the sheet refused keeps its error until the update sets that
+        # field, since the fallback the row holds instead was nobody's choice.
+        updated = {"group" if key == "groupName" else key for key in item}
+        row.validation_errors = [
+            *refused_cell_errors(row.validation_errors, updated=updated),
+            *identity_errors,
+        ]
         row.duplicate_status = RosterImportRow.DuplicateStatus.UNIQUE
 
     apply_duplicate_rules(all_rows, addresses)
@@ -225,6 +232,8 @@ def _apply_row_updates(batch: RosterImportBatch, updates) -> None:
 
 
 def require_preview(batch: RosterImportBatch) -> None:
+    if batch.status == RosterImportBatch.Status.EXPIRED:
+        raise RosterImportError("This import preview has expired.", status_code=410)
     if batch.status != RosterImportBatch.Status.PREVIEW:
         raise RosterImportError(
             f"This import is {batch.status} and can no longer be changed.",

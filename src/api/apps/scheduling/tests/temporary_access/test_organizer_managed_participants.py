@@ -1,5 +1,6 @@
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from unittest import skipUnless
 from unittest.mock import patch
 
@@ -35,7 +36,7 @@ ORGANIZER_EMAIL = "organizer@example.com"
 NOT_OWNED_MESSAGE = "Use one of your own verified email addresses for a person you manage."
 OWN_EMAIL_MESSAGE = (
     "That is one of your own addresses. Use Add myself to add yourself as a participant, "
-    'or check "No email of their own" to add a person you manage.'
+    'or tick "They have no email. I\'ll enter their schedule." to add a person you manage.'
 )
 
 
@@ -730,8 +731,23 @@ class OrganizerManagedParticipantTests(TestCase):
         closed = self.add_managed("Uncle Bob")
         self.assertEqual(closed.status_code, 409, closed.data)
         self.assertEqual(closed.data["error"], "Responses cannot change while the event is closed.")
+        # The refusal names the lifecycle and carries the event, so the
+        # workspace can lock the list without waiting for live sync.
+        self.assertEqual(closed.data["errorCode"], "event_not_active")
+        self.assertEqual(closed.data["event"]["status"], Event.Status.CLOSED)
+        self.assertEqual(closed.data["event"]["code"], self.event.code)
+        self.assertIn("no-store", closed["Cache-Control"])
         self.event.status = Event.Status.ACTIVE
-        self.event.save(update_fields=["status", "updated_at"])
+        self.event.response_deadline = timezone.now() - timedelta(minutes=1)
+        self.event.save(update_fields=["status", "response_deadline", "updated_at"])
+        # Past the deadline the event is still active, so it is only refused.
+        late = self.add_managed("Uncle Bob")
+        self.assertEqual(late.status_code, 409, late.data)
+        self.assertEqual(late.data["error"], "The response deadline has passed.")
+        self.assertNotIn("errorCode", late.data)
+        self.assertNotIn("event", late.data)
+        self.event.response_deadline = None
+        self.event.save(update_fields=["response_deadline", "updated_at"])
 
         outsider = create_member("outsider@example.com", "Other", "Person")
         outsider_client = APIClient()

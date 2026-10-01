@@ -8,7 +8,12 @@ from django.test import TestCase
 from django.urls import reverse
 
 from apps.core.tests.helpers import make_admin, make_member, make_superuser
-from apps.mail.models import EmailProviderConfig
+from apps.mail.models import (
+    EmailDeliveryJob,
+    EmailDeliveryRequest,
+    EmailMessageLog,
+    EmailProviderConfig,
+)
 from apps.scheduling.models import Event, ParticipantGroup
 
 CORE_URL = "/admin/core/awscredentialconfig/"
@@ -88,7 +93,10 @@ class RegisteredAdminAccessIntegrationTest(TestCase):
                 )
                 self.assertEqual(response.status_code, 200)
 
-    def test_admin_without_app_grants_can_open_scheduling_and_mail_add_pages(self):
+    def test_admin_without_app_grants_opens_scheduling_and_mail_add_pages_except_read_only(self):
+        # Email logs, delivery jobs and delivery requests are audit and outbox
+        # records that nobody adds by hand, whatever their role.
+        read_only_records = {EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog}
         self.client.force_login(make_admin(apps=[]))
         for app_label in ("scheduling", "mail"):
             for model in admin.site._registry:
@@ -99,7 +107,8 @@ class RegisteredAdminAccessIntegrationTest(TestCase):
                     response = self.client.get(
                         reverse(f"admin:{opts.app_label}_{opts.model_name}_add")
                     )
-                    self.assertEqual(response.status_code, 200)
+                    expected = 403 if model in read_only_records else 200
+                    self.assertEqual(response.status_code, expected)
 
     def test_legacy_model_permissions_do_not_grant_nonstaff_admin_access(self):
         user = make_member(admin_apps=["scheduling", "mail"])

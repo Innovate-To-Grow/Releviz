@@ -50,6 +50,11 @@ function subscribeAuth(callback) {
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(() => readAuthSession());
   const [loading, setLoading] = useState(true);
+  // Set while a log out is under way. logoutApi clears the session (and so
+  // re-renders every page signed out) before logout navigates home, and a
+  // signed-in-only page's login redirect in that re-render would replace the
+  // pending navigation; those guards skip their redirect while this is set.
+  const [signingOut, setSigningOut] = useState(false);
   const pathname = usePathname();
   const previousPathname = useRef(pathname);
   const lastValidatedAt = useRef(0);
@@ -172,7 +177,14 @@ export function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(async () => {
-    await logoutApi();
+    setSigningOut(true);
+    try {
+      await logoutApi();
+    } catch (error) {
+      // A failed log out keeps the person signed in on the page they are on.
+      setSigningOut(false);
+      throw error;
+    }
     setSession(null);
     navigateTo("/");
   }, []);
@@ -225,6 +237,7 @@ export function AuthProvider({ children }) {
     () => ({
       user: session?.user || null,
       loading,
+      signingOut,
       nextStep: session?.nextStep || null,
       requiresProfileCompletion: session?.requiresProfileCompletion || false,
       login,
@@ -247,6 +260,7 @@ export function AuthProvider({ children }) {
     [
       session,
       loading,
+      signingOut,
       login,
       requestEmailLoginCode,
       verifyEmailLoginCode,

@@ -29,6 +29,18 @@ const contentSecurityPolicy = [
 ].join("; ");
 
 const serverConfig = {
+  // The legacy Clerk-era sign-in and sign-up addresses, with any sub-path. The
+  // pages under app/sign-in and app/sign-up redirect too, but a page's
+  // redirect() answers a route's first, uncached request with the Location
+  // header twice, which Safari joins into "/login, /login". Redirecting here,
+  // before the pages render, sends it once. The static export has no server
+  // redirects, so its pages redirect in the browser instead.
+  async redirects() {
+    return [
+      { source: "/sign-in/:path*", destination: "/login", permanent: false },
+      { source: "/sign-up/:path*", destination: "/signup", permanent: false },
+    ];
+  },
   async headers() {
     return [
       {

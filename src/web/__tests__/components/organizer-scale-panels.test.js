@@ -1231,6 +1231,29 @@ test("overview reports the complete inline save result and closes the form", asy
   expect(screen.getByRole("button", { name: "Edit event" })).toBeEnabled();
 });
 
+test("overview returns focus to Edit event after a save without waiting on a timer", async () => {
+  // The save closes the editor after an await, so its render is scheduled
+  // rather than immediate. Frozen timers show focus does not depend on one.
+  jest.useFakeTimers();
+  try {
+    const user = userEvent.setup({ delay: null });
+    render(<OverviewPanel event={baseEvent} onEventSaved={jest.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Edit event" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Edit event" })).toHaveFocus(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit event" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Edit event" })).toHaveFocus();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 test("overview keeps a confirmed meeting summary visible while details are collapsed", () => {
   render(
     <OverviewPanel
@@ -1610,6 +1633,72 @@ test("event controls reopen a finalized event at once when nobody is told of a c
   );
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
+
+test("event controls review the cancellation before reopening an archived event that keeps its meeting", async () => {
+  previewEventLifecycle.mockResolvedValue({
+    cancellation: {
+      recipientCount: 1,
+      email: previewEmail(),
+      sample: { name: "Pat Person", email: "pat@example.com" },
+    },
+  });
+  render(
+    <EventControls
+      event={{
+        ...baseEvent,
+        status: "archived",
+        finalMeeting: { id: "final-1", active: true },
+      }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+    />,
+  );
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Reactivate event" }),
+  );
+
+  const dialog = await screen.findByRole("dialog", {
+    name: "Reopen scheduling",
+  });
+  expect(dialog).toHaveTextContent(
+    "1 person who received the confirmation will be told the meeting is canceled.",
+  );
+  expect(updateEventLifecycle).not.toHaveBeenCalled();
+});
+
+test.each([
+  ["no meeting", {}],
+  ["a canceled meeting", { finalMeeting: { id: "final-1", active: false } }],
+])(
+  "event controls reopen an archived event with %s at once",
+  async (_label, eventOverrides) => {
+    const setEvent = jest.fn();
+    updateEventLifecycle.mockResolvedValue({
+      event: { ...baseEvent, status: "active", version: 5 },
+    });
+    render(
+      <EventControls
+        event={{ ...baseEvent, status: "archived", ...eventOverrides }}
+        setEvent={setEvent}
+        getToken={getToken}
+        setDeliveryRequest={jest.fn()}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Reactivate event" }),
+    );
+
+    await waitFor(() =>
+      expect(setEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "active" }),
+      ),
+    );
+    expect(previewEventLifecycle).not.toHaveBeenCalled();
+  },
+);
 
 test("event controls surface lifecycle errors", async () => {
   const setEvent = jest.fn();

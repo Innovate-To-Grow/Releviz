@@ -610,9 +610,12 @@ class InvitationApiTests(TestCase):
             ({"name": "Bad", "remindersEnabled": "yes"}, "remindersEnabled"),
             ({"name": "Bad", "reminderHoursBefore": "soon"}, "reminderHoursBefore"),
             ({"name": "Bad", "reminderHoursBefore": 721}, "between 0 and 720"),
+            # A fraction is refused as a number, as it is as a string.
+            ({"name": "Bad", "reminderHoursBefore": 1.5}, "must be an integer"),
+            ({"name": "Bad", "reminderHoursBefore": "1.5"}, "must be an integer"),
         ]
         for payload, message in invalid_payloads:
-            with self.subTest(message=message):
+            with self.subTest(payload=payload):
                 response = self.client.post("/events", payload, format="json")
                 self.assertEqual(response.status_code, 400)
                 self.assertIn(message, response.data["error"])

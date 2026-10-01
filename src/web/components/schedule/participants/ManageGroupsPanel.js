@@ -150,8 +150,11 @@ export default function ManageGroupsPanel({
     setConfirm(null);
   };
 
+  // Escape cancels the inline form only; preventDefault tells the drawer
+  // it was handled.
   const stopEscape = (event, cancel) => {
     if (event.key === "Escape") {
+      event.preventDefault();
       event.stopPropagation();
       cancel();
     }

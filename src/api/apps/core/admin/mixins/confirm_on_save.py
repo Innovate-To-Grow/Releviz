@@ -19,6 +19,7 @@ from .confirm_on_save_utils import (
     compute_change_diff,
     compute_delete_diff,
     deserialize_post_data,
+    secret_post_keys,
     serialize_post_data,
 )
 
@@ -172,13 +173,15 @@ class ConfirmOnSaveMixin:
             )
             file_keys[field_name] = cache_key
 
+        secret_keys = secret_post_keys(form)
         request.session[self._session_key()] = {
             "token": token,
             "action": action_type,
             "object_id": object_id,
             "object_repr": object_repr,
             "form_url": form_url,
-            "post_data": serialize_post_data(request.POST),
+            "post_data": serialize_post_data(request.POST, secret_keys),
+            "secret_keys": secret_keys,
             "file_keys": file_keys,
             "diff": diff,
         }
@@ -278,7 +281,7 @@ class ConfirmOnSaveMixin:
     def _do_confirmed_save(self, request, pending):
         from django.utils.datastructures import MultiValueDict
 
-        post_data = deserialize_post_data(pending["post_data"])
+        post_data = deserialize_post_data(pending["post_data"], pending.get("secret_keys", ()))
         post_data["_confirmed_save"] = ["1"]
 
         original_post = request.POST

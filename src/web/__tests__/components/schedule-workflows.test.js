@@ -63,6 +63,7 @@ jest.mock("@/lib/api/participants", () => ({
 
 jest.mock("@/lib/api/events", () => ({
   confirmFinalMeeting: jest.fn(),
+  downloadFinalCalendar: jest.fn(),
   fetchEvent: jest.fn(),
   fetchEventResults: jest.fn(),
   fetchFinalization: jest.fn(),
@@ -81,7 +82,11 @@ import {
   joinEvent,
   updateParticipant,
 } from "@/lib/api/participants";
-import { fetchEvent, fetchEventResults } from "@/lib/api/events";
+import {
+  downloadFinalCalendar,
+  fetchEvent,
+  fetchEventResults,
+} from "@/lib/api/events";
 
 const member = { id: "member-1", displayName: "Morgan Member" };
 const slots = [
@@ -1037,5 +1042,141 @@ describe("participant workflow", () => {
     await screen.findByText(`Welcome, ${member.displayName}`);
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
     expect(screen.queryByText(BLOCKED_NOTE)).not.toBeInTheDocument();
+  });
+
+  describe("after finalization", () => {
+    const finalizedEvent = {
+      ...baseEvent,
+      status: "finalized",
+      finalMeeting: {
+        startsAt: "2026-08-18T09:00:00Z",
+        endsAt: "2026-08-18T09:30:00Z",
+        timezone: "UTC",
+        channel: "inperson",
+        location: "Room 4",
+        active: true,
+      },
+    };
+    let createObjectURL;
+    let revokeObjectURL;
+    let click;
+
+    beforeEach(() => {
+      fetchCurrentParticipant.mockResolvedValue({
+        participant: participant("mine", member.id, member.displayName, {
+          submitted: true,
+        }),
+        scheduleDataIncluded: true,
+      });
+      createObjectURL = jest.fn().mockReturnValue("blob:calendar");
+      revokeObjectURL = jest.fn();
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        value: createObjectURL,
+      });
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        value: revokeObjectURL,
+      });
+      click = jest
+        .spyOn(HTMLAnchorElement.prototype, "click")
+        .mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      click.mockRestore();
+      delete URL.createObjectURL;
+      delete URL.revokeObjectURL;
+    });
+
+    test("a joined participant sees the confirmed meeting and downloads its calendar", async () => {
+      const blob = new Blob(["BEGIN:VCALENDAR"]);
+      downloadFinalCalendar.mockResolvedValue({
+        blob,
+        filename: "planning.ics",
+      });
+
+      renderParticipant(finalizedEvent);
+      await screen.findByText(
+        "Responses are locked while this event is finalized.",
+      );
+      const meeting = screen.getByLabelText("Confirmed meeting");
+      expect(within(meeting).getByText("Final Start")).toBeInTheDocument();
+      expect(within(meeting).getByText("Final End")).toBeInTheDocument();
+      expect(within(meeting).getByText("Final Method")).toBeInTheDocument();
+      expect(
+        within(meeting).getByText("In-Person · Room 4"),
+      ).toBeInTheDocument();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Download calendar (.ics)" }),
+      );
+      await waitFor(() =>
+        expect(revokeObjectURL).toHaveBeenCalledWith("blob:calendar"),
+      );
+      expect(downloadFinalCalendar).toHaveBeenCalledWith("EVENT123", "token");
+      expect(createObjectURL).toHaveBeenCalledWith(blob);
+      expect(click).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    test("a failed calendar download explains itself and can be retried", async () => {
+      downloadFinalCalendar
+        .mockRejectedValueOnce(new Error("No active final meeting"))
+        .mockRejectedValueOnce(new Error(""));
+
+      renderParticipant({
+        ...finalizedEvent,
+        finalMeeting: {
+          ...finalizedEvent.finalMeeting,
+          channel: "virtual",
+          location: "",
+        },
+      });
+      expect(
+        await screen.findByText("Virtual · Location not set"),
+      ).toBeInTheDocument();
+      const download = screen.getByRole("button", {
+        name: "Download calendar (.ics)",
+      });
+
+      await userEvent.click(download);
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "We couldn't download the calendar invitation: No active final meeting",
+      );
+      await userEvent.click(download);
+      await waitFor(() =>
+        expect(screen.getByRole("alert")).toHaveTextContent(
+          "We couldn't download the calendar invitation: Please try again.",
+        ),
+      );
+      expect(createObjectURL).not.toHaveBeenCalled();
+      expect(click).not.toHaveBeenCalled();
+    });
+
+    test("offers no calendar download without an active confirmed meeting", async () => {
+      const view = renderParticipant({ ...finalizedEvent, finalMeeting: null });
+      await screen.findByText(
+        "Responses are locked while this event is finalized.",
+      );
+      expect(screen.queryByText("Final Start")).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Download calendar (.ics)" }),
+      ).not.toBeInTheDocument();
+      view.unmount();
+
+      renderParticipant({
+        ...finalizedEvent,
+        finalMeeting: { ...finalizedEvent.finalMeeting, active: false },
+      });
+      await screen.findByText(
+        "Responses are locked while this event is finalized.",
+      );
+      expect(screen.queryByText("Final Start")).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Download calendar (.ics)" }),
+      ).not.toBeInTheDocument();
+      expect(downloadFinalCalendar).not.toHaveBeenCalled();
+    });
   });
 });

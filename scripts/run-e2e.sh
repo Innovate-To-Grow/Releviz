@@ -42,6 +42,13 @@ export DJANGO_SUPERUSER_PASSWORD
 rm -rf -- "${EMAIL_FILE_PATH}"
 mkdir -p "${EMAIL_FILE_PATH}"
 
+# A full run (no arguments) records the API routes it reaches and audits them
+# afterwards; a filtered run cannot reach everything, so it skips the audit.
+if [ "$#" -eq 0 ]; then
+  export E2E_ENDPOINT_LOG="${safe_temp_root}/releviz-e2e-endpoints.log"
+  rm -f -- "${E2E_ENDPOINT_LOG}"
+fi
+
 if [ "${E2E_SKIP_DOCKER:-0}" != "1" ]; then
   docker compose -f docker-compose.e2e.yml up -d postgres
   trap 'docker compose -f docker-compose.e2e.yml down -v' EXIT
@@ -55,4 +62,7 @@ scripts/db/wait-for-postgres.sh
   --password "${DJANGO_SUPERUSER_PASSWORD}" \
   --settings=config.settings.e2e
 npm --workspace=releviz-web run build
-npm exec --workspace=releviz-web -- playwright test --config=../e2e/playwright.config.js
+npm exec --workspace=releviz-web -- playwright test --config=../e2e/playwright.config.js "$@"
+if [ "$#" -eq 0 ]; then
+  "$python_bin" scripts/ci/audit_e2e_coverage.py endpoints --hits "${E2E_ENDPOINT_LOG}"
+fi

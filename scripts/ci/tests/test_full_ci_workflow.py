@@ -49,6 +49,40 @@ class FullCIWorkflowTests(TestCase):
         self.assertIn('playwright install-deps "$PW_PROJECT"', e2e)
         self.assertNotIn("install-deps chromium firefox webkit", e2e)
 
+    def test_e2e_coverage_is_audited(self):
+        repository_audit = self.job_block("repository-audit")
+        self.assertIn("python scripts/ci/audit_e2e_coverage.py routes", repository_audit)
+
+        e2e = self.job_block("e2e")
+        self.assertIn("E2E_ENDPOINT_LOG: /tmp/releviz-e2e-endpoints.log", e2e)
+        self.assertIn('rm -rf "$EMAIL_FILE_PATH" "$E2E_ENDPOINT_LOG"', e2e)
+        upload_step = e2e.split("- name: Upload E2E endpoint log", 1)[1]
+        self.assertIn("if: ${{ matrix.project == 'chromium' }}", upload_step)
+        self.assertIn("name: e2e-endpoints-chromium-${{ matrix.shard_index }}", upload_step)
+        self.assertIn("if-no-files-found: error", upload_step)
+        self.assertLess(
+            e2e.index("- name: Run Playwright tests"),
+            e2e.index("- name: Upload E2E endpoint log"),
+        )
+
+        audit = self.job_block("e2e-endpoint-audit")
+        self.assertIn("needs: [e2e, changes]", audit)
+        self.assertIn("pattern: e2e-endpoints-chromium-*", audit)
+        self.assertIn(
+            "audit_e2e_coverage.py endpoints --hits e2e-endpoints.log",
+            audit,
+        )
+        required = self.job_block("e2e-required-result")
+        self.assertIn("e2e-endpoint-audit", required)
+        self.assertIn('needs["e2e-endpoint-audit"]["result"]', required)
+
+    def test_each_browser_is_sharded_with_separate_artifacts(self):
+        e2e = self.job_block("e2e")
+        self.assertIn("PW_SHARD: ${{ matrix.shard }}", e2e)
+        self.assertIn('--shard="$PW_SHARD"', e2e)
+        self.assertIn("name: blob-${{ matrix.project }}-${{ matrix.shard_index }}", e2e)
+        self.assertIn("name: e2e-diagnostics-${{ matrix.project }}-${{ matrix.shard_index }}", e2e)
+
     def test_python_security_audit_retries_but_still_fails_closed(self):
         audit = self.job_block("python-security-audit")
         self.assertIn("for attempt in 1 2 3", audit)

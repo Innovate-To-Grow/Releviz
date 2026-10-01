@@ -165,6 +165,16 @@ function rowStatus(row, rows) {
   return { tone: "success", text: "Ready" };
 }
 
+// A cell the server refused (a formula, or a weight it can't use) shows a
+// fallback and keeps the row's error until that field is saved.
+function refusedCell(row, field) {
+  return row.errors?.some(
+    (message) =>
+      message === `${field} cannot contain a formula.` ||
+      message.startsWith(`${field} must be `),
+  );
+}
+
 function matchesShow(row, show) {
   if (show === "needs_fix") return Boolean(row.selected) && !row.valid;
   if (show === "skipped") return !row.selected;
@@ -613,8 +623,10 @@ export default function RosterImportWizard({
     });
   };
 
+  // Leaving a refused cell saves it even unchanged, so the organizer can
+  // settle on the fallback it shows.
   const saveRowDraft = async (row, field, value, serverValue) => {
-    if (String(value) !== String(serverValue)) {
+    if (String(value) !== String(serverValue) || refusedCell(row, field)) {
       await updateRow(row, { [field]: value });
     }
     clearRowDraft(row.id, field, value);

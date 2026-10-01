@@ -2,24 +2,59 @@ import logging
 import uuid
 from datetime import date, datetime
 
+from django import forms
 from django.db import models
 from django.http import QueryDict
 from django.utils.timezone import is_aware
 
+from apps.core.services.aws.crypto import decrypt_secret, encrypt_secret
+
 logger = logging.getLogger(__name__)
 
+# The confirmation page shows this instead of a secret, such as a password-widget
+# value (which the form itself never renders back) or a stored password hash.
+SECRET_MASK = "••••••••"
+# Columns whose stored value is a secret, for the delete confirmation.
+SECRET_COLUMN_MARKERS = ("password", "secret", "private_key")
 
-def serialize_post_data(post):
-    """Serialize a QueryDict to a JSON-safe dict preserving multi-value keys."""
-    return {key: post.getlist(key) for key in post}
+
+def serialize_post_data(post, secret_keys=()):
+    """Serialize a QueryDict to a JSON-safe dict preserving multi-value keys.
+
+    The values of ``secret_keys`` are encrypted, since the session is stored as is.
+    """
+    return {
+        key: [encrypt_secret(value) for value in post.getlist(key)]
+        if key in secret_keys
+        else post.getlist(key)
+        for key in post
+    }
 
 
-def deserialize_post_data(data):
+def deserialize_post_data(data, secret_keys=()):
     """Reconstruct a mutable QueryDict from serialized data."""
     qd = QueryDict(mutable=True)
     for key, values in data.items():
-        qd.setlist(key, values)
+        qd.setlist(
+            key, [decrypt_secret(value) for value in values] if key in secret_keys else values
+        )
     return qd
+
+
+def secret_post_keys(form):
+    """Return the POST keys of ``form``'s password-widget fields."""
+    return [form.add_prefix(name) for name in form.fields if _is_secret_field(form, name)]
+
+
+def _display_value(value, secret):
+    """Format a value for the diff, masking a non-empty secret."""
+    if secret and value not in (None, ""):
+        return SECRET_MASK
+    return format_field_value(value)
+
+
+def _is_secret_field(form, field_name):
+    return isinstance(form.fields[field_name].widget, forms.PasswordInput)
 
 
 def compute_add_diff(form):
@@ -35,7 +70,7 @@ def compute_add_diff(form):
                     # str() resolves lazy gettext labels — the diff is JSON-serialized
                     # into the session, and a __proxy__ would raise at session save.
                     "label": str(label),
-                    "new_value": format_field_value(value),
+                    "new_value": _display_value(value, _is_secret_field(form, field_name)),
                 }
             )
     return diff
@@ -66,14 +101,15 @@ def compute_change_diff(model_class, object_id, form):
         except Exception:
             old_value = getattr(old_obj, field_name, None)
 
+        secret = _is_secret_field(form, field_name)
         diff.append(
             {
                 "field": field_name,
                 # str() resolves lazy gettext labels — the diff is JSON-serialized
                 # into the session, and a __proxy__ would raise at session save.
                 "label": str(label),
-                "old_value": format_field_value(old_value),
-                "new_value": format_field_value(new_value),
+                "old_value": _display_value(old_value, secret),
+                "new_value": _display_value(new_value, secret),
             }
         )
     return diff
@@ -92,11 +128,12 @@ def compute_delete_diff(obj):
             label = getattr(field, "verbose_name", field.name)
             if isinstance(label, str):
                 label = label.capitalize()
+            secret = any(marker in field.name for marker in SECRET_COLUMN_MARKERS)
             diff.append(
                 {
                     "field": field.name,
                     "label": str(label),
-                    "value": format_field_value(value),
+                    "value": _display_value(value, secret),
                 }
             )
         except Exception as exc:

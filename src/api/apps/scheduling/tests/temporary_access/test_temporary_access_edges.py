@@ -1033,3 +1033,170 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         )
         self.assertEqual(response.status_code, 204)
         self.assertEqual(TemporaryEventSession.objects.filter(revoked_at__isnull=True).count(), 1)
+
+    def test_a_cookie_still_valid_for_another_event_survives_that_events_denials(self):
+        other = Event.objects.create(
+            code="TOTHER12", name="Another event", organizer=self.organizer
+        )
+        cookie_name = settings.TEMP_EVENT_COOKIE_NAME
+        origin = {"HTTP_ORIGIN": "http://testserver"}
+        client = self.temp_client()
+        no_cookie = APIClient().get(f"/events/temp-access/session?code={other.code}")
+
+        denials = (
+            client.get(f"/events/temp-access/session?code={other.code}"),
+            client.put(
+                f"/events/temp-access/participant?code={other.code}",
+                {},
+                format="json",
+                **origin,
+            ),
+            client.post(
+                f"/events/temp-access/upgrade-registration?code={other.code}",
+                {},
+                format="json",
+                **origin,
+            ),
+        )
+        for denied in denials:
+            # The other event gets the answer a browser with no cookie gets,
+            # and this event's cookie stays.
+            self.assertEqual(denied.status_code, 401)
+            self.assertEqual(denied.data, no_cookie.data)
+            self.assertNotIn(cookie_name, denied.cookies)
+
+        # Signing out of the other event does not end this event's session.
+        signed_out = client.post(
+            "/events/temp-access/logout",
+            {"code": other.code},
+            format="json",
+            **origin,
+        )
+        self.assertEqual(signed_out.status_code, 204)
+        self.assertNotIn(cookie_name, signed_out.cookies)
+        self.session.refresh_from_db()
+        self.assertIsNone(self.session.revoked_at)
+        resumed = client.get(f"/events/temp-access/session?code={self.event.code}")
+        self.assertEqual(resumed.status_code, 200)
+
+        # Signing out of its own event does.
+        signed_out = client.post(
+            "/events/temp-access/logout",
+            {"code": self.event.code},
+            format="json",
+            **origin,
+        )
+        self.assertEqual(signed_out.status_code, 204)
+        self.assertEqual(signed_out.cookies[cookie_name].value, "")
+        self.session.refresh_from_db()
+        self.assertIsNotNone(self.session.revoked_at)
+
+    def test_a_dead_cookie_is_cleared_whichever_event_asks(self):
+        other = Event.objects.create(
+            code="TOTHER34", name="Another event", organizer=self.organizer
+        )
+        cookie_name = settings.TEMP_EVENT_COOKIE_NAME
+        no_cookie = {
+            "error": "Temporary event access is not active.",
+            "errorCode": "temp_session_inactive",
+        }
+
+        def session_cookie(**fields):
+            secret = uuid.uuid4().hex
+            session = TemporaryEventSession.objects.create(
+                member=self.temporary,
+                participant=self.participant,
+                invitation=self.invitation,
+                secret_hash=hashlib.sha256(secret.encode()).hexdigest(),
+                **{"expires_at": timezone.now() + timedelta(days=7), **fields},
+            )
+            return f"{session.pk}.{secret}"
+
+        def send(cookie_value, operation, code):
+            client = APIClient()
+            client.cookies[cookie_name] = cookie_value
+            origin = {"HTTP_ORIGIN": "http://testserver"}
+            if operation == "session":
+                return client.get(f"/events/temp-access/session?code={code}")
+            if operation == "participant":
+                path = f"/events/temp-access/participant?code={code}"
+                return client.put(path, {}, format="json", **origin)
+            if operation == "upgrade-registration":
+                path = f"/events/temp-access/upgrade-registration?code={code}"
+                return client.post(path, {}, format="json", **origin)
+            return client.post(
+                "/events/temp-access/logout", {"code": code}, format="json", **origin
+            )
+
+        def assert_cleared(cookie_value, cause):
+            for code in (self.event.code, other.code):
+                for operation in ("session", "participant", "upgrade-registration", "logout"):
+                    with self.subTest(cause=cause, code=code, operation=operation):
+                        response = send(cookie_value, operation, code)
+                        if operation == "logout":
+                            self.assertEqual(response.status_code, 204)
+                        elif cause == "upgraded" and code == self.event.code:
+                            # Only the cookie's own event may say the account
+                            # was upgraded; any other event gets the no-cookie
+                            # answer.
+                            self.assertEqual(response.status_code, 403)
+                            self.assertEqual(response.data["errorCode"], "temp_account_upgraded")
+                        else:
+                            self.assertEqual(response.status_code, 401)
+                            self.assertEqual(response.data, no_cookie)
+                        self.assertEqual(response.cookies[cookie_name].value, "")
+                        self.assertEqual(response.cookies[cookie_name]["max-age"], 0)
+
+        assert_cleared("not-a-session", "malformed")
+        assert_cleared(f"{uuid.uuid4()}.secret", "unknown")
+        assert_cleared(f"{self.session.pk}.wrong-secret", "wrong secret")
+        assert_cleared(
+            session_cookie(expires_at=timezone.now() - timedelta(minutes=1)),
+            "expired",
+        )
+        assert_cleared(session_cookie(revoked_at=timezone.now()), "revoked")
+        for field, value, cause in (
+            ("is_active", False, "deactivated"),
+            ("access_level", "full", "upgraded"),
+        ):
+            cookie_value = session_cookie()
+            original = getattr(self.temporary, field)
+            setattr(self.temporary, field, value)
+            self.temporary.save(update_fields=[field])
+            assert_cleared(cookie_value, cause)
+            setattr(self.temporary, field, original)
+            self.temporary.save(update_fields=[field])
+
+    def test_a_logout_body_the_api_cannot_read_names_no_event_and_still_signs_out(self):
+        cookie_name = settings.TEMP_EVENT_COOKIE_NAME
+        Event.objects.create(code="TOTHER56", name="Another event", organizer=self.organizer)
+        for body, content_type in (
+            ('{"code": "TOTHER56"', "application/json"),
+            ("code=TOTHER56", "text/plain"),
+            ('["TOTHER56"]', "application/json"),
+            ("null", "application/json"),
+        ):
+            with self.subTest(body=body, content_type=content_type):
+                secret = uuid.uuid4().hex
+                session = TemporaryEventSession.objects.create(
+                    member=self.temporary,
+                    participant=self.participant,
+                    invitation=self.invitation,
+                    secret_hash=hashlib.sha256(secret.encode()).hexdigest(),
+                    expires_at=timezone.now() + timedelta(days=7),
+                )
+                client = APIClient()
+                client.cookies[cookie_name] = f"{session.pk}.{secret}"
+                response = client.generic(
+                    "POST",
+                    "/events/temp-access/logout",
+                    body,
+                    content_type=content_type,
+                    HTTP_ORIGIN="http://testserver",
+                )
+                # As before logout read its body: 204, the cookie's session
+                # ends and the cookie is cleared.
+                self.assertEqual(response.status_code, 204)
+                self.assertEqual(response.cookies[cookie_name].value, "")
+                session.refresh_from_db()
+                self.assertIsNotNone(session.revoked_at)

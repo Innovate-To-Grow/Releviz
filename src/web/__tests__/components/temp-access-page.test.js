@@ -489,6 +489,11 @@ describe("temporary event access page", () => {
       "href",
       "/signup?upgrade=temporary&code=ABC123&next=%2Fevent%3Fcode%3DABC123",
     );
+    // The shared outlined style keeps the link at WCAG AA contrast on the
+    // page background, which Bootstrap's outline-primary blue does not.
+    expect(
+      screen.getByRole("link", { name: "Upgrade to full access" }),
+    ).toHaveClass("btn", "btn-outline-secondary", "app-btn");
     const upgradeHref = screen
       .getByRole("link", { name: "Upgrade to full access" })
       .getAttribute("href");
@@ -822,6 +827,88 @@ describe("temporary event access page", () => {
     expect(
       updateTempAccessParticipant.mock.invocationCallOrder[0],
     ).toBeLessThan(navigateTo.mock.invocationCallOrder[0]);
+  });
+
+  test("says it is saving before the upgrade and explains a failed save", async () => {
+    let failSave;
+    updateTempAccessParticipant.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          failSave = () => reject(new Error("Save unavailable"));
+        }),
+    );
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Design review" }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Paint in-person" }),
+    );
+    // With a change pending, the link's own handler runs, not the page-wide
+    // navigation guard, so the save it waits for is shown.
+    await userEvent.click(
+      screen.getByRole("link", { name: "Upgrade to full access" }),
+    );
+    const upgrade = await screen.findByRole("link", {
+      name: "Saving before upgrade…",
+    });
+    expect(upgrade).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeDisabled();
+    // Another click while saving starts nothing new.
+    await userEvent.click(upgrade);
+    expect(updateTempAccessParticipant).toHaveBeenCalledTimes(1);
+
+    await act(async () => failSave());
+    expect(
+      await screen.findByText(
+        "Your latest changes could not be saved. Resolve the save error before upgrading.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Upgrade to full access" }),
+    ).toHaveAttribute("aria-disabled", "false");
+    expect(navigateTo).not.toHaveBeenCalled();
+  });
+
+  test("leaves for the upgrade without a leave-page warning once its save is answered", async () => {
+    let answerSave;
+    updateTempAccessParticipant.mockImplementationOnce(
+      (_code, payload) =>
+        new Promise((resolve) => {
+          answerSave = () =>
+            resolve({
+              participant: participant({
+                availabilityInperson: payload.availabilityInperson,
+                version: 2,
+              }),
+            });
+        }),
+    );
+    // The page leaves before React renders the answered save, so the
+    // warning has to know at once that nothing is pending any more.
+    const warned = [];
+    navigateTo.mockImplementation(() => {
+      const unload = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(unload);
+      warned.push(unload.defaultPrevented);
+    });
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Design review" }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Paint in-person" }),
+    );
+    await userEvent.click(
+      screen.getByRole("link", { name: "Upgrade to full access" }),
+    );
+    await waitFor(() => expect(answerSave).toBeDefined());
+    answerSave();
+
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledTimes(1));
+    expect(warned).toEqual([false]);
   });
 
   test("stays on the event when a pending draft cannot be flushed before sign out", async () => {

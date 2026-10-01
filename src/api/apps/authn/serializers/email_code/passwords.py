@@ -16,6 +16,7 @@ from apps.authn.constants import (
 from apps.authn.security import revoke_all_refresh_sessions
 from apps.authn.services import (
     AuthChallengeInvalid,
+    AuthChallengeThrottled,
     NoRecoveryChannelError,
     consume_verification_token,
     delete_member_account,
@@ -57,11 +58,18 @@ class PasswordResetRequestSerializer(serializers.Serializer):
             _identifier_value(self.validated_data), require_active=True
         )
         if resolved is not None:
-            issue_email_challenge(
-                member=resolved.member,
-                purpose=PURPOSE.PASSWORD_RESET,
-                target_email=resolved.email,
-            )
+            try:
+                issue_email_challenge(
+                    member=resolved.member,
+                    purpose=PURPOSE.PASSWORD_RESET,
+                    target_email=resolved.email,
+                )
+            except AuthChallengeThrottled:
+                # Unknown addresses are never throttled, so a 429 here would reveal
+                # that the account exists. The code already sent stays valid.
+                logger.info(
+                    "Reset request for member %s inside the resend cooldown", resolved.member.pk
+                )
         return {
             "message": "If an eligible account exists, a verification code has been sent.",
             "challenge_id": challenge_id,

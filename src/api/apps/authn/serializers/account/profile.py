@@ -5,6 +5,7 @@ Profile serializer for user information.
 from __future__ import annotations
 
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from rest_framework import serializers
 
 Member = get_user_model()
@@ -86,6 +87,7 @@ class ProfileSerializer(serializers.Serializer):
                 primary.save(update_fields=["subscribe"])
 
         # Update Member model fields
+        previous_name = instance.get_full_name()
         member_fields_to_update = []
         for field in ("first_name", "middle_name", "last_name"):
             if field in validated_data:
@@ -93,6 +95,14 @@ class ProfileSerializer(serializers.Serializer):
                 member_fields_to_update.append(field)
 
         if member_fields_to_update:
-            instance.save(update_fields=member_fields_to_update)
+            with transaction.atomic():
+                instance.save(update_fields=member_fields_to_update)
+                # The events this person answers show the account's new name.
+                if instance.get_full_name() != previous_name:
+                    from apps.scheduling.services.account_names import (
+                        sync_account_participant_names,
+                    )
+
+                    sync_account_participant_names(instance)
 
         return instance

@@ -613,11 +613,12 @@ export function EventControls({
     setConfirming(null);
   };
 
-  // Reopening an event that holds a confirmed meeting cancels it and emails
-  // everyone the confirmation reached, so those emails are reviewed and
-  // confirmed first. With nobody to tell, it reopens at once.
+  // Reopening a finalized event, or an archived one that still holds its
+  // confirmed meeting, cancels that meeting and emails everyone the
+  // confirmation reached, so those emails are reviewed and confirmed first.
+  // With nobody to tell, it reopens at once.
   const reactivate = async () => {
-    if (event.status === "finalized" || event.finalMeeting) {
+    if (event.status === "finalized" || isFinalized(event)) {
       setChanging(true);
       setError("");
       try {
@@ -813,15 +814,16 @@ export const OverviewPanel = forwardRef(function OverviewPanel(
   const editorHeadingRef = useRef(null);
   const { locked: editLocked, reason: editLockReason } = editLockOf(event);
 
-  const focusEditButton = () => {
-    window.setTimeout(
-      () =>
-        panelRef.current
-          ?.querySelector(".organizer-overview-edit-link")
-          ?.focus(),
-      0,
-    );
-  };
+  // Focus goes back to Edit event once the editor has closed. The button is
+  // disabled while the editor is open, so this waits for the render that
+  // enables it: after a save that render is scheduled, and a timer could fire
+  // first (it does in Safari), leaving focus nowhere.
+  const returnFocusRef = useRef(false);
+  useEffect(() => {
+    if (editing || !returnFocusRef.current) return;
+    returnFocusRef.current = false;
+    panelRef.current?.querySelector(".organizer-overview-edit-link")?.focus();
+  }, [editing]);
 
   // `field` names the setting the organizer came for: the editor opens with
   // that field focused rather than at its heading.
@@ -838,10 +840,10 @@ export const OverviewPanel = forwardRef(function OverviewPanel(
   };
 
   const closeEditor = () => {
+    returnFocusRef.current = true;
     setEditing(false);
     setEditingEvent(null);
     setFocusRequest(null);
-    focusEditButton();
   };
 
   const handleSaved = async (result) => {

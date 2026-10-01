@@ -368,6 +368,10 @@ describe("organizer event management UI", () => {
     fireEvent.change(codeField, { target: { value: " A B C " } });
     fireEvent.keyDown(codeField, { key: "Enter" });
     expect(navigateTo).toHaveBeenCalledWith("/event?code=A%20B%20C");
+
+    fireEvent.change(codeField, { target: { value: " event123 " } });
+    fireEvent.keyDown(codeField, { key: "Enter" });
+    expect(navigateTo).toHaveBeenLastCalledWith("/event?code=EVENT123");
   });
 
   test("dashboard reports archive and delete failures and blocks editing a finalized event", async () => {
@@ -459,10 +463,35 @@ describe("organizer event management UI", () => {
     useAuth.mockReturnValue({
       user: null,
       loading: false,
+      signingOut: false,
       getToken: jest.fn(),
     });
     render(<DashboardPage />);
     expect(navigateTo).toHaveBeenCalledWith("/login?next=/dashboard");
+  });
+
+  test("dashboard leaves a log out's navigation home to finish", async () => {
+    fetchDashboardEvents.mockResolvedValue({
+      organized: [],
+      participating: [],
+    });
+    const getToken = jest.fn().mockResolvedValue("token");
+    const signedIn = { user: organizer, loading: false, getToken };
+    useAuth.mockReturnValue({ ...signedIn, signingOut: false });
+    const view = render(<DashboardPage />);
+    expect(
+      await screen.findByText("No events organized yet."),
+    ).toBeInTheDocument();
+
+    useAuth.mockReturnValue({ ...signedIn, signingOut: true });
+    view.rerender(<DashboardPage />);
+    useAuth.mockReturnValue({ ...signedIn, user: null, signingOut: true });
+    view.rerender(<DashboardPage />);
+
+    // Starting the log out does not reload the events, and the signed-out
+    // render does not replace the pending navigation home with a login one.
+    expect(fetchDashboardEvents).toHaveBeenCalledTimes(1);
+    expect(navigateTo).not.toHaveBeenCalled();
   });
 
   test("edit form loads values and requires explicit response-reset confirmation", async () => {
@@ -663,6 +692,7 @@ describe("organizer event management UI", () => {
     searchParams = new URLSearchParams("code=EVENT123");
     fetchEvent.mockResolvedValueOnce({ event: baseEvent });
     const conflict = Object.assign(new Error("Reload your edits."), {
+      status: 409,
       event: { ...baseEvent, version: 5 },
     });
     updateEvent.mockRejectedValueOnce(conflict);
@@ -960,7 +990,7 @@ describe("organizer event management UI", () => {
 
     expect(advancedOptions).toHaveAttribute("open");
     const reminderError = await screen.findByText(
-      "Reminder timing must be between 0 and 720 hours",
+      "Reminder timing must be a whole number of hours between 0 and 720",
     );
     expect(
       reminderError.closest('[data-error-field="reminderHours"]'),
@@ -969,5 +999,28 @@ describe("organizer event management UI", () => {
     expect(
       document.querySelector(".create-event-feedback .create-event-error"),
     ).not.toBeInTheDocument();
+  });
+
+  test("refuses fractional reminder hours instead of sending them", async () => {
+    render(<CreateEvent />);
+    const reminderHours = screen.getByLabelText(
+      "Reminder Hours Before Deadline",
+    );
+    expect(reminderHours).toHaveAttribute("step", "1");
+    fireEvent.change(screen.getByRole("textbox", { name: "Event Name" }), {
+      target: { value: "Fractional reminder" },
+    });
+    fireEvent.change(reminderHours, { target: { value: "1.5" } });
+    fireEvent.submit(
+      screen.getByRole("button", { name: "Create Event" }).closest("form"),
+    );
+
+    expect(
+      await screen.findByText(
+        "Reminder timing must be a whole number of hours between 0 and 720",
+      ),
+    ).toBeInTheDocument();
+    expect(reminderHours).toHaveAttribute("aria-invalid", "true");
+    expect(createEvent).not.toHaveBeenCalled();
   });
 });

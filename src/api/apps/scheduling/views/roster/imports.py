@@ -62,6 +62,9 @@ class RosterImportDetailView(PrivateAPIView):
         batch = batch_for_event(event, import_id)
         if batch is None:
             return Response({"error": "Participant import not found"}, status=404)
+        # Expired in its own transaction, so the scrub outlives the refusal.
+        if expire_roster_import_preview(batch):
+            return Response({"error": "This import preview has expired."}, status=410)
         try:
             batch = update_roster_import(batch=batch, data=request.data)
         except RosterImportError as exc:
@@ -148,6 +151,10 @@ class RosterImportCommitView(PrivateAPIView):
         write_error = roster_write_error(event)
         if write_error:
             return write_error
+        # A committed batch is never expired, so replays still reach the service.
+        batch = batch_for_event(event, import_id)
+        if batch is not None and expire_roster_import_preview(batch):
+            return Response({"error": "This import preview has expired."}, status=410)
         try:
             receipt, idempotent, delivery_request, auto_invited_count = commit_roster_import(
                 event=event,
