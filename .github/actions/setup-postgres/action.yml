@@ -1,11 +1,12 @@
 name: Set up PostgreSQL
 description: >-
-  Start the PostgreSQL server that ships with the GitHub-hosted Ubuntu runner
-  image and create the CI role and database, instead of pulling a postgres
-  service container. Anonymous pulls from public.ecr.aws share a per-IP data
-  allowance with every other job on the same runner address, so service
-  containers failed at random with "toomanyrequests: Data limit exceeded"
-  before any test ran. The server listens on 127.0.0.1:5432.
+  Start PostgreSQL for CI and create the CI role and database. The major stays
+  on production's RDS engine (infra/prod/main.tf). GitHub-hosted runners now
+  ship a newer major only, so when the requested major is missing this installs
+  it from the PGDG apt repository and binds it to 127.0.0.1:5432. Service
+  containers are avoided because anonymous pulls from public.ecr.aws share a
+  per-IP data allowance and failed at random with "toomanyrequests" before any
+  test ran.
 
 inputs:
   postgres-version:
@@ -32,14 +33,81 @@ runs:
         PG_DATABASE: ${{ inputs.database }}
         PG_USER: ${{ inputs.user }}
         PG_PASSWORD: ${{ inputs.password }}
+        DEBIAN_FRONTEND: noninteractive
       run: |
         set -euo pipefail
+
         if [ ! -x "/usr/lib/postgresql/${PG_MAJOR}/bin/postgres" ]; then
           installed="$(find /usr/lib/postgresql -mindepth 1 -maxdepth 1 -printf '%f ' 2>/dev/null || true)"
-          echo "::error::PostgreSQL ${PG_MAJOR} is not on this runner image (installed: ${installed:-none}). Pin runs-on to an image that ships it."
+          echo "PostgreSQL ${PG_MAJOR} is not on this runner image (installed: ${installed:-none}). Installing it from PGDG."
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates curl
+          sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          # shellcheck disable=SC1091
+          . /etc/os-release
+          if [ -z "${VERSION_CODENAME:-}" ]; then
+            echo "::error::Could not determine this runner's Ubuntu codename for the PGDG repository."
+            exit 1
+          fi
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y "postgresql-${PG_MAJOR}"
+        fi
+        if [ ! -x "/usr/lib/postgresql/${PG_MAJOR}/bin/postgres" ]; then
+          echo "::error::PostgreSQL ${PG_MAJOR} is still not installed."
           exit 1
         fi
-        sudo systemctl start postgresql.service
+        if ! command -v pg_lsclusters >/dev/null 2>&1; then
+          echo "::error::pg_lsclusters is not available, so the requested PostgreSQL cluster cannot be selected."
+          exit 1
+        fi
+
+        # The image's default cluster (currently 18) owns 127.0.0.1:5432.
+        # Stop every cluster before moving the production major onto that port.
+        sudo pg_lsclusters --no-header | while read -r ver name _port status _; do
+          if [ "$status" = "online" ]; then
+            sudo pg_ctlcluster "$ver" "$name" stop
+          fi
+        done
+        sudo systemctl stop postgresql.service || true
+        for _ in $(seq 1 30); do
+          if ! pg_isready --host=127.0.0.1 --port=5432 --quiet; then
+            break
+          fi
+          sleep 1
+        done
+        if pg_isready --host=127.0.0.1 --port=5432 --quiet; then
+          echo "::error::Port 5432 is still accepting connections after stopping PostgreSQL."
+          exit 1
+        fi
+
+        cluster_name="$(sudo pg_lsclusters --no-header | awk -v major="$PG_MAJOR" '$1 == major { print $2; exit }')"
+        if [ -z "$cluster_name" ]; then
+          # -p sets the port in postgresql.conf after initdb. Do not pass
+          # --port through to initdb: PostgreSQL 16's initdb rejects that flag,
+          # which the runner's PostgreSQL 18 accepts.
+          sudo pg_createcluster -p 5432 "$PG_MAJOR" main
+          cluster_name="main"
+        fi
+        conf="/etc/postgresql/${PG_MAJOR}/${cluster_name}/postgresql.conf"
+        if [ ! -f "$conf" ]; then
+          echo "::error::PostgreSQL ${PG_MAJOR} cluster config was not found at ${conf}."
+          exit 1
+        fi
+        if sudo grep -Eq '^[[:space:]]*#?[[:space:]]*port[[:space:]]*=' "$conf"; then
+          sudo sed -i -E 's/^[[:space:]]*#?[[:space:]]*port[[:space:]]*=.*/port = 5432/' "$conf"
+        else
+          echo "port = 5432" | sudo tee -a "$conf" >/dev/null
+        fi
+        conf_dir="/etc/postgresql/${PG_MAJOR}/${cluster_name}/conf.d"
+        if [ -d "$conf_dir" ] && sudo grep -REq '^[[:space:]]*port[[:space:]]*=' "$conf_dir"; then
+          sudo find "$conf_dir" -type f -name '*.conf' -exec \
+            sed -i -E 's/^[[:space:]]*port[[:space:]]*=.*/port = 5432/' {} +
+        fi
+        sudo pg_ctlcluster "$PG_MAJOR" "$cluster_name" start
         for _ in $(seq 1 30); do
           pg_isready --host=127.0.0.1 --port=5432 --quiet && break
           sleep 1
