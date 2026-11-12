@@ -42,5 +42,7 @@ class PostgresSetupTests(TestCase):
         self.assertIn("apt.postgresql.org", source)
         self.assertIn("postgresql-${PG_MAJOR}", source)
         self.assertIn("pg_ctlcluster", source)
+        self.assertIn("pg_createcluster -p 5432", source)
+        self.assertNotIn("-- --port", source)
         self.assertIn("expected ${PG_MAJOR}", source)
         self.assertNotIn("Pin runs-on to an image that ships it.", source)

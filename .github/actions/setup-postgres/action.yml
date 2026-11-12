@@ -86,7 +86,10 @@ runs:
 
         cluster_name="$(sudo pg_lsclusters --no-header | awk -v major="$PG_MAJOR" '$1 == major { print $2; exit }')"
         if [ -z "$cluster_name" ]; then
-          sudo pg_createcluster "$PG_MAJOR" main -- --port=5432
+          # -p sets the port in postgresql.conf after initdb. Do not pass
+          # --port through to initdb: PostgreSQL 16's initdb rejects that flag,
+          # which the runner's PostgreSQL 18 accepts.
+          sudo pg_createcluster -p 5432 "$PG_MAJOR" main
           cluster_name="main"
         fi
         conf="/etc/postgresql/${PG_MAJOR}/${cluster_name}/postgresql.conf"
