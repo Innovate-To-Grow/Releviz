@@ -9,6 +9,18 @@ python_version="${RELEVIZ_PYTHON_VERSION:-3.12}"
 cache_dir="${UV_CACHE_DIR:-${TMPDIR:-/tmp}/releviz-uv-cache}"
 mode="${1:-write}"
 
+# Dependabot compiles from src/api/requirements, so its locks say
+# "# via -r base.in". This script runs from the repository root and records
+# "# via -r src/api/requirements/base.in". Those name the same input.
+canonicalize_requirement_via_paths() {
+  sed -E 's@(# via -r )(src/api/requirements/|requirements/)?(base|local|production)\.in@\1src/api/requirements/\3.in@g'
+}
+
+if [ "$mode" = "--canonicalize-via" ]; then
+  canonicalize_requirement_via_paths
+  exit 0
+fi
+
 case "$mode" in
   write)
     output_dir="$requirements_dir"
@@ -56,8 +68,10 @@ done
 if [ "$mode" = "--check" ]; then
   for target in base local production; do
     if ! diff -u \
-      "${requirements_dir}/${target}.txt" \
-      "${output_dir}/${target}.txt"; then
+      --label "committed ${target}.txt" \
+      --label "compiled ${target}.txt" \
+      <(canonicalize_requirement_via_paths < "${requirements_dir}/${target}.txt") \
+      <(canonicalize_requirement_via_paths < "${output_dir}/${target}.txt"); then
       echo "Backend dependency locks are stale; run npm run lock:api." >&2
       exit 1
     fi

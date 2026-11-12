@@ -130,6 +130,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   "scripts/deploy/ecs-service-rollout.sh",
   "scripts/quality-gate.sh",
   "scripts/ci/check_bundle_size.py",
+  "scripts/ci/check_npm_audit.py",
   "scripts/ci/check_npm_licenses.py",
   "scripts/ci/last-successful-release.sh",
   "scripts/ci/plan_django_tests.py",
