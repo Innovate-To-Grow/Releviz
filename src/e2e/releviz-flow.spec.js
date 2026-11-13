@@ -3760,6 +3760,153 @@ assert Event.objects.filter(code="${eventCode}").update(response_deadline=past) 
     });
   });
 
+  // A timezone change keeps the days and hours but moves every slot to other
+  // instants, so on its own it needs the same response reset as a change to
+  // the days or the hours, and the answers it clears are re-seeded.
+  test("asks for a response reset when only the event timezone changes", async ({
+    page,
+    request,
+  }) => {
+    const runId = `${Date.now()}-${Math.round(Math.random() * 100_000)}`;
+    await registerAccount(
+      page,
+      `zone-reset-${runId}@example.com`,
+      "Zoe",
+      "Zone",
+    );
+    const session = await readSession(page);
+    // /edit saves the deadline to the minute in the event's timezone, and
+    // noon UTC never falls in a daylight-saving switch.
+    const deadline = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+    deadline.setUTCHours(12, 0, 0, 0);
+    const created = await apiJson(request, "POST", "/events", session.access, {
+      name: `Zone reset ${runId}`,
+      startTime: "09:00",
+      endTime: "17:00",
+      slotMinutes: 30,
+      days: [1, 2, 3, 4, 5],
+      daySelectionType: "days_of_week",
+      specificDates: [],
+      mode: "inperson",
+      location: "Zone Room",
+      timezone: "UTC",
+      responseDeadline: deadline.toISOString(),
+      meetingDurationMinutes: 60,
+      status: "active",
+    });
+    expect(created.response.status(), JSON.stringify(created.payload)).toBe(
+      201,
+    );
+    const code = created.payload.event.code;
+    const eventState = async () => {
+      const current = await apiJson(
+        request,
+        "GET",
+        `/events?code=${code}`,
+        session.access,
+      );
+      expect(current.response.status()).toBe(200);
+      return current.payload.event;
+    };
+    const eventUpdate = () =>
+      page.waitForResponse(
+        (response) =>
+          response.request().method() === "PUT" &&
+          response.url().includes(`/events?code=${code}`),
+      );
+    const before = await eventState();
+    expect(before.startingAvailability).toBe("available");
+
+    // The organizer answers for themselves: busy except the first hour.
+    const joined = await apiJson(
+      request,
+      "POST",
+      `/events/participants?code=${code}`,
+      session.access,
+      {},
+    );
+    expect(joined.response.status()).toBe(201);
+    const answer = Array(before.slotCount).fill(0);
+    answer[0] = 1;
+    answer[1] = 1;
+    const submitted = await apiJson(
+      request,
+      "PUT",
+      `/events/participants/update?code=${code}&participantId=${session.user.id}`,
+      session.access,
+      {
+        availabilityInperson: answer,
+        availabilityVirtual: answer,
+        submitted: 1,
+        expectedVersion: joined.payload.participant.version,
+      },
+    );
+    expect(submitted.response.status(), JSON.stringify(submitted.payload)).toBe(
+      200,
+    );
+    const answered = await eventState();
+
+    await page.goto(`/edit?code=${code}`);
+    await expect(page.getByRole("textbox", { name: "Event Name" })).toHaveValue(
+      answered.name,
+    );
+    await selectOption(page, "Event timezone", "Europe/Berlin");
+    const saveButton = page.getByRole("button", { name: "Save changes" });
+    const refused = eventUpdate();
+    await saveButton.click();
+    expect((await refused).status()).toBe(409);
+    await expect(
+      page.getByText("Schedule changes require a response reset"),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/submitted availability for 1 participant\./),
+    ).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/edit\\?code=${code}$`));
+    await expect(saveButton).toBeDisabled();
+    await page
+      .getByLabel("I understand that participant availability will be reset.")
+      .check();
+    const saved = eventUpdate();
+    await saveButton.click();
+    expect((await saved).status()).toBe(200);
+    await expect(page).toHaveURL(new RegExp(`/event\\?code=${code}$`));
+    await expect(
+      page.locator(".event-overview-summary__item").filter({
+        has: page.locator(".event-overview-summary__label", {
+          hasText: /^Schedule$/,
+        }),
+      }),
+    ).toContainText("Europe/Berlin");
+
+    const after = await eventState();
+    expect(after.timezone).toBe("Europe/Berlin");
+    expect(after.slotCount).toBe(before.slotCount);
+    expect(after.resultsRevision).toBeGreaterThan(answered.resultsRevision);
+    const roster = await apiJson(
+      request,
+      "GET",
+      `/events/roster?code=${code}`,
+      session.access,
+    );
+    expect(roster.response.status()).toBe(200);
+    const organizerRow = roster.payload.participants.find(
+      (participant) => participant.memberId === session.user.id,
+    );
+    expect(organizerRow).toBeTruthy();
+    expect(organizerRow.submitted).toBe(false);
+    const schedule = await apiJson(
+      request,
+      "GET",
+      `/events/roster/${organizerRow.id}/schedule?code=${code}`,
+      session.access,
+    );
+    expect(schedule.response.status()).toBe(200);
+    // The reset re-seeds every slot from the event's starting availability.
+    expect(schedule.payload.schedule.availabilityInperson).toEqual(
+      Array(before.slotCount).fill(1),
+    );
+  });
+
   test("recovers, secures, signs out, and deletes an account", async ({
     browser,
     page,
