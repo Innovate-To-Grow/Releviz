@@ -120,6 +120,25 @@ test.describe("automated accessibility baseline", () => {
     await expectAccessible(page, "edit event");
   });
 
+  test("account settings with every section open meet WCAG A/AA checks at 320px", async ({
+    page,
+  }) => {
+    const runId = `${Date.now()}-${Math.round(Math.random() * 100_000)}`;
+    await registerAccount(page, `axe-settings-${runId}@example.com`, "Sol", "Settings");
+    await page.goto("/settings");
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Account settings" })
+    ).toBeVisible();
+    await expect(page.getByRole("listitem").filter({ hasText: "This device" })).toBeVisible();
+    // The password and account-deletion forms sit in collapsed sections, which
+    // axe skips until they are open.
+    for (const form of ["password", "danger-zone"]) {
+      await page.locator(`form#${form} summary`).click();
+      await expect(page.locator(`form#${form} details`)).toHaveAttribute("open", "");
+    }
+    await expectAccessible(page, "settings with every section open");
+  });
+
   test("keyboard focus reaches the login form with a visible indicator", async ({ page }) => {
     await page.goto("/login");
     const email = page.getByLabel("Email");
