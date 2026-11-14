@@ -20,7 +20,7 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.http import HttpResponseRedirect, QueryDict
+from django.http import HttpResponse, HttpResponseRedirect, QueryDict
 from django.test import RequestFactory, TestCase, override_settings
 
 from apps.core.admin.mixins.confirm_on_save import CACHE_FILE_PREFIX
@@ -175,7 +175,9 @@ class ChangeformObjectMissingTest(TestCase):
 
     def test_missing_object_defers_to_super(self):
         request = _wire_request(self.factory.post("/admin/", {"name": "Missing"}))
-        sentinel = object()
+        # Unfold wraps changeform_view in xframe_options_sameorigin, which
+        # sets a header on whatever the parent view returns.
+        sentinel = HttpResponse()
         with (
             patch.object(self.admin, "get_object", return_value=None),
             patch(
@@ -235,7 +237,7 @@ class ChangeformInlineValidationTest(TestCase):
         )
         invalid_formset = MagicMock()
         invalid_formset.is_valid.return_value = False
-        normal_change_form = object()
+        normal_change_form = HttpResponse()
 
         with (
             patch.object(
@@ -358,7 +360,7 @@ class FileUploadCachingTest(TestCase):
             )
         )
         second_request.session = first_request.session
-        normal_change_form = object()
+        normal_change_form = HttpResponse()
         with patch(
             "django.contrib.admin.options.ModelAdmin.changeform_view",
             return_value=normal_change_form,
@@ -430,7 +432,7 @@ class ExecuteConfirmedTest(TestCase):
 
         def capture(req, object_id, form_url, extra):
             captured["post"] = req.POST
-            return "OK"
+            return HttpResponse("OK")
 
         with patch("django.contrib.admin.options.ModelAdmin.changeform_view", side_effect=capture):
             self.admin._execute_confirmed_save(request, None, "", None)
