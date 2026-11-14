@@ -1,4 +1,4 @@
-FROM node:26.8.2-bookworm-slim@sha256:cd9f682fa2885cd1056e830424764158570061c59736a1da836bc3d73df095ae AS builder
+FROM node:26.12.1-bookworm-slim@sha256:88e480776c6149ff1d098cd304f44bf18057fb5d284a3329b78162d29821e28c AS builder
 
 WORKDIR /app
 
@@ -12,7 +12,7 @@ RUN cp package-lock.docker.json package-lock.json && npm ci
 COPY . .
 RUN npm run build
 
-FROM node:26.8.2-bookworm-slim@sha256:cd9f682fa2885cd1056e830424764158570061c59736a1da836bc3d73df095ae AS runner
+FROM node:26.12.1-bookworm-slim@sha256:88e480776c6149ff1d098cd304f44bf18057fb5d284a3329b78162d29821e28c AS runner
 
 WORKDIR /app
 
