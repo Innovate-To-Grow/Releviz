@@ -1,4 +1,5 @@
 import uuid
+from urllib.parse import unquote
 
 from django.contrib import messages
 from django.contrib.admin import helpers
@@ -12,7 +13,6 @@ from django.forms.formsets import all_valid
 from django.http import HttpResponseBase, HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
-from django.utils.http import unquote
 
 from .confirm_on_save_utils import (
     compute_add_diff,

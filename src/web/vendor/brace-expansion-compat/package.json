@@ -1,6 +1,6 @@
 {
   "name": "brace-expansion",
-  "version": "5.0.9",
+  "version": "5.0.13",
   "private": true,
   "description": "Compatibility facade for legacy minimatch callers using the patched brace-expansion implementation.",
   "type": "commonjs",
@@ -11,7 +11,7 @@
     }
   },
   "dependencies": {
-    "brace-expansion-safe": "npm:brace-expansion@5.0.9"
+    "brace-expansion-safe": "npm:brace-expansion@5.0.13"
   },
   "engines": {
     "node": "20 || >=22"

@@ -13,14 +13,19 @@
   },
   "overrides": {
     "eslint-plugin-react-hooks": "7.1.1",
+    "glob": "14.0.6",
+    "minimatch@9": "11.0.8",
+    "minimatch@10": "11.0.8",
     "next": {
       "postcss": "8.5.26",
-      "sharp": "0.35.4"
+      "sharp": "0.35.5"
     },
     "postcss": "8.5.26",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "sharp": "0.35.4"
+    "sharp": "0.35.5",
+    "source-map-js": "1.2.2",
+    "zod": "4.6.7"
   },
   "scripts": {
     "dev": "npm --workspace=releviz-api run dev & npm --workspace=releviz-web run dev",
