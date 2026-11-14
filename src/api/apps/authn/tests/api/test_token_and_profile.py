@@ -97,6 +97,11 @@ class ImageMagicByteValidationTests(SimpleTestCase):
     def test_webp_magic_bytes_accepted(self):
         self.assertTrue(_validate_image_bytes(b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 20))
 
+    def test_riff_container_that_is_not_webp_rejected(self):
+        # WAV and AVI files are RIFF containers too; only the WEBP form type is an image.
+        self.assertFalse(_validate_image_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 16))
+        self.assertFalse(_validate_image_bytes(b"RIFF\x00\x00\x00\x00AVI LIST" + b"\x00" * 16))
+
     def test_pdf_magic_bytes_rejected(self):
         self.assertFalse(_validate_image_bytes(b"%PDF-1.5" + b"\x00" * 24))
 
@@ -132,6 +137,19 @@ class ProfileImageUploadTests(APITestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("does not match", response.data["detail"])
+
+    def test_upload_rejects_riff_file_that_is_not_webp(self):
+        wave = b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 24
+        f = SimpleUploadedFile("sound.webp", wave, content_type="image/webp")
+        response = self.client.patch(
+            "/authn/profile/",
+            {"profile_image": f},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("does not match", response.data["detail"])
+        self.member.refresh_from_db()
+        self.assertIsNone(self.member.profile_image)
 
     def test_get_profile_returns_null_image_by_default(self):
         response = self.client.get("/authn/profile/")

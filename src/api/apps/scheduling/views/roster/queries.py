@@ -70,6 +70,12 @@ def roster_queryset(event):
                 invitation_query.values("accepted_at")[:1],
                 output_field=DateTimeField(),
             ),
+            # When the latest invitation email went out (the first one when
+            # an older send recorded only that).
+            roster_invitation_sent_at=Subquery(
+                invitation_query.values(sent_at=Coalesce("last_sent_at", "first_sent_at"))[:1],
+                output_field=DateTimeField(),
+            ),
             # Whether the person ever opened a temporary link session.
             roster_signed_in=Exists(
                 TemporaryEventSession.objects.filter(participant_id=OuterRef("pk"))
@@ -208,6 +214,7 @@ def apply_roster_filters(queryset, params):
 def participant_summary(participant) -> dict:
     account_access = getattr(participant.member, "access_level", "full")
     is_organizer = participant.member_id == participant.event.organizer_id
+    invitation_sent_at = getattr(participant, "roster_invitation_sent_at", None)
     return {
         "id": str(participant.pk),
         "participantId": str(participant.pk),
@@ -234,6 +241,7 @@ def participant_summary(participant) -> dict:
         # "queued" while an invitation email waits to go out, "failed" once
         # delivery was given up on, otherwise null.
         "invitationDelivery": getattr(participant, "roster_invitation_delivery", None),
+        "invitationSentAt": invitation_sent_at.isoformat() if invitation_sent_at else None,
         "version": participant.version,
     }
 

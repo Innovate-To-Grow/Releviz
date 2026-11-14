@@ -7,9 +7,25 @@ import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
 import FormField from "@/components/ui/FormField";
 import { LockIcon, SendIcon } from "@/components/ui/icons";
-import { confirmPasswordReset, requestPasswordResetCode } from "@/lib/api/auth";
+import {
+  requestPasswordResetCode,
+  resetPasswordWithToken,
+  verifyPasswordResetCode,
+} from "@/lib/api/auth";
 import { EMAIL_PATTERN } from "@/lib/email";
-import { navigateTo } from "@/lib/navigation";
+import { navigateTo, safeNextPath } from "@/lib/navigation";
+
+// Carries the sign-in panel's destination through the reset. Read at submit
+// time rather than via useSearchParams, which would need a Suspense boundary in
+// the static export.
+function loginAfterReset() {
+  const next = safeNextPath(
+    new URLSearchParams(window.location.search).get("next"),
+  );
+  return next !== "/dashboard"
+    ? `/login?status=password-reset&next=${encodeURIComponent(next)}`
+    : "/login?status=password-reset";
+}
 
 export default function RecoverAccountPage() {
   const [step, setStep] = useState("request");
@@ -17,6 +33,9 @@ export default function RecoverAccountPage() {
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
+  // Exchanging the code spends it, and a refused password leaves the token it
+  // was exchanged for unused, so a retry with the same code reuses the token.
+  const [verified, setVerified] = useState(null);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -50,13 +69,21 @@ export default function RecoverAccountPage() {
     }
     setLoading(true);
     try {
-      await confirmPasswordReset({
+      let verificationToken = verified?.code === code ? verified.token : null;
+      if (!verificationToken) {
+        verificationToken = await verifyPasswordResetCode({
+          email: trimmedEmail,
+          code,
+        });
+        setVerified({ code, token: verificationToken });
+      }
+      await resetPasswordWithToken({
         email: trimmedEmail,
-        code,
+        verificationToken,
         password,
         passwordConfirm,
       });
-      navigateTo("/login?status=password-reset");
+      navigateTo(loginAfterReset());
     } catch (err) {
       setError(err.message || "Unable to reset your password.");
     } finally {
@@ -67,6 +94,7 @@ export default function RecoverAccountPage() {
   const useDifferentEmail = () => {
     setStep("request");
     setCode("");
+    setVerified(null);
     setPassword("");
     setPasswordConfirm("");
     setStatus("");

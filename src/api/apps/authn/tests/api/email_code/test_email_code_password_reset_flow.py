@@ -104,3 +104,41 @@ class EmailCodePasswordResetFlowTests(APITestCase):
         )
         # Should return a success-like status (not 404) to prevent email enumeration
         self.assertIn(response.status_code, [200, 202])
+
+    def test_password_reset_repeat_request_within_cooldown_matches_unknown_email(
+        self, _mock_code, _mock_send
+    ):
+        """A second request inside the resend cooldown must not answer differently
+        for an existing account than for an unknown address."""
+
+        def request_twice(email):
+            return [
+                self.client.post(
+                    "/authn/password-reset/request-code/", {"email": email}, format="json"
+                )
+                for _ in range(2)
+            ]
+
+        unknown = request_twice("nonexistent@example.com")
+        known = request_twice(self.primary_email.email_address)
+
+        for response in unknown + known:
+            self.assertEqual(response.status_code, 202)
+            self.assertEqual(
+                response.data["message"],
+                "If an eligible account exists, a verification code has been sent.",
+            )
+        # The throttled repeat sent nothing new, and the first code still works.
+        self.assertEqual(
+            EmailAuthChallenge.objects.filter(
+                target_email=self.primary_email.email_address,
+                purpose=EmailAuthChallenge.Purpose.PASSWORD_RESET,
+            ).count(),
+            1,
+        )
+        verify_response = self.client.post(
+            "/authn/password-reset/verify-code/",
+            {"email": self.primary_email.email_address, "code": "654321"},
+            format="json",
+        )
+        self.assertEqual(verify_response.status_code, 200)

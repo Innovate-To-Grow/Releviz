@@ -68,6 +68,20 @@ class RuntimeConfigurationModuleTests(SimpleTestCase):
         self.assertEqual(e2e.EMAIL_FILE_PATH, "/tmp/releviz-coverage-mail")
         self.assertFalse(e2e.PRINT_EMAILS_TO_TERMINAL)
 
+    def test_e2e_settings_record_endpoints_only_when_a_log_is_named(self):
+        import config.settings.e2e as e2e_settings
+
+        middleware = "apps.core.middleware.e2e_coverage.E2EEndpointCoverageMiddleware"
+        try:
+            with patch.dict("os.environ", {"E2E_ENDPOINT_LOG": "/tmp/releviz-endpoints.log"}):
+                recording = importlib.reload(e2e_settings)
+            self.assertEqual(recording.MIDDLEWARE[-1], middleware)
+            self.assertEqual(recording.E2E_ENDPOINT_LOG, "/tmp/releviz-endpoints.log")
+        finally:
+            with patch.dict("os.environ", {"E2E_ENDPOINT_LOG": ""}):
+                plain = importlib.reload(e2e_settings)
+        self.assertNotIn(middleware, plain.MIDDLEWARE)
+
     def test_legacy_url_prefix_branch_is_importable(self):
         import config.urls as urls
 

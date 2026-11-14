@@ -1,6 +1,7 @@
 """Per-row invitation delivery state, its filters, and the whole-roster ``overall`` block."""
 
 import uuid
+from datetime import timedelta
 
 from django.test import TestCase
 from django.utils import timezone
@@ -110,6 +111,29 @@ class RosterDeliveryOverviewTests(TestCase):
         schedule = self.client.get(f"/events/roster/{ada.pk}/schedule?code={self.event.code}")
         self.assertEqual(schedule.status_code, 200, schedule.data)
         self.assertIsNone(schedule.data["participant"]["invitationDelivery"])
+
+    def test_invitation_sent_at_dates_the_latest_send(self):
+        ada = self.add_person("Ada", "ada@example.com")
+        invitation = self.invitation_for(ada)
+
+        def sent_at():
+            return self.roster()["participants"][0]["invitationSentAt"]
+
+        self.assertIsNone(sent_at())
+        first = timezone.now() - timedelta(days=2)
+        EventInvitation.objects.filter(pk=invitation.pk).update(first_sent_at=first)
+        self.assertEqual(sent_at(), first.isoformat())
+        resent = first + timedelta(days=1)
+        EventInvitation.objects.filter(pk=invitation.pk).update(last_sent_at=resent)
+        self.assertEqual(sent_at(), resent.isoformat())
+        # The roster PATCH answers with the same row.
+        patched = self.client.patch(
+            f"/events/roster/{ada.pk}?code={self.event.code}",
+            {"expectedVersion": ada.version, "phone": "+1 555 0100"},
+            format="json",
+        )
+        self.assertEqual(patched.status_code, 200, patched.data)
+        self.assertEqual(patched.data["participant"]["invitationSentAt"], resent.isoformat())
 
     def test_queued_and_failed_filters_select_on_delivery_state(self):
         ada = self.add_person("Ada", "ada@example.com")

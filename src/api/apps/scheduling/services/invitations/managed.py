@@ -234,7 +234,15 @@ def create_or_reuse_managed_participant(
         )
     write_error = response_write_error(event)
     if write_error:
-        raise ManagedParticipantError(write_error, status_code=409)
+        # A closed event comes back with the refusal so the workspace can lock
+        # the list; an active event past its deadline is not "not active".
+        not_active = event.status != Event.Status.ACTIVE
+        raise ManagedParticipantError(
+            write_error,
+            status_code=409,
+            error_code="event_not_active" if not_active else None,
+            event=event if not_active else None,
+        )
 
     normalized_name = str(name or "").strip()
     normalized_email = str(email or "").strip().lower()
@@ -262,7 +270,8 @@ def create_or_reuse_managed_participant(
     if organizer.contact_emails.filter(email_address__iexact=normalized_email).exists():
         raise ManagedParticipantError(
             "That is one of your own addresses. Use Add myself to add yourself as a participant, "
-            'or check "No email of their own" to add a person you manage.',
+            'or tick "They have no email. I\'ll enter their schedule." '
+            "to add a person you manage.",
             status_code=409,
             error_code="organizer_own_email",
         )

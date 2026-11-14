@@ -60,7 +60,8 @@ function HomePage() {
   const handleJoin = (submitEvent) => {
     submitEvent?.preventDefault();
     if (loading) return;
-    const code = eventCode.trim();
+    // Codes are uppercase and looked up exactly, so accept lowercase typing.
+    const code = eventCode.trim().toUpperCase();
     if (!code) return;
     const eventPath = `/event?code=${encodeURIComponent(code)}`;
     router.push(

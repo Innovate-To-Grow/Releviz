@@ -1056,6 +1056,58 @@ test("needs at least one ready row before anything can be imported", async () =>
   expect(useAll.indeterminate).toBe(false);
 });
 
+test("saves a cell the server refused on leaving it, even at the fallback it shows", async () => {
+  const record = importRecord({ id: "import-9" });
+  createRosterImport.mockResolvedValue({ import: record });
+  configureRosterImport.mockResolvedValue({ import: record });
+  fetchRosterImportRows.mockResolvedValue(
+    rowsResponse(record, [
+      importRow({
+        valid: false,
+        errors: [
+          "phone cannot contain a formula.",
+          "weight must be between 0 and 1.",
+        ],
+      }),
+    ]),
+  );
+  renderWizard();
+  await reachReview();
+  expect(reviewRow(2)).toHaveTextContent(
+    "Needs fixing: phone cannot contain a formula.",
+  );
+
+  // The weight cell shows the fallback 1; leaving it settles on that 1.
+  const weight = screen.getByLabelText("Weight for row 2");
+  expect(weight).toHaveValue(1);
+  fireEvent.blur(weight);
+  await waitFor(() =>
+    expect(configureRosterImport).toHaveBeenLastCalledWith(
+      "IMPORT1",
+      "import-9",
+      { rowUpdates: [{ id: "row-1", weight: 1 }] },
+      "token",
+    ),
+  );
+  await waitFor(() => expect(weight).toBeEnabled());
+  const phone = screen.getByLabelText("Phone for row 2");
+  fireEvent.blur(phone);
+  await waitFor(() =>
+    expect(configureRosterImport).toHaveBeenLastCalledWith(
+      "IMPORT1",
+      "import-9",
+      { rowUpdates: [{ id: "row-1", phone: "" }] },
+      "token",
+    ),
+  );
+  await waitFor(() => expect(phone).toBeEnabled());
+
+  // Cells the server didn't refuse still save only a change.
+  const calls = configureRosterImport.mock.calls.length;
+  fireEvent.blur(screen.getByLabelText("Name for row 2"));
+  expect(configureRosterImport.mock.calls.length).toBe(calls);
+});
+
 test("falls back to the older summary keys when the API sends only those", async () => {
   const record = importRecord({
     id: "import-9",

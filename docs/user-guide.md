@@ -122,7 +122,8 @@ or your own row), offers **Edit schedule**, and groups everything about the pers
 
 - **Contact**: **Full name**, **Email**, and **Phone**. A name can be changed for anyone whose
   schedule you still enter; a person who answers under their own account keeps their account's
-  name. An email can be changed only until the person has opened their link (someone without a
+  name, and their row follows when they change it in their account settings (so does your own
+  row). An email can be changed only until the person has opened their link (someone without a
   Releviz account), joined, or answered. The row then moves to the account behind the new address
   (or a new temporary identity) and keeps its name, groups, weight, and any schedule you entered;
   it gets a fresh invitation, so the row reads **Not invited**, the old link stops working, and
@@ -132,8 +133,8 @@ or your own row), offers **Edit schedule**, and groups everything about the pers
 - **Groups**: the person's group chips and **+ Add to group**, which opens the group picker.
 - **In the results**: whether their answers are counted (**Count Ada's answers**, for someone
   called Ada) and their **Weight** (0 to 1).
-- **Invitation**: the current state with **Send invitation** or **Resend**, which open the email
-  review.
+- **Invitation**: the current state (**Sent on** the date of the latest send, once it is out) with
+  **Send invitation** or **Resend**, which open the email review.
 
 **Save** sends only what changed, and closing with unsaved edits asks first. If someone else
 changed the row in the meantime, the row shows the latest values with **Apply again** and
@@ -159,8 +160,12 @@ steps:
    picks another worksheet or header row. **Preview rows** validates the sheet.
 3. **Review**: every row with its status (**Ready**, **Needs fixing**, **Merged into row n**, or
    **Skipped**). Fix cells in place, untick rows to skip them, and use **Show** to see only the
-   rows that need fixing. Then choose **Add and update people** (merge) or **Replace the whole
-   list** (rebuild) and click **Import N people** (or **Replace the list with N people**).
+   rows that need fixing. A cell the sheet can't use (a formula, a weight outside 0 to 1, or an
+   Included value that isn't yes or no) shows a default instead and keeps the row on **Needs
+   fixing** until you set that cell; editing other cells doesn't clear it. To keep the default a
+   text or weight cell shows, click into the cell and leave it. Then choose **Add and update
+   people** (merge) or **Replace the whole list** (rebuild) and click **Import N people** (or
+   **Replace the list with N people**).
    - Merging adds or updates people and keeps existing schedules and delivery history. A row's
      groups are added to the person's existing groups; an import never removes anyone from a
      group.
@@ -484,7 +489,8 @@ meeting without the two lists, and the calendar draws the confirmed meeting alon
 clicks.
 
 Reactivating a finalized event (**Reactivate event**) cancels the meeting and emails a matching
-cancellation to everyone the confirmation reached. That email is reviewed first in the same way,
+cancellation to everyone the confirmation reached. Archiving a finalized event keeps its meeting,
+so reactivating the archived event does the same. That email is reviewed first in the same way,
 and the event reopens only with **Reopen and send N emails**. When nobody received the
 confirmation, it reopens at once.
 

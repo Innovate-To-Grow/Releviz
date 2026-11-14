@@ -14,7 +14,6 @@ import {
 } from "@/lib/api/config";
 import {
   changePasswordApi,
-  confirmPasswordReset,
   deleteAccountApi,
   fetchAuthSession,
   fetchAuthSessions,
@@ -25,11 +24,13 @@ import {
   requestPasswordResetCode,
   requestLoginCode,
   requestUnifiedEmailAuthCode,
+  resetPasswordWithToken,
   revokeAuthSessions,
   startRegistration,
   startTemporaryUpgradeRegistration,
   updateProfileApi,
   verifyLoginCode,
+  verifyPasswordResetCode,
   verifyRegistration,
   verifyUnifiedEmailAuthCode,
 } from "@/lib/api/auth";
@@ -791,9 +792,12 @@ describe("auth API helpers", () => {
     });
     writeAuthSession({ access: "before-reset" });
     await expect(
-      confirmPasswordReset({
+      verifyPasswordResetCode({ email: "ada@example.com", code: "123456" }),
+    ).resolves.toBe("reset-token");
+    await expect(
+      resetPasswordWithToken({
         email: "ada@example.com",
-        code: "123456",
+        verificationToken: "reset-token",
         password: "password456",
         passwordConfirm: "password456",
       }),
@@ -887,6 +891,9 @@ describe("auth API helpers", () => {
       .mockResolvedValueOnce(
         jsonResponse({ detail: "request failed" }, { status: 400 }),
       )
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: "verify failed" }, { status: 400 }),
+      )
       .mockResolvedValueOnce(passwordKeyResponse())
       .mockResolvedValueOnce(
         jsonResponse({ detail: "reset failed" }, { status: 400 }),
@@ -904,9 +911,12 @@ describe("auth API helpers", () => {
       "request failed",
     );
     await expect(
-      confirmPasswordReset({
+      verifyPasswordResetCode({ email: "x", code: "0" }),
+    ).rejects.toThrow("verify failed");
+    await expect(
+      resetPasswordWithToken({
         email: "x",
-        code: "0",
+        verificationToken: "token",
         password: "password456",
         passwordConfirm: "password456",
       }),

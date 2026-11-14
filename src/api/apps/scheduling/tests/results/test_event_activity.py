@@ -5,6 +5,8 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.authn.tests.helpers import create_member, token_for
+from apps.mail.models import EmailDeliveryJob, EmailMessageLog
+from apps.mail.services import enqueue_email_job
 from apps.scheduling.models import Event, EventInvitation, Participant, Weight
 from apps.scheduling.services.activity import event_activity, roster_activity
 from apps.scheduling.services.results import (
@@ -70,6 +72,43 @@ class EventActivityDigestTests(TestCase):
         submitted = roster_activity(self.event)
         self.assertEqual(submitted["submitted"], 1)
         self.assertEqual(submitted["changedAt"], newest.isoformat())
+
+    def test_roster_digest_follows_invitation_emails_the_worker_gives_up_on(self):
+        Participant.objects.create(event=self.event, member=self.member, participant_name="Member")
+        invitation = EventInvitation.objects.create(
+            event=self.event,
+            email="activity-member@example.com",
+            member=self.member,
+        )
+        before = roster_activity(self.event)["changedAt"]
+
+        def invitation_job(message_type):
+            job, _created = enqueue_email_job(
+                idempotency_key=f"activity:{message_type}",
+                message_type=message_type,
+                recipient=invitation.email,
+                subject="Subject",
+                body="Body",
+                message_id=f"<activity-{message_type}@releviz.local>",
+                event=self.event,
+                invitation=invitation,
+            )
+            return job
+
+        job = invitation_job(EmailMessageLog.MessageType.INVITATION)
+        reminder = invitation_job(EmailMessageLog.MessageType.REMINDER)
+        # Giving up on the email changes only the job, as the worker does.
+        failed_at = timezone.now() + timedelta(minutes=1)
+        EmailDeliveryJob.objects.filter(pk=job.pk).update(
+            status=EmailDeliveryJob.Status.PERMANENT_FAILURE, updated_at=failed_at
+        )
+        self.assertNotEqual(before, failed_at.isoformat())
+        self.assertEqual(roster_activity(self.event)["changedAt"], failed_at.isoformat())
+        # Reminder emails show on no row badge, so they leave the digest alone.
+        EmailDeliveryJob.objects.filter(pk=reminder.pk).update(
+            updated_at=failed_at + timedelta(minutes=1)
+        )
+        self.assertEqual(roster_activity(self.event)["changedAt"], failed_at.isoformat())
 
     def test_event_digest_folds_pending_invalidations_like_the_results_read(self):
         recompute_event_results(self.event.pk)

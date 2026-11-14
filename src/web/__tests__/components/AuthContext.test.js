@@ -76,6 +76,7 @@ function Probe() {
   return (
     <div>
       <span data-testid="loading">{String(auth.loading)}</span>
+      <span data-testid="signing-out">{String(auth.signingOut)}</span>
       <span data-testid="user">{auth.user?.displayName || "none"}</span>
       <button onClick={() => auth.login({ email: "a", password: "p" })}>
         login
@@ -134,7 +135,13 @@ function Probe() {
       >
         delete-account
       </button>
-      <button onClick={() => auth.logout()}>logout</button>
+      <button
+        onClick={() =>
+          auth.logout().catch((error) => (window.__logoutError = error.message))
+        }
+      >
+        logout
+      </button>
       <button onClick={async () => (window.__token = await auth.getToken())}>
         token
       </button>
@@ -153,6 +160,7 @@ describe("AuthContext", () => {
     fetchAuthSession.mockResolvedValue({ user: {} });
     delete window.__token;
     delete window.__sessions;
+    delete window.__logoutError;
   });
 
   test("throws when useAuth is outside provider", () => {
@@ -279,6 +287,59 @@ describe("AuthContext", () => {
     await waitFor(() => expect(window.__token).toBe("verify-token"));
     await userEvent.click(screen.getByText("logout"));
     expect(navigateTo).toHaveBeenCalledWith("/");
+  });
+
+  test("flags a log out in progress until it navigates home", async () => {
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("loading")).toHaveTextContent("false"),
+    );
+    act(() => {
+      writeAuthSession({ access: "a", user: { displayName: "Member" } });
+    });
+    expect(screen.getByTestId("user")).toHaveTextContent("Member");
+    expect(screen.getByTestId("signing-out")).toHaveTextContent("false");
+
+    let rejectLogout;
+    logoutApi.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectLogout = reject;
+        }),
+    );
+    await userEvent.click(screen.getByText("logout"));
+    expect(screen.getByTestId("signing-out")).toHaveTextContent("true");
+    await act(async () => rejectLogout(new Error("Log out failed")));
+    // A failed log out leaves the person signed in, so the guards act again.
+    expect(window.__logoutError).toBe("Log out failed");
+    expect(screen.getByTestId("signing-out")).toHaveTextContent("false");
+    expect(screen.getByTestId("user")).toHaveTextContent("Member");
+    expect(navigateTo).not.toHaveBeenCalled();
+
+    delete window.__logoutError;
+    let resolveLogout;
+    logoutApi.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveLogout = resolve;
+        }),
+    );
+    await userEvent.click(screen.getByText("logout"));
+    expect(screen.getByTestId("signing-out")).toHaveTextContent("true");
+    // logoutApi clears the session before it resolves: the signed-out render
+    // that auth event causes must already carry the flag.
+    act(() => clearAuthSession());
+    expect(screen.getByTestId("user")).toHaveTextContent("none");
+    expect(screen.getByTestId("signing-out")).toHaveTextContent("true");
+    expect(navigateTo).not.toHaveBeenCalled();
+    await act(async () => resolveLogout());
+    expect(navigateTo).toHaveBeenCalledWith("/");
+    expect(screen.getByTestId("signing-out")).toHaveTextContent("true");
+    expect(window.__logoutError).toBeUndefined();
   });
 
   test("responds to in-memory auth events", async () => {

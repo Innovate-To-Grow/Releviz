@@ -143,6 +143,7 @@ export default function SettingsPage() {
   const {
     user,
     loading,
+    signingOut,
     updateProfile,
     listSessions,
     revokeSession,
@@ -190,8 +191,16 @@ export default function SettingsPage() {
   const securityActionInProgress =
     Boolean(sessionAction) || passwordAction || deleteAction;
 
+  // A log out signs the page out before it navigates home, and redirecting to
+  // the login page then would replace that navigation.
   useEffect(() => {
-    if (completionResolved && !loading && !user && !securityActionInProgress) {
+    if (
+      completionResolved &&
+      !loading &&
+      !user &&
+      !signingOut &&
+      !securityActionInProgress
+    ) {
       const settingsDestination = completionActive
         ? `/settings?complete_profile=1&next=${encodeURIComponent(completionNext)}`
         : "/settings";
@@ -207,6 +216,7 @@ export default function SettingsPage() {
     completionResolved,
     loading,
     securityActionInProgress,
+    signingOut,
     user,
   ]);
 

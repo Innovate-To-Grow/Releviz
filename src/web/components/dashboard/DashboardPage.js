@@ -166,7 +166,7 @@ function EventCard({
 }
 
 function DashboardPage() {
-  const { user, loading: authLoading, getToken } = useAuth();
+  const { user, loading: authLoading, signingOut, getToken } = useAuth();
   const [organized, setOrganized] = useState([]);
   const [participating, setParticipating] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -180,11 +180,16 @@ function DashboardPage() {
   const [deleteRequestKey, setDeleteRequestKey] = useState("");
   const duplicateRequestKeys = useRef(new Map());
 
+  // A log out signs the page out before it navigates home, and redirecting to
+  // the login page then would replace that navigation. This is its own effect
+  // so the log out starting does not reload the events.
   useEffect(() => {
-    if (!authLoading && !user) {
+    if (!authLoading && !user && !signingOut) {
       navigateTo("/login?next=/dashboard");
-      return;
     }
+  }, [user, authLoading, signingOut]);
+
+  useEffect(() => {
     if (authLoading || !user) return;
     getToken()
       .then((token) => fetchDashboardEvents(token))
@@ -320,7 +325,8 @@ function DashboardPage() {
   }
 
   const handleGoToEvent = () => {
-    const code = eventCode.trim();
+    // Codes are uppercase and looked up exactly, so accept lowercase typing.
+    const code = eventCode.trim().toUpperCase();
     if (code) navigateTo(`/event?code=${encodeURIComponent(code)}`);
   };
 

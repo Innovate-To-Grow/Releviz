@@ -129,14 +129,17 @@ class EventLifecycleView(APIView):
         cancellation_jobs = []
         cancellation_request = None
         if target_status == Event.Status.ACTIVE and "status" in changed_fields:
+            cancellations = EmailDeliveryRequest.objects.filter(
+                event=event,
+                operation=EmailDeliveryRequest.Operation.FINAL_CANCELLATION,
+            )
+            # Report only the request this reactivation creates. An earlier
+            # cancellation's request stays on the event, and handing it back
+            # would show a stale delivery for a reactivation that canceled nothing.
+            earlier_ids = list(cancellations.values_list("pk", flat=True))
             cancellation_jobs = cancel_active_final_meeting(event)
             cancellation_request = (
-                EmailDeliveryRequest.objects.filter(
-                    event=event,
-                    operation=EmailDeliveryRequest.Operation.FINAL_CANCELLATION,
-                )
-                .order_by("-created_at")
-                .first()
+                cancellations.exclude(pk__in=earlier_ids).order_by("-created_at").first()
             )
         return private_response(
             {

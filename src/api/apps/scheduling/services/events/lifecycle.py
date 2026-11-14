@@ -7,6 +7,8 @@ from django.utils import timezone
 from apps.mail.models import EmailDeliveryJob, EmailMessageLog
 from apps.scheduling.models import Event
 
+# Archiving a finalized event keeps its confirmed meeting on participants'
+# calendars; only reactivating it cancels the meeting.
 LEGAL_TRANSITIONS = {
     Event.Status.ACTIVE: {Event.Status.CLOSED, Event.Status.ARCHIVED},
     Event.Status.FINALIZED: {Event.Status.ACTIVE, Event.Status.ARCHIVED},

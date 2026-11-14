@@ -1,14 +1,17 @@
 """Administrator authorization and protected impersonation targets."""
 
+from io import BytesIO
 from unittest.mock import patch
 
 from django.contrib import admin
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
-from django.test import RequestFactory, TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
+from openpyxl import Workbook
 
-from apps.authn.models import ImpersonationToken, Member
+from apps.authn.models import ContactEmail, ImpersonationToken, Member
 
 
 def _administrator(**kwargs):
@@ -172,3 +175,158 @@ class MemberHandlerAuthorizationTests(TestCase):
             )
             generate.assert_not_called()
         self.assertFalse(ImpersonationToken.objects.exists())
+
+
+@override_settings(ROOT_URLCONF="config.urls", ADMIN_REQUIRE_CONFIRMATION=False)
+class AdministratorAccountManagementTests(TestCase):
+    """Administrators manage one another's accounts; Django's compatibility flag
+    is never consulted."""
+
+    def setUp(self):
+        cache.clear()
+        self.administrator = _administrator(first_name="Admin", last_name="User")
+        self.other_administrator = _administrator(first_name="Other", last_name="Admin")
+        self.regular = Member.objects.create_user(
+            password="StrongPass123!", first_name="Reg", last_name="Ular", is_active=True
+        )
+        self.client.force_login(self.administrator)
+
+    def tearDown(self):
+        cache.clear()
+
+    @staticmethod
+    def _password_url(member):
+        return reverse("admin:auth_user_password_change", args=[member.pk])
+
+    @staticmethod
+    def _password_data():
+        return {
+            "set_usable_password": "true",
+            "password1": "Takeover-Pass-42!",
+            "password2": "Takeover-Pass-42!",
+        }
+
+    def _run_action(self, action, members):
+        return self.client.post(
+            reverse("admin:authn_member_changelist"),
+            {
+                "action": action,
+                "index": "0",
+                "_selected_action": [str(member.pk) for member in members],
+            },
+            follow=True,
+        )
+
+    def _add_email(self, member):
+        return self.client.post(
+            reverse("admin:authn_contactemail_add"),
+            {
+                "member": str(member.pk),
+                "email_address": f"{member.first_name.lower()}-alias@example.com",
+                "email_type": "secondary",
+            },
+        )
+
+    def test_administrator_sets_another_administrators_password(self):
+        response = self.client.post(
+            self._password_url(self.other_administrator), self._password_data()
+        )
+        self.assertEqual(response.status_code, 302)
+        self.other_administrator.refresh_from_db()
+        self.assertTrue(self.other_administrator.check_password("Takeover-Pass-42!"))
+
+    def test_administrator_activation_actions_reach_other_administrators(self):
+        targets = (self.other_administrator, self.regular)
+        response = self._run_action("deactivate_members", targets)
+        self.assertContains(response, "2 member(s) deactivated.")
+        self.assertNotContains(response, "skipped")
+        for member in targets:
+            member.refresh_from_db()
+            self.assertFalse(member.is_active)
+
+        response = self._run_action("activate_members", targets)
+        self.assertContains(response, "2 member(s) activated.")
+        for member in targets:
+            member.refresh_from_db()
+            self.assertTrue(member.is_active)
+
+    def test_regular_member_page_stays_editable_with_the_password_summary(self):
+        url = reverse("admin:authn_member_change", args=[self.regular.pk])
+        content = self.client.get(url).content.decode()
+        self.assertIn('name="first_name"', content)
+        self.assertNotIn(self.regular.password, content)
+
+    def test_administrator_adds_an_email_for_another_administrator(self):
+        self.assertEqual(self._add_email(self.other_administrator).status_code, 302)
+        self.assertTrue(self.other_administrator.contact_emails.exists())
+
+    def test_active_staff_manages_administrators_without_legacy_superuser_flag(self):
+        # Member.save mirrors the flag from the role, so only a row written around
+        # it carries is_staff alone; signing in leaves it that way (update_last_login
+        # saves last_login only). The member admin consults the role, never the flag.
+        Member.objects.filter(pk=self.administrator.pk).update(is_superuser=False)
+        self.client.force_login(self.administrator)
+        third = _administrator(first_name="Third", last_name="Admin")
+
+        response = self.client.post(
+            self._password_url(self.other_administrator), self._password_data()
+        )
+        self.assertEqual(response.status_code, 302)
+        self.other_administrator.refresh_from_db()
+        self.assertTrue(self.other_administrator.check_password("Takeover-Pass-42!"))
+
+        self.assertEqual(self._add_email(self.other_administrator).status_code, 302)
+        self.assertTrue(self.other_administrator.contact_emails.exists())
+
+        response = self._run_action("deactivate_members", (self.other_administrator, third))
+        self.assertContains(response, "2 member(s) deactivated.")
+        self.assertNotContains(response, "skipped")
+
+        response = self.client.post(
+            reverse("admin:authn_member_delete", args=[self.other_administrator.pk]),
+            {"post": "yes"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(Member.objects.filter(pk=self.other_administrator.pk).exists())
+
+        self.assertFalse(Member.objects.get(pk=self.administrator.pk).is_superuser)
+
+
+@override_settings(ROOT_URLCONF="config.urls")
+class MemberImportAdministratorRoleTests(TestCase):
+    """The import's Staff column grants the Administrator role like the change form."""
+
+    def setUp(self):
+        cache.clear()
+        self.administrator = _administrator(first_name="Ivo", last_name="Importer")
+        self.target = Member.objects.create_user(
+            password="StrongPass123!", first_name="Tomas", last_name="Target", is_active=True
+        )
+        ContactEmail.objects.create(
+            member=self.target, email_address="target@example.com", email_type="primary"
+        )
+
+    def tearDown(self):
+        cache.clear()
+
+    def _import(self, rows):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["First Name", "Last Name", "Primary Email", "Active", "Staff"])
+        for row in rows:
+            sheet.append(row)
+        payload = BytesIO()
+        workbook.save(payload)
+        upload = SimpleUploadedFile("members.xlsx", payload.getvalue())
+        return self.client.post(
+            reverse("admin:authn_member_import_excel"),
+            {"excel_file": upload, "update_existing": "on"},
+        )
+
+    def test_administrator_import_grants_the_administrator_role(self):
+        self.client.force_login(self.administrator)
+        response = self._import([["Tomas", "Target", "target@example.com", "TRUE", "TRUE"]])
+        self.assertEqual(response.context["result"].updated_count, 1)
+        self.target.refresh_from_db()
+        self.assertTrue(self.target.is_staff)
+        self.assertTrue(self.target.is_superuser)

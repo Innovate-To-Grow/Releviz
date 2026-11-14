@@ -181,6 +181,21 @@ class AdminPasswordLoginTest(TestCase):
         )
         self.assertRedirects(resp, "/admin/cms/cmspage/", fetch_redirect_response=False)
 
+    def test_mode_links_keep_every_query_parameter_of_next(self):
+        deep_link = "/admin/authn/member/?is_staff__exact=1&q=deep"
+        resp = self.client.get(LOGIN_URL, {"next": deep_link})
+        encoded = "next=%2Fadmin%2Fauthn%2Fmember%2F%3Fis_staff__exact%3D1%26q%3Ddeep"
+        self.assertEqual(resp.context["password_mode_url"], f"?mode=password&{encoded}")
+        self.assertEqual(resp.context["email_code_mode_url"], f"?step=email&{encoded}")
+        self.assertEqual(resp.context["different_email_url"], f"?step=email&different=1&{encoded}")
+
+        # Signing in from the password link lands on the whole deep link.
+        resp = self.client.post(
+            LOGIN_URL + resp.context["password_mode_url"],
+            {"mode": "password", "email": "admin@example.com", "password": "testpass123"},
+        )
+        self.assertRedirects(resp, deep_link, fetch_redirect_response=False)
+
     @patch("apps.authn.views.admin.login.issue_email_challenge")
     # noinspection PyUnusedLocal
     def test_password_mode_clears_email_code_session(self, mock_issue):

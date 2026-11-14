@@ -6,6 +6,7 @@ from apps.authn.security import client_ip, security_log_key
 from apps.scheduling.payloads import api_event, api_participant
 from apps.scheduling.services.temporary_access import (
     clear_temporary_session_cookie,
+    temporary_session_from_request,
     temporary_session_member_has_full_access,
 )
 
@@ -40,10 +41,12 @@ def temp_access_payload(session):
 
 
 def inactive_session_response(request, *, event_code: str, operation: str):
-    """Deny an operation whose event-scoped session is gone, and clear the cookie.
+    """Deny an operation whose event-scoped session is gone, and clear a dead cookie.
 
     An upgraded account must be told to sign in; every other cause stays
-    indistinguishable from an unknown event or invitation.
+    indistinguishable from an unknown event or invitation. A cookie that is
+    still valid for another event is left in place: the browser holds one
+    event cookie, and that event's page still needs it.
     """
 
     log_temporary_session_denied(request, event_code=event_code, operation=operation)
@@ -59,5 +62,6 @@ def inactive_session_response(request, *, event_code: str, operation: str):
         },
         status=403 if account_upgraded else 401,
     )
-    clear_temporary_session_cookie(response)
+    if temporary_session_from_request(request, update_last_seen=False) is None:
+        clear_temporary_session_cookie(response)
     return response

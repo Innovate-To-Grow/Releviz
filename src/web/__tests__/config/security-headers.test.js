@@ -53,6 +53,20 @@ test("uses a Next-compatible output mode for each runtime", () => {
   expect(require("../../next.config.js").output).toBeUndefined();
 });
 
+test("server builds redirect the legacy sign-in and sign-up addresses before rendering", async () => {
+  jest.resetModules();
+  delete process.env.AMPLIFY_STATIC_EXPORT;
+  delete process.env.NEXT_E2E_SERVER;
+  expect(await require("../../next.config.js").redirects()).toEqual([
+    { source: "/sign-in/:path*", destination: "/login", permanent: false },
+    { source: "/sign-up/:path*", destination: "/signup", permanent: false },
+  ]);
+
+  jest.resetModules();
+  process.env.AMPLIFY_STATIC_EXPORT = "1";
+  expect(require("../../next.config.js").redirects).toBeUndefined();
+});
+
 test("production fallback and Amplify use the same hardened CSP", async () => {
   const fallbackCsp = await loadCsp("production");
   const amplifyCsp = amplifyHeaders.customHeaders[0].headers.find(

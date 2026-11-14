@@ -31,10 +31,15 @@ const backendEnv = {
     process.env.DJANGO_SUPERUSER_EMAIL || "admin@releviz.local",
   DJANGO_SUPERUSER_PASSWORD: adminPassword,
   PYTHONUNBUFFERED: "1",
+  // A full run records every API route it reaches for the coverage audit.
+  E2E_ENDPOINT_LOG: process.env.E2E_ENDPOINT_LOG || "",
 };
 
 module.exports = defineConfig({
   testDir: ".",
+  // Every test is independent (its own runId-suffixed accounts and
+  // events), so workers split the tests within a file too.
+  fullyParallel: true,
   timeout: 120_000,
   expect: { timeout: 10_000 },
   // A test that fails in CI gets one more try, since three browser engines
@@ -63,8 +68,11 @@ module.exports = defineConfig({
   webServer: [
     {
       // The stream endpoint needs an ASGI server (runserver is WSGI); this is
-      // the production server, gunicorn running uvicorn workers.
-      command: `${JSON.stringify(pythonBin)} -m gunicorn config.asgi:application -k uvicorn_worker.UvicornWorker --chdir src/api --bind 127.0.0.1:${backendPort} --workers 1`,
+      // the production server, gunicorn running uvicorn workers. Keep-alive
+      // matches production (src/api/Dockerfile): with gunicorn's 2 s default,
+      // a test's API client can reuse an idle connection just as the server
+      // closes it and get ECONNRESET.
+      command: `${JSON.stringify(pythonBin)} -m gunicorn config.asgi:application -k uvicorn_worker.UvicornWorker --chdir src/api --bind 127.0.0.1:${backendPort} --workers 1 --keep-alive 75`,
       cwd: rootDir,
       url: `${backendUrl}/health`,
       env: backendEnv,

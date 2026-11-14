@@ -11,216 +11,23 @@ const {
   recomputeEventResults,
   registerAccount,
   selectOption,
+  slotIndex,
+  submitResponse,
 } = require("./helpers/releviz");
+const { DAY_MS, isoDate, shortDate, weekStartMs } = require("./helpers/time");
+const {
+  cellAt,
+  finalizeCurrentSelection,
+  gotoWeekWith,
+  isUncovered,
+  pickCell,
+} = require("./helpers/workspace");
 
 // The organizer's meeting-time calendar: weighted shading, week and date
 // paging, picking any slot-aligned window by pointer or keyboard, ranked
 // windows drawn on the grid, and finalizing a custom window. Events and
 // responses are seeded through the API so the assertions are deterministic;
 // the browser only drives what the calendar itself does.
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const ROW_HEADER = 1; // every calendar row starts with its time label
-
-function isoDate(ms) {
-  return new Date(ms).toISOString().slice(0, 10);
-}
-
-// Sunday-based weeks, matching the API's weekday numbering (Sun = 0).
-function weekStartMs(now = Date.now()) {
-  const day = new Date(now);
-  day.setUTCHours(0, 0, 0, 0);
-  return day.getTime() - day.getUTCDay() * DAY_MS;
-}
-
-function shortDate(date) {
-  return new Date(`${date}T00:00:00Z`).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
-}
-
-function cellAt(grid, row, column) {
-  return grid
-    .getByRole("row")
-    .nth(row + ROW_HEADER)
-    .getByRole("gridcell")
-    .nth(column);
-}
-
-async function gotoWeekWith(page, grid, date) {
-  const dayHeader = grid.getByRole("columnheader", {
-    name: shortDate(date),
-  });
-  if (await dayHeader.count()) return;
-  // Only "Next week" walks forward, so start from the current week when the
-  // target may be behind the week on screen.
-  const thisWeek = page.getByRole("button", { name: "This week" });
-  if (await thisWeek.isEnabled()) await thisWeek.click();
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    if (await dayHeader.count()) return;
-    await page.getByRole("button", { name: "Next week" }).click();
-  }
-  throw new Error(`The calendar never reached the week of ${date}.`);
-}
-
-// Clicks a calendar cell until the Finalize candidate reflects the pick. A
-// pick made right after the grid re-renders (a rail choice reveals its week,
-// a week change swaps every cell) can be dropped by slower engines, so the
-// click is retried instead of asserted once; selecting is idempotent.
-async function pickCell(page, cell, expectedText) {
-  const candidate = page.locator(".final-candidate");
-  await expect
-    .poll(
-      async () => {
-        await cell.click();
-        return candidate.textContent();
-      },
-      { timeout: 20_000, intervals: [500, 1000, 2000] },
-    )
-    .toContain(expectedText);
-}
-
-// Whether `locator` is the topmost element at its own centre, i.e. not
-// hidden under something pinned over it (the calendar while picking).
-async function isUncovered(locator) {
-  return locator.evaluate((element) => {
-    const box = element.getBoundingClientRect();
-    const hit = document.elementFromPoint(
-      box.left + box.width / 2,
-      box.top + Math.min(box.height / 2, 12),
-    );
-    return element.contains(hit);
-  });
-}
-
-// Adds a managed participant, without inviting them, and submits the given
-// availability. `inperson` and `virtual` list the slot indices the person is
-// free for. Nobody is invited, so finalizing never depends on how far the
-// email worker has got.
-async function submitResponse(
-  request,
-  token,
-  event,
-  { name, email, inperson = [], virtual = [], weight = null },
-) {
-  const created = await apiJson(
-    request,
-    "POST",
-    `/events/participants/managed?code=${event.code}`,
-    token,
-    {
-      name,
-      email,
-      sendInvitation: false,
-      idempotencyKey: crypto.randomUUID(),
-    },
-  );
-  expect(created.response.status()).toBe(201);
-  const participant = created.payload.participant;
-  const schedule = await apiJson(
-    request,
-    "GET",
-    `/events/roster/${participant.id}/schedule?code=${event.code}`,
-    token,
-  );
-  expect(schedule.response.status()).toBe(200);
-  const version =
-    schedule.payload.schedule?.version ?? schedule.payload.participant?.version;
-  const toArray = (indices) =>
-    Array.from({ length: event.slotCount }, (_, index) =>
-      indices.includes(index) ? 1 : 0,
-    );
-  const updated = await apiJson(
-    request,
-    "PUT",
-    `/events/participants/update?code=${event.code}&participantId=${participant.id}`,
-    token,
-    {
-      availabilityInperson: toArray(inperson),
-      availabilityVirtual: toArray(virtual),
-      submitted: 1,
-      expectedVersion: version,
-    },
-  );
-  expect(updated.response.status()).toBe(200);
-  if (weight !== null) {
-    const roster = await apiJson(
-      request,
-      "GET",
-      `/events/roster?code=${event.code}&search=${encodeURIComponent(email)}&pageSize=5`,
-      token,
-    );
-    const row = roster.payload.participants.find(
-      (entry) => entry.email === email,
-    );
-    expect(row).toBeTruthy();
-    const patched = await apiJson(
-      request,
-      "PATCH",
-      `/events/roster/${row.id}?code=${event.code}`,
-      token,
-      { weight, expectedVersion: row.version },
-    );
-    expect(patched.response.status()).toBe(200);
-  }
-  return participant;
-}
-
-function slotIndex(event, groupKey, localStart) {
-  const group = event.slotGroups.find((entry) => entry.key === groupKey);
-  const slot = group?.slots.find((entry) => entry.localStart === localStart);
-  if (!slot) throw new Error(`No slot ${groupKey} ${localStart}`);
-  return slot.index;
-}
-
-async function finalizeCurrentSelection(page, eventCode) {
-  // The attendance is read as soon as the time is picked.
-  await expect(
-    page.getByText("Attendance review is current for this candidate."),
-  ).toBeVisible();
-  // The count tiles are backed by a per-person breakdown.
-  await expect(
-    page
-      .locator("#organizer-finalize")
-      .getByRole("table", { name: "Attendance by person" }),
-  ).toBeVisible();
-  // Finalizing reviews the confirmation email before a second, explicit
-  // step. The people on these events were added without an invitation, so
-  // nobody would be emailed: the review says so and still lets the organizer
-  // finalize.
-  await page
-    .locator("#organizer-finalize")
-    .getByRole("button", { name: "Finalize meeting" })
-    .click();
-  const dialog = page.getByRole("dialog", { name: "Finalize meeting" });
-  await expect(dialog.getByText("Step 1 of 2: Review")).toBeVisible();
-  await expect(
-    dialog.getByText(
-      "Nobody has been invited by email, so no confirmation emails will be sent.",
-    ),
-  ).toBeVisible();
-  await expect(dialog.locator('iframe[title="Email preview"]')).toHaveCount(0);
-  await dialog.getByRole("button", { name: "Continue", exact: true }).click();
-  await expect(
-    dialog.getByRole("heading", { name: "Finalize without emailing anyone?" }),
-  ).toBeFocused();
-  await expect(dialog.getByText("No emails will be sent.")).toBeVisible();
-  const finalization = page.waitForResponse(
-    (response) =>
-      response.request().method() === "PUT" &&
-      response.url().includes(`/events/finalization?code=${eventCode}`),
-  );
-  await dialog
-    .getByRole("button", { name: "Finalize meeting", exact: true })
-    .click();
-  expect((await finalization).status()).toBe(202);
-  await expect(dialog).toHaveCount(0);
-  await expect(
-    page.getByText("The meeting is finalized. Nobody was emailed."),
-  ).toBeVisible();
-}
 
 test.describe("Organizer meeting-time calendar", () => {
   test("shades, navigates, picks and finalizes windows on a weekly event", async ({

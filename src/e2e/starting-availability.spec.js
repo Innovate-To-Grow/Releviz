@@ -2,52 +2,21 @@ const { expect, test } = require("@playwright/test");
 const {
   apiJson,
   createEvent,
+  ownResponse,
   readSession,
   registerAccount,
 } = require("./helpers/releviz");
+const {
+  selectedCells,
+  unselectedCells,
+  waitForAutosave,
+} = require("./helpers/workspace");
 
 // The starting schedule: every slot begins Available so people paint Busy
 // over the times that do not work, the editor pre-selects the opposite brush,
 // and the organizer's "Participants start as" setting re-seeds anyone who has
 // not touched their schedule yet. The event is created through the API with
 // the product default; the browser drives the participant editor.
-
-const updateRoutePattern = /\/events\/participants\/update\?/;
-
-// A participant's own response as the API reports it (the caller is not the
-// organizer, so the payload carries their schedule and nobody else's).
-async function ownResponse(request, token, eventCode) {
-  const state = await apiJson(
-    request,
-    "GET",
-    `/events/participants?code=${eventCode}`,
-    token,
-  );
-  expect(state.response.status()).toBe(200);
-  expect(state.payload.participants).toHaveLength(1);
-  return state.payload.participants[0];
-}
-
-// Autosave PUTs the response ~700ms after a change; resolve once the server
-// has accepted one.
-function waitForAutosave(page) {
-  return page.waitForResponse(
-    (response) =>
-      response.request().method() === "PUT" &&
-      updateRoutePattern.test(response.url()) &&
-      response.ok(),
-  );
-}
-
-function selectedCells(grid) {
-  return grid.locator("[role='gridcell'][data-cell-idx][aria-selected='true']");
-}
-
-function unselectedCells(grid) {
-  return grid.locator(
-    "[role='gridcell'][data-cell-idx][aria-selected='false']",
-  );
-}
 
 test.describe("Starting availability", () => {
   test("participants start Available, paint Busy over conflicts, and follow the organizer's setting", async ({

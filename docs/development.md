@@ -81,7 +81,10 @@ documentation-only changes, and reports a single required `CI Result` check. The
 
 - backend tests with strict coverage, plus PostgreSQL migration and app tests
 - frontend tests, coverage, bundle-size budgets, and the Amplify static-export build
-- Playwright E2E in Chromium, Firefox, and WebKit
+- Playwright E2E in Chromium, Firefox, and WebKit, each browser split across three shards, plus an
+  E2E coverage audit: every page route must be referenced by a spec, and every API route and custom
+  admin view must be reached by the Chromium run (`scripts/ci/audit_e2e_coverage.py`; an exemption
+  needs a reason and fails once the route is reached)
 - dependency, secret, and static-analysis scans, SBOM and license reports
 - Terraform tests and Docker image scans (high and critical findings fail the build)
 

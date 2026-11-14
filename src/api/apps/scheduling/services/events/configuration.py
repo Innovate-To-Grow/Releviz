@@ -69,6 +69,17 @@ def _value(data, key, existing, attribute, default):
     return default
 
 
+def _whole_number(value, field) -> int:
+    """``value`` as an int; a fraction is refused, not truncated."""
+
+    if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
+        raise EventManagementError(f"{field} must be an integer")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise EventManagementError(f"{field} must be an integer") from exc
+
+
 def _canonical_blocked_slots(entries) -> dict:
     """Sort keys and rows and drop empty groups so dict equality is meaningful."""
 
@@ -270,19 +281,10 @@ def parse_event_configuration(data, *, existing=None) -> dict:
     )
     if not isinstance(reminders_enabled, bool):
         raise EventManagementError("remindersEnabled must be a boolean")
-    reminder_hours_before = _value(
-        data,
+    reminder_hours_before = _whole_number(
+        _value(data, "reminderHoursBefore", existing, "reminder_hours_before", 24),
         "reminderHoursBefore",
-        existing,
-        "reminder_hours_before",
-        24,
     )
-    if isinstance(reminder_hours_before, bool):
-        raise EventManagementError("reminderHoursBefore must be an integer")
-    try:
-        reminder_hours_before = int(reminder_hours_before)
-    except (TypeError, ValueError) as exc:
-        raise EventManagementError("reminderHoursBefore must be an integer") from exc
     if reminder_hours_before < 0 or reminder_hours_before > 720:
         raise EventManagementError("reminderHoursBefore must be between 0 and 720")
 
@@ -299,19 +301,10 @@ def parse_event_configuration(data, *, existing=None) -> dict:
     if starting_availability not in {"available", "busy"}:
         raise EventManagementError("startingAvailability must be 'available' or 'busy'")
 
-    meeting_duration_minutes = _value(
-        data,
+    meeting_duration_minutes = _whole_number(
+        _value(data, "meetingDurationMinutes", existing, "meeting_duration_minutes", 30),
         "meetingDurationMinutes",
-        existing,
-        "meeting_duration_minutes",
-        30,
     )
-    if isinstance(meeting_duration_minutes, bool):
-        raise EventManagementError("meetingDurationMinutes must be an integer")
-    try:
-        meeting_duration_minutes = int(meeting_duration_minutes)
-    except (TypeError, ValueError) as exc:
-        raise EventManagementError("meetingDurationMinutes must be an integer") from exc
     if meeting_duration_minutes < 15 or meeting_duration_minutes > 480:
         raise EventManagementError("meetingDurationMinutes must be between 15 and 480")
     if meeting_duration_minutes % slot_minutes:

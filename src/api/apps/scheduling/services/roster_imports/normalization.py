@@ -38,6 +38,31 @@ DUPLICATE_NAME_MESSAGE = "Conflicting duplicate name."
 UNVERIFIED_OWN_ADDRESS_MESSAGE = (
     "Verify this address on your account before using it for someone without an email."
 )
+WEIGHT_RANGE_MESSAGE = "weight must be between 0 and 1."
+# What ``parse_included`` says about the included column.
+INCLUDED_MESSAGE = "included must be true or false."
+_CELL_FIELDS = ("name", "email", "phone", "group", "weight", "included")
+
+
+def formula_message(field: str) -> str:
+    return f"{field} cannot contain a formula."
+
+
+def refused_cell_errors(errors: list, *, updated) -> list:
+    """The errors for cells the sheet refused whose field ``updated`` leaves alone.
+
+    A refused cell (a formula, or a weight or included value that can't be
+    used) leaves a fallback in the row that checking the row again cannot
+    tell from a value the organizer chose, so its error stays until the
+    organizer sets that field.
+    """
+
+    refused = {formula_message(field) for field in _CELL_FIELDS if field not in updated}
+    if "weight" not in updated:
+        refused.add(WEIGHT_RANGE_MESSAGE)
+    if "included" not in updated:
+        refused.add(INCLUDED_MESSAGE)
+    return [error for error in errors if error in refused]
 
 
 def batch_organizer_addresses(batch: RosterImportBatch) -> OrganizerAddresses:
@@ -50,9 +75,9 @@ def _mapped_value(row: RosterImportRow, mapping: dict, field: str):
     index = mapping[field]
     value = row.raw_values[index] if index < len(row.raw_values) else ""
     if isinstance(value, dict) and "formula" in value:
-        return None, f"{field} cannot contain a formula."
+        return None, formula_message(field)
     if isinstance(value, str) and value.lstrip().startswith("="):
-        return None, f"{field} cannot contain a formula."
+        return None, formula_message(field)
     return value, None
 
 
@@ -152,7 +177,7 @@ def _normalize_row(
             if not math.isfinite(weight) or weight < 0 or weight > 1:
                 raise ValueError
         except (TypeError, ValueError):
-            errors.append("weight must be between 0 and 1.")
+            errors.append(WEIGHT_RANGE_MESSAGE)
             weight = 1.0
     included = defaults.get("included", True)
     if "included" in mapping and raw_included not in {None, ""}:

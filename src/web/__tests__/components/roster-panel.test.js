@@ -1219,6 +1219,57 @@ describe("RosterPanel selection and bulk changes", () => {
     );
   });
 
+  test("removing the search chip starts from page one and drops everyone matching", async () => {
+    fetchRoster.mockImplementation(async (code, query) => ({
+      ...rosterResponse([participant(), second]),
+      pagination: { page: query.page, pageSize: 25, total: 60, pages: 3 },
+    }));
+    await renderPanel();
+    fireEvent.change(await screen.findByLabelText("Search participants"), {
+      target: { value: "temp" },
+    });
+    await waitFor(() =>
+      expect(fetchRoster).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        expect.objectContaining({ search: "temp", page: 1 }),
+        "token",
+      ),
+    );
+    fireEvent.click(screen.getByLabelText("Select everyone on this page"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select all 60 matching" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Next" }));
+    await screen.findByText("Page 2 of 3");
+    const bar = screen.getByRole("region", { name: "Selected people" });
+    expect(bar).toHaveTextContent("60 selected · everyone matching the filter");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove filter Search: temp" }),
+    );
+    await waitFor(() =>
+      expect(fetchRoster).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        expect.objectContaining({ search: "", page: 1 }),
+        "token",
+      ),
+    );
+    await screen.findByText("Page 1 of 3");
+    expect(bar).toHaveTextContent("2 selected");
+    expect(bar).not.toHaveTextContent("everyone matching");
+  });
+
+  test("counting one person in reads in the singular", async () => {
+    patchRosterBulk.mockResolvedValue({ updatedCount: 1, resultsRevision: 8 });
+    await renderPanel();
+    fireEvent.click(await screen.findByLabelText("Select Temp Person"));
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(menuItem("Count in results"));
+    expect(
+      await findToast("1 person now counts in the results."),
+    ).toBeInTheDocument();
+  });
+
   test("changes groups for the selected people through the picker", async () => {
     await renderPanel();
     fireEvent.click(await screen.findByLabelText("Select Temp Person"));
@@ -2808,7 +2859,7 @@ describe("RosterPanel adds people", () => {
       .mockRejectedValueOnce(
         Object.assign(
           new Error(
-            'That is one of your own addresses. Check "No email of their own".',
+            'That is one of your own addresses. Use Add myself to add yourself as a participant, or tick "They have no email. I\'ll enter their schedule." to add a person you manage.',
           ),
           { status: 409, errorCode: "organizer_own_email" },
         ),
@@ -3211,6 +3262,106 @@ describe("RosterPanel schedule drawer", () => {
     expect(
       within(dialog).getByRole("button", { name: "Save draft" }),
     ).toBeEnabled();
+  });
+
+  test("counting a left-out person in hands the new version to the drawer", async () => {
+    fetchRoster.mockResolvedValue(
+      rosterResponse([participant({ included: false })]),
+    );
+    patchRosterParticipant.mockResolvedValue({
+      participant: participant({ included: true, version: 5 }),
+    });
+    await renderPanel();
+    const dialog = await openEditor();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Count them again" }),
+    );
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenCalledWith(
+        "ROSTER1",
+        "p-1",
+        { included: true, expectedVersion: 4 },
+        "token",
+      ),
+    );
+    expect(
+      await findToast("Temp Person now counts in the results."),
+    ).toBeInTheDocument();
+    expect(updateParticipant).not.toHaveBeenCalled();
+
+    // Counting them in moved the version on; the drawer's next save runs
+    // against it instead of meeting its own change as a conflict.
+    updateParticipant.mockResolvedValue({
+      participant: { submitted: 1, version: 6 },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Submit on behalf" }),
+    );
+    await waitFor(() =>
+      expect(within(dialog).getByRole("status")).toHaveTextContent(
+        "Schedule submitted.",
+      ),
+    );
+    expect(updateParticipant).toHaveBeenCalledWith(
+      "ROSTER1",
+      "m-1",
+      expect.objectContaining({ submitted: 1, expectedVersion: 5 }),
+      "token",
+    );
+  });
+
+  test("a drawer older than the row keeps its version after counting them in", async () => {
+    fetchRoster.mockResolvedValue(
+      rosterResponse([participant({ included: false })]),
+    );
+    // The drawer opened on version 3; the row already holds 4.
+    fetchRosterSchedule.mockResolvedValue(
+      scheduleResponse({
+        participant: {
+          id: "p-1",
+          memberId: "m-1",
+          name: "Temp Person",
+          included: false,
+          version: 3,
+        },
+        schedule: {
+          availabilityInperson: [0, 1, 0],
+          availabilityVirtual: [1, 0, 0],
+          submitted: 0,
+          version: 3,
+        },
+      }),
+    );
+    patchRosterParticipant.mockResolvedValue({
+      participant: participant({ included: true, version: 5 }),
+    });
+    updateParticipant.mockResolvedValue({
+      participant: { submitted: 0, version: 6 },
+    });
+    await renderPanel();
+    const dialog = await openEditor();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Count them again" }),
+    );
+    expect(
+      await findToast("Temp Person now counts in the results."),
+    ).toBeInTheDocument();
+    expect(patchRosterParticipant).toHaveBeenCalledWith(
+      "ROSTER1",
+      "p-1",
+      { included: true, expectedVersion: 4 },
+      "token",
+    );
+    // The change it hasn't seen still stands in the way of its save.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save draft" }));
+    await waitFor(() =>
+      expect(updateParticipant).toHaveBeenCalledWith(
+        "ROSTER1",
+        "m-1",
+        expect.objectContaining({ expectedVersion: 3 }),
+        "token",
+      ),
+    );
   });
 
   test("falls back to the schedule's own row when it is off the page", async () => {

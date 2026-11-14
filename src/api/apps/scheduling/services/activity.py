@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from django.db.models import Count, Max, Q
 
+from apps.mail.models import EmailMessageLog
 from apps.scheduling.models import Event
 
 from .results import (
@@ -19,11 +20,14 @@ from .results import (
 
 
 def roster_activity(event: Event) -> dict:
-    """Head counts plus the latest write to any person, invitation, or weight.
+    """Head counts plus the latest write to any person, invitation, invitation
+    email, or weight.
 
     Every roster-facing change (joining, drafts, submissions, invitation
     delivery and opens, organizer weight or group edits) bumps one of these
-    ``updated_at`` columns, and removals move the totals.
+    ``updated_at`` columns, and removals move the totals. The invitation
+    emails are there for the row badges: the worker retries, gives up on, or
+    cancels an email without touching the invitation itself.
     """
 
     people = event.participants.aggregate(
@@ -32,10 +36,18 @@ def roster_activity(event: Event) -> dict:
         changed_at=Max("updated_at"),
     )
     invitations = event.invitations.aggregate(changed_at=Max("updated_at"))
+    invitation_jobs = event.email_delivery_jobs.filter(
+        message_type=EmailMessageLog.MessageType.INVITATION
+    ).aggregate(changed_at=Max("updated_at"))
     weights = event.weights.aggregate(changed_at=Max("updated_at"))
     timestamps = [
         value
-        for value in (people["changed_at"], invitations["changed_at"], weights["changed_at"])
+        for value in (
+            people["changed_at"],
+            invitations["changed_at"],
+            invitation_jobs["changed_at"],
+            weights["changed_at"],
+        )
         if value is not None
     ]
     changed_at = max(timestamps) if timestamps else None

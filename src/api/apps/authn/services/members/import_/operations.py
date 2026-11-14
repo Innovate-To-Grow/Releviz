@@ -49,6 +49,7 @@ def bulk_update_members(
 
 
 def update_single_member(member, parsed, claimed_contact_emails):
+    previous_name = member.get_full_name()
     if parsed["first_name"]:
         member.first_name = parsed["first_name"]
     if parsed["last_name"]:
@@ -60,6 +61,11 @@ def update_single_member(member, parsed, claimed_contact_emails):
     if parsed["is_staff"] is not None:
         member.is_staff = parsed["is_staff"]
     member.save()
+    # The events this person answers show the account's new name.
+    if member.get_full_name() != previous_name:
+        from apps.scheduling.services.account_names import sync_account_participant_names
+
+        sync_account_participant_names(member)
 
     primary_contact = member.contact_emails.filter(email_type="primary").first()
     primary_email = primary_contact.email_address if primary_contact else parsed["primary_email"]

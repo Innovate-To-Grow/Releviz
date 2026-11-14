@@ -4,18 +4,18 @@ const path = require("node:path");
 const { expect, test } = require("@playwright/test");
 const { expectAccessible } = require("./helpers/accessibility");
 const {
-  ADMIN_EMAIL,
-  ADMIN_PASSWORD,
   BACKEND_URL,
   PYTHON_BIN,
   ROOT,
   apiJson,
+  beforeUnloadIsBlocked,
   datetimeLocalHoursFromNow,
   dispatchEmailJobs,
   emailsSentTo,
   expandAdvancedOptions,
   expectDashboard,
   fillTextbox,
+  importRoster,
   latestEmailFor,
   latestVerificationCode,
   loginWithEmailCode,
@@ -26,27 +26,26 @@ const {
   registerAccount,
   runBackendCommand,
   selectOption,
+  temporaryAccessPathFromEmail,
 } = require("./helpers/releviz");
-
-// The workspace and its delivery card keep themselves current on their own,
-// checking every 3 s and easing off to every 15 s while nothing changes, so a
-// wait for a change they pick up needs more than the default expect timeout.
-const LIVE_SYNC_TIMEOUT_MS = 20_000;
-
-// The Participants section's counts line under its heading.
-function participantSummary(page) {
-  return page.locator("#organizer-roster .panel__description");
-}
-
-// The section's header actions (Email, Import, + Add person). The empty
-// state repeats some of these names, so the header is addressed on its own.
-function participantActions(page) {
-  return page.getByRole("group", { name: "Participant actions" });
-}
-
-function participantRow(page, text) {
-  return page.locator("tr.participants-row", { hasText: text });
-}
+const {
+  LIVE_SYNC_TIMEOUT_MS,
+  addPerson,
+  continueToConfirm,
+  expectDeliveredAsPreviewed,
+  expectToast,
+  openAddPanel,
+  openPersonPanel,
+  participantActions,
+  participantRow,
+  participantSummary,
+  reviewEmail,
+  textLine,
+} = require("./helpers/participants");
+const {
+  currentResultsRevision,
+  waitForAttendanceReview,
+} = require("./helpers/workspace");
 
 // The row's one badge: submitted, or how far its invitation has got.
 function responseBadge(row) {
@@ -67,177 +66,21 @@ async function chooseResponseFilter(page, label) {
   await page.keyboard.press("Escape");
 }
 
-// Waits for a toast in the Participants section, then dismisses it so a
-// later toast with the same words is the only match. Toasts sit under an
-// open drawer or dialog, so the close is dispatched rather than clicked.
-async function expectToast(page, text) {
-  const toast = page
-    .getByRole("region", { name: "Notifications" })
-    .locator(".participants-toast", { hasText: text });
-  await expect(toast).toBeVisible();
-  await toast.getByRole("button", { name: "Dismiss" }).dispatchEvent("click");
-  await expect(toast).toHaveCount(0);
-}
-
-// One line of the email preview's envelope (From, To, Subject, Attachments).
-function emailField(dialog, term) {
-  return dialog
-    .locator(".email-preview__field")
-    .filter({
-      has: dialog.page().locator("dt").getByText(term, { exact: true }),
-    })
-    .locator("dd");
-}
-
-// Every email the organizer sends goes through one two-step dialog. Step 1
-// (Review) says who gets it and shows the email the first of them receives:
-// the envelope, the HTML part in a sandboxed frame (no scripts, inert
-// links), and the plain-text part, both with a stand-in for that person's
-// private link. `expected` lists the summary lines, the envelope, the
-// rendered email's heading, call-to-action link, and any notice under it,
-// and text in the plain-text part. Nothing has been sent at this point. Returns the envelope
-// as shown, to compare with the email that is delivered later.
-async function reviewEmail(dialog, expected) {
-  await expect(dialog.getByText("Step 1 of 2: Review")).toBeVisible();
-  await expect(
-    dialog.getByText("Check what people will receive before anything is sent."),
-  ).toBeVisible();
-  for (const line of expected.summary || []) {
-    await expect(dialog.getByText(line, { exact: true })).toBeVisible();
-  }
-  await expect(emailField(dialog, "From")).not.toBeEmpty();
-  await expect(emailField(dialog, "To")).toContainText(expected.to);
-  await expect(emailField(dialog, "Subject")).toHaveText(expected.subject);
-  if (expected.attachments) {
-    await expect(emailField(dialog, "Attachments")).toHaveText(
-      expected.attachments,
-    );
-  }
-  const frame = dialog.locator('iframe[title="Email preview"]');
-  await expect(frame).toHaveAttribute("sandbox", "");
-  const rendered = frame.contentFrame();
-  await expect(
-    rendered.getByRole("heading", { name: expected.heading }),
-  ).toBeVisible();
-  if (expected.link) {
-    const link = rendered.getByRole("link", {
-      name: expected.link.name,
-      exact: true,
-    });
-    await expect(link).toHaveAttribute("href", expected.link.href);
-  }
-  if (expected.notice) {
-    await expect(rendered.getByText(expected.notice)).toBeVisible();
-  }
-  await dialog.getByRole("tab", { name: "Plain text" }).click();
-  const plainText = dialog.locator(".email-preview__text");
-  await expect(plainText).toBeVisible();
-  for (const part of expected.text || []) {
-    await expect(plainText).toContainText(part);
-  }
-  await dialog.getByRole("tab", { name: "Email", exact: true }).click();
-  await expect(frame).toBeVisible();
-  return {
-    from: (await emailField(dialog, "From").textContent()).trim(),
-    to: (await emailField(dialog, "To").textContent()).trim(),
-    subject: (await emailField(dialog, "Subject").textContent()).trim(),
-    text: await plainText.textContent(),
-  };
-}
-
-// The line of an email's plain-text part that starts with `label`.
-function textLine(text, label) {
-  return text.split(/\r?\n/).find((line) => line.startsWith(label)) || null;
-}
-
-// Step 2 (Confirm) of the email dialog: Continue moves focus to the
-// confirmation question, so a second Enter can't send by accident. Returns
-// the send button, which the caller clicks once it is ready to see the
-// request.
-async function continueToConfirm(dialog, question, sendLabel) {
-  await dialog.getByRole("button", { name: "Continue", exact: true }).click();
-  await expect(dialog.getByText("Step 2 of 2: Confirm")).toBeVisible();
-  await expect(dialog.getByRole("heading", { name: question })).toBeFocused();
-  const send = dialog.getByRole("button", { name: sendLabel, exact: true });
-  await expect(send).toBeEnabled();
-  return send;
-}
-
-// A header of a delivered email, with folded lines joined.
-function emailHeader(message, name) {
-  const prefix = `${name.toLowerCase()}:`;
-  const line = message
-    .replace(/\r?\n[ \t]+/g, " ")
-    .split(/\r?\n/)
-    .find((entry) => entry.toLowerCase().startsWith(prefix));
-  return line ? line.slice(prefix.length).trim() : null;
-}
-
-// The preview showed what the recipient got: the delivered email has the
-// same sender and subject, and goes to the address the preview named (shown
-// as `Name <address>` when the person's name is known).
-function expectDeliveredAsPreviewed(message, envelope, recipient) {
-  expect(emailHeader(message, "From")).toBe(envelope.from);
-  expect(emailHeader(message, "Subject")).toBe(envelope.subject);
-  expect(emailHeader(message, "To")).toBe(recipient);
-  const shownAddress = envelope.to.includes("<")
-    ? envelope.to.slice(envelope.to.indexOf("<") + 1, -1)
-    : envelope.to;
-  expect(shownAddress).toBe(recipient);
-}
-
-async function openAddPanel(page) {
-  await participantActions(page)
-    .getByRole("button", { name: "+ Add person" })
-    .click();
-  const panel = page.getByRole("dialog", { name: "Add a person" });
+// The group menu is a popover that scripts keep anchored to its trigger on
+// every scroll. Opening it with the trigger mid-screen keeps the whole menu
+// in view, so clicking an item needs no scroll of its own: WebKit reports a
+// scroll a frame late, and a click right after one could land where the item
+// was. The dialog is then waited for, so a lost click fails here, not later.
+async function openGroupsPanel(page) {
+  const trigger = page.getByRole("button", { name: "Group: Everyone" });
+  await trigger.evaluate((element) =>
+    element.scrollIntoView({ block: "center", behavior: "instant" }),
+  );
+  await trigger.click();
+  await page.getByRole("button", { name: "Manage groups…" }).click();
+  const panel = page.getByRole("dialog", { name: "Groups", exact: true });
   await expect(panel).toBeVisible();
   return panel;
-}
-
-// Adds one person from the open add panel without inviting them. The panel
-// stays open, cleared for the next person.
-async function addPerson(panel, name, email) {
-  await panel.getByRole("textbox", { name: "Full name" }).fill(name);
-  await panel.getByRole("textbox", { name: "Email" }).fill(email);
-  await panel.getByRole("button", { name: "Add", exact: true }).click();
-  await expect(
-    panel.getByText(`${name} was added. No invitation was sent.`),
-  ).toBeVisible();
-}
-
-// The row's name opens the person panel.
-async function openPersonPanel(page, name) {
-  await participantRow(page, name)
-    .getByRole("button", { name: new RegExp(`^${name}`) })
-    .click();
-  const panel = page.getByRole("dialog", { name, exact: true });
-  await expect(panel).toBeVisible();
-  return panel;
-}
-
-async function importRoster(request, eventCode, token, pastedText) {
-  const preview = await apiJson(
-    request,
-    "POST",
-    `/events/roster-imports?code=${eventCode}`,
-    token,
-    { sourceType: "paste", pastedText },
-  );
-  expect(preview.response.status()).toBe(201);
-  const committed = await apiJson(
-    request,
-    "POST",
-    `/events/roster-imports/${preview.payload.import.id}/commit?code=${eventCode}`,
-    token,
-    {
-      mode: "merge",
-      sendInvitations: true,
-      idempotencyKey: crypto.randomUUID(),
-    },
-  );
-  expect(committed.response.status()).toBe(201);
-  return committed.payload;
 }
 
 function assertDatabaseState(payload) {
@@ -569,32 +412,6 @@ print(json.dumps({
     stdio: ["ignore", "pipe", "pipe"],
   });
   return JSON.parse(output.trim());
-}
-
-// The revision the Time Table is current at, or -1 while it is still
-// updating.
-async function currentResultsRevision(page) {
-  const revision = await page
-    .locator('[data-results-status="fresh"]')
-    .getAttribute("data-results-revision", { timeout: 500 })
-    .catch(() => null);
-  return revision === null ? -1 : Number(revision);
-}
-
-function temporaryAccessPathFromEmail(body) {
-  const rawLink = body.match(/Link:\s*(https?:\/\/[^\s<]+)/i)?.[1];
-  if (!rawLink)
-    throw new Error("No temporary access link found in invitation email");
-  const link = new URL(rawLink.replaceAll("&amp;", "&"));
-  return `${link.pathname}${link.search}`;
-}
-
-// The Finalize step reads a picked time's attendance on its own; its
-// Finalize button stays disabled until that reading is current.
-async function waitForAttendanceReview(page) {
-  await expect(
-    page.getByText("Attendance review is current for this candidate."),
-  ).toBeVisible({ timeout: 20_000 });
 }
 
 test.describe("Releviz account and scheduling flow", () => {
@@ -1937,12 +1754,7 @@ test.describe("Releviz account and scheduling flow", () => {
 
     // One group alone counts in the results; the banner brings everyone
     // back.
-    await page.getByRole("button", { name: "Group: Everyone" }).click();
-    await page.getByRole("button", { name: "Manage groups…" }).click();
-    const groupsPanel = page.getByRole("dialog", {
-      name: "Groups",
-      exact: true,
-    });
+    const groupsPanel = await openGroupsPanel(page);
     const teamRow = groupsPanel.locator("tr", { hasText: "Team A" });
     await expect(teamRow).toContainText("1 person");
     await teamRow.getByRole("button", { name: "Actions for Team A" }).click();
@@ -2256,12 +2068,6 @@ test.describe("Releviz account and scheduling flow", () => {
       availabilityGrid.locator(`[data-cell-idx="${index}"]`);
     const arrowTargetIndex = eventDefinition.slotGroups[1]?.slots[0]?.index;
     expect(arrowTargetIndex).toBeDefined();
-    const beforeUnloadIsBlocked = () =>
-      participantPage.evaluate(() => {
-        const event = new Event("beforeunload", { cancelable: true });
-        window.dispatchEvent(event);
-        return event.defaultPrevented;
-      });
 
     await participantPage
       .getByRole("button", { name: "Apply Available to all" })
@@ -2314,7 +2120,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await cell(touchSlotIndex).tap();
     await expect(participantPage.getByText("Saving draft…")).toBeVisible();
     await expect(savedStatus).toBeVisible();
-    expect(await beforeUnloadIsBlocked()).toBe(false);
+    expect(await beforeUnloadIsBlocked(participantPage)).toBe(false);
     draftState = await apiJson(
       request,
       "GET",
@@ -2476,7 +2282,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       participantPage.getByText("Temporary autosave outage"),
     ).toBeVisible();
-    expect(await beforeUnloadIsBlocked()).toBe(true);
+    expect(await beforeUnloadIsBlocked(participantPage)).toBe(true);
     const retriedAutosaveResponse = participantPage.waitForResponse(
       (response) =>
         response.request().method() === "PUT" &&
@@ -2486,7 +2292,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await participantPage.getByRole("button", { name: "Retry save" }).click();
     await retriedAutosaveResponse;
     await expect(savedStatus).toBeVisible();
-    expect(await beforeUnloadIsBlocked()).toBe(false);
+    expect(await beforeUnloadIsBlocked(participantPage)).toBe(false);
     await participantPage.unroute(updateRoutePattern, failAutosaveOnce);
 
     draftState = await apiJson(
@@ -2520,7 +2326,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       participantPage.getByText(/changed in another session/i),
     ).toBeVisible();
-    expect(await beforeUnloadIsBlocked()).toBe(true);
+    expect(await beforeUnloadIsBlocked(participantPage)).toBe(true);
     await participantPage
       .getByRole("button", { name: "Reload latest response" })
       .click();
@@ -2533,7 +2339,7 @@ test.describe("Releviz account and scheduling flow", () => {
       "aria-selected",
       "false",
     );
-    expect(await beforeUnloadIsBlocked()).toBe(false);
+    expect(await beforeUnloadIsBlocked(participantPage)).toBe(false);
 
     const finalDate = nextWeekdayDate();
     const finalDayIndex = new Date(`${finalDate}T00:00:00Z`).getUTCDay();
@@ -2732,6 +2538,9 @@ test.describe("Releviz account and scheduling flow", () => {
     const registeredParticipantCard = participantRow(page, participantEmail);
     const manualParticipantCard = participantRow(page, manualEmail);
     await expect(registeredParticipantCard).toContainText(participantEmail);
+    // Pat answers with their own account, so the row follows the name they
+    // just saved in Settings.
+    await expect(registeredParticipantCard).toContainText("Pat Availability");
     await expect(responseBadge(registeredParticipantCard)).toHaveText(
       "Submitted",
     );
@@ -2766,7 +2575,7 @@ test.describe("Releviz account and scheduling flow", () => {
 
     // One person's weight is set in their panel.
     const setPatWeight = async (weight) => {
-      const patPanel = await openPersonPanel(page, "Pat Participant");
+      const patPanel = await openPersonPanel(page, "Pat Availability");
       await patPanel.getByRole("spinbutton", { name: "Weight" }).fill(weight);
       await patPanel.getByRole("button", { name: "Save", exact: true }).click();
       await expectToast(page, "Saved.");
@@ -2778,8 +2587,7 @@ test.describe("Releviz account and scheduling flow", () => {
 
     // The Groups panel manages a whole group at once: its shared weight is
     // now mixed, and setting it re-applies one weight to every member.
-    await page.getByRole("button", { name: "Group: Everyone" }).click();
-    await page.getByRole("button", { name: "Manage groups…" }).click();
+    await openGroupsPanel(page);
     const groupRow = groupsPanel.locator("tr", { hasText: "E2E Group" });
     await expect(groupRow).toContainText("2 people");
     const groupWeight = groupsPanel.getByRole("spinbutton", {
@@ -2826,8 +2634,7 @@ test.describe("Releviz account and scheduling flow", () => {
 
     // Groups exist on their own: create an empty one from the Groups panel,
     // then add one selected person to it without leaving E2E Group.
-    await page.getByRole("button", { name: "Group: Everyone" }).click();
-    await page.getByRole("button", { name: "Manage groups…" }).click();
+    await openGroupsPanel(page);
     await groupsPanel.getByRole("button", { name: "+ New group" }).click();
     await groupsPanel.getByLabel("New group name").fill("E2E Second");
     await groupsPanel
@@ -2866,7 +2673,7 @@ test.describe("Releviz account and scheduling flow", () => {
     // One person's groups are edited in their panel: the picker stages the
     // change and nothing is saved until Save. Every group puts the person in
     // every group, including groups created later.
-    const patPanel = await openPersonPanel(page, "Pat Participant");
+    const patPanel = await openPersonPanel(page, "Pat Availability");
     const patGroups = patPanel.getByRole("list", { name: "Groups" });
     const patGroupsCell = registeredParticipantCard.locator(
       ".participants-table__groups",
@@ -2875,7 +2682,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const pickPatGroups = async (change) => {
       await patPanel.getByRole("button", { name: "+ Add to group" }).click();
       const picker = page.getByRole("dialog", {
-        name: "Groups for Pat Participant",
+        name: "Groups for Pat Availability",
       });
       await change(picker);
       await picker.getByRole("button", { name: "Apply" }).click();
@@ -2944,8 +2751,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expectToast(page, "Updated groups for 1 person.");
     await expect(manualGroupsCell).toContainText("E2E Throwaway");
     await page.getByLabel("Select Manual Participant").uncheck();
-    await page.getByRole("button", { name: "Group: Everyone" }).click();
-    await page.getByRole("button", { name: "Manage groups…" }).click();
+    await openGroupsPanel(page);
     const throwawayGroupRow = groupsPanel.locator("tr", {
       hasText: "E2E Throwaway",
     });
@@ -3921,60 +3727,5 @@ assert Event.objects.filter(code="${eventCode}").update(response_deadline=past) 
     expect(deletedLogin.status()).toBe(400);
     assertDeletedAccountState({ member_id: memberId, email });
     await otherContext.close();
-  });
-});
-
-test.describe("Releviz admin", () => {
-  test("renders the themed admin login and authenticated sidebar", async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto(`${BACKEND_URL}/admin/login/?next=/admin/`);
-    await expect(page.locator(".login-box")).toBeVisible();
-    await expect(page.locator("img.login-logo")).toHaveAttribute(
-      "src",
-      /releviz-mark\.png/,
-    );
-    await expect(page.getByText("Releviz Admin")).toBeVisible();
-    // The login page opens on the email-code step; the password form lives
-    // behind the alternate-mode link.
-    await page
-      .getByRole("link", { name: "Sign in with password instead" })
-      .click();
-    await page.locator("#id_email").fill(ADMIN_EMAIL);
-    await page.locator("#id_password").fill(ADMIN_PASSWORD);
-    await page.getByRole("button", { name: "Sign In" }).click();
-    await expect(page).toHaveURL(/\/admin\/$/);
-    await expect(
-      page
-        .locator("#nav-sidebar-apps")
-        .getByRole("heading", { name: "Scheduling" }),
-    ).toBeVisible();
-    await expect(
-      page
-        .locator("#nav-sidebar-apps")
-        .getByRole("heading", { name: "Members & Authentication" }),
-    ).toBeVisible();
-    await expect(
-      page.locator('[data-admin-theme-choice="dark"]').first(),
-    ).toBeAttached();
-
-    const sidebar = page.locator("#nav-sidebar-apps");
-    const activeSidebarLinks = sidebar.locator("a.active");
-
-    await sidebar.getByRole("link", { name: "AWS SES Providers" }).click();
-    await expect(page).toHaveURL(/\/admin\/mail\/emailproviderconfig\/$/);
-    await expect(activeSidebarLinks).toHaveCount(1);
-    await expect(activeSidebarLinks).toHaveText("AWS SES Providers");
-
-    const activeTabs = page.locator("#tabs-items a.active");
-    await page
-      .locator("#tabs-items")
-      .getByRole("link", { name: "Email Logs" })
-      .click();
-    await expect(page).toHaveURL(/\/admin\/mail\/emailmessagelog\/$/);
-    await expect(activeSidebarLinks).toHaveCount(1);
-    await expect(activeSidebarLinks).toHaveText("AWS SES Providers");
-    await expect(activeTabs).toHaveText("Email Logs");
   });
 });

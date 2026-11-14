@@ -11,7 +11,11 @@ from rest_framework.views import APIView
 from apps.authn.security import AuthRateThrottle, consume_request_rate_limit
 from apps.mail.models import EmailDeliveryRequest
 from apps.scheduling.models import Event
-from apps.scheduling.payloads import api_participant, email_delivery_request_payload
+from apps.scheduling.payloads import (
+    api_event,
+    api_participant,
+    email_delivery_request_payload,
+)
 from apps.scheduling.services.invitations import (
     EventEmailRequestError,
     ManagedParticipantError,
@@ -106,7 +110,9 @@ class ManagedParticipantView(APIView):
             error_code = getattr(exc, "error_code", None)
             if error_code:
                 payload["errorCode"] = error_code
-            return Response(payload, status=exc.status_code)
+            if getattr(exc, "event", None) is not None:
+                payload["event"] = api_event(exc.event)
+            return private_response(payload, status=exc.status_code)
         participant = result["participant"]
         if result["participantCreated"] or result["participantRestored"]:
             mark_event_results_dirty(event)

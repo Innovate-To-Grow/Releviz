@@ -9,14 +9,16 @@ from django.conf import settings
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import path
 from django.utils.translation import gettext_lazy as _
 from unfold.forms import AdminPasswordChangeForm
 
+from apps.authn.services.account import delete_member_account
 from apps.core.admin import BaseModelAdmin
 
-from ...models import ImpersonationToken, Member
+from ...models import ContactEmail, ImpersonationToken, Member
 from .forms import MemberChangeForm, MemberCreationForm
 from .helpers import (
     activate_members,
@@ -160,6 +162,27 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
         frontend_url = (getattr(settings, "FRONTEND_URL", "") or "").strip().rstrip("/")
         return redirect(f"{frontend_url}/impersonate-login#token={token}")
 
+    def get_deleted_objects(self, objs, request):
+        deleted_objects, model_count, perms_needed, protected = super().get_deleted_objects(
+            objs, request
+        )
+        # The contact emails go with the member. Every administrator may delete
+        # every member, so the Contact Email admin's refusal to delete a primary
+        # email on its own must not stop the delete.
+        perms_needed.discard(ContactEmail._meta.verbose_name)
+        return deleted_objects, model_count, perms_needed, protected
+
+    # Deleting a member here leaves what deleting the account in Settings leaves:
+    # the organizer-managed people behind their events go too, and the events
+    # they took part in recompute their results.
+    def delete_model(self, request, obj):
+        delete_member_account(member=obj)
+
+    def delete_queryset(self, request, queryset):
+        with transaction.atomic():
+            for member in queryset:
+                delete_member_account(member=member)
+
     def get_search_results(self, request, queryset, search_term):
         """Run the default search (email/name/id/...)."""
         return super().get_search_results(request, queryset, search_term)
@@ -191,6 +214,11 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
     def save_model(self, request, obj, form, change):
         self._ensure_new_member_uuid(obj, change)
         super().save_model(request, obj, form, change)
+        # The events this person answers show the account's new name.
+        if change and {"first_name", "middle_name", "last_name"} & set(form.changed_data):
+            from apps.scheduling.services.account_names import sync_account_participant_names
+
+            sync_account_participant_names(obj)
 
     @staticmethod
     def _ensure_new_member_uuid(obj, change):
